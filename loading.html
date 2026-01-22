@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TNA Loading...</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .loader-container {
+      text-align: center;
+      padding: 40px;
+    }
+
+    .logo {
+      width: 80px;
+      height: 80px;
+      margin-bottom: 24px;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    .logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.2));
+    }
+
+    /* Fallback spinner if no logo */
+    .spinner {
+      width: 60px;
+      height: 60px;
+      border: 4px solid rgba(255, 255, 255, 0.3);
+      border-top: 4px solid white;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 24px;
+    }
+
+    h1 {
+      font-size: 32px;
+      font-weight: 300;
+      margin-bottom: 8px;
+      letter-spacing: 2px;
+    }
+
+    .subtitle {
+      font-size: 14px;
+      opacity: 0.9;
+      margin-bottom: 24px;
+    }
+
+    .status {
+      font-size: 13px;
+      opacity: 0.7;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      background: white;
+      border-radius: 50%;
+      animation: blink 1.5s ease-in-out infinite;
+    }
+
+    .progress-bar {
+      width: 200px;
+      height: 3px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 2px;
+      margin: 20px auto 0;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: white;
+      border-radius: 2px;
+      animation: progress 3s ease-in-out infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        transform: scale(1);
+        opacity: 1;
+      }
+      50% {
+        transform: scale(1.05);
+        opacity: 0.9;
+      }
+    }
+
+    @keyframes blink {
+      0%, 100% {
+        opacity: 0.3;
+      }
+      50% {
+        opacity: 1;
+      }
+    }
+
+    @keyframes progress {
+      0% {
+        width: 0%;
+        margin-left: 0;
+      }
+      50% {
+        width: 60%;
+        margin-left: 20%;
+      }
+      100% {
+        width: 0%;
+        margin-left: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="loader-container">
+    <div class="logo">
+      <img src="www/logo.png" alt="TNA Logo" onerror="this.parentElement.innerHTML='<div class=\'spinner\'></div>'">
+    </div>
+    <h1>TNA</h1>
+    <p class="subtitle">Transition Network Analysis</p>
+    <div class="status">
+      <span class="status-dot"></span>
+      <span>Starting analysis engine...</span>
+    </div>
+    <div class="progress-bar">
+      <div class="progress-fill"></div>
+    </div>
+  </div>
+
+  <script>
+    // Update status messages
+    const messages = [
+      'Starting analysis engine...',
+      'Loading R environment...',
+      'Initializing Shiny server...',
+      'Preparing visualization tools...',
+      'Almost ready...'
+    ];
+
+    let messageIndex = 0;
+    const statusText = document.querySelector('.status span:last-child');
+
+    setInterval(() => {
+      messageIndex = (messageIndex + 1) % messages.length;
+      statusText.textContent = messages[messageIndex];
+    }, 2000);
+  </script>
+</body>
+</html>

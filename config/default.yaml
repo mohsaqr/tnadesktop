@@ -1,0 +1,36 @@
+# ============================================================================
+# TNA Desktop - Default Configuration
+# ============================================================================
+
+app:
+  name: "TNA"
+  version: "2.0.0"
+  description: "Transition Network Analysis Desktop Application"
+
+# R/Shiny Server Configuration
+R:
+  url: "http://127.0.0.1:"
+  port: 9193
+  app: "app.R"
+  path:
+    isPortable: true
+    fixHome: true
+    win: "R-Portable-Win"
+    mac: "R-Portable-Mac"
+    linux: "R-Portable-Linux"
+
+# Window Configuration
+window:
+  delay: 4000
+  poll: 500
+  loading:
+    path: "loading.html"
+    isURL: false
+  config:
+    width: 1400
+    height: 900
+    minWidth: 1024
+    minHeight: 768
+    title: "TNA - Transition Network Analysis"
+    center: true
+  fullReload: false

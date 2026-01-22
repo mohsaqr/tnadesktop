@@ -1,0 +1,15 @@
+# ============================================================================
+# TNA Desktop - macOS Configuration
+# ============================================================================
+
+R:
+  path:
+    portable: "R-Portable-Mac"
+    binary: "bin/Rscript"
+
+window:
+  config:
+    titleBarStyle: "hiddenInset"
+    trafficLightPosition:
+      x: 12
+      y: 12

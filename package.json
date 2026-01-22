@@ -1,0 +1,99 @@
+{
+  "name": "tna-desktop",
+  "productName": "TNA",
+  "version": "2.0.0",
+  "description": "Transition Network Analysis - Desktop Application",
+  "main": "main.js",
+  "author": "TNA Team",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "package-win": "electron-packager . TNA --platform=win32 --arch=x64 --out=dist --overwrite --icon=www/logo.ico --ignore=\"dist|R-Portable-Mac|R-Portable-Linux|\\.git\"",
+    "package-mac": "electron-packager . TNA --platform=darwin --arch=x64 --out=dist --overwrite --icon=www/logo.icns --ignore=\"dist|R-Portable-Win|R-Portable-Linux|\\.git\"",
+    "package-linux": "electron-packager . TNA --platform=linux --arch=x64 --out=dist --overwrite --ignore=\"dist|R-Portable-Win|R-Portable-Mac|\\.git\"",
+    "package-all": "npm run package-win && npm run package-mac && npm run package-linux",
+    "build-win": "electron-builder --win",
+    "build-mac": "electron-builder --mac",
+    "build-linux": "electron-builder --linux",
+    "build-all": "electron-builder --win --mac --linux"
+  },
+  "dependencies": {
+    "config": "^3.3.11",
+    "js-yaml": "^4.1.0",
+    "tree-kill": "^1.2.2"
+  },
+  "devDependencies": {
+    "electron": "^28.1.0",
+    "@electron/packager": "^18.3.2",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.tna.desktop",
+    "productName": "TNA",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "**/*",
+      "!dist/**",
+      "!*.md",
+      "!.git/**"
+    ],
+    "extraResources": [
+      {
+        "from": "R-Portable-${os}",
+        "to": "R-Portable",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "www/logo.ico",
+      "artifactName": "${productName}-${version}-Windows-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "www/logo.ico",
+      "uninstallerIcon": "www/logo.ico",
+      "installerHeaderIcon": "www/logo.ico"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "icon": "www/logo.icns",
+      "artifactName": "${productName}-${version}-macOS.${ext}",
+      "category": "public.app-category.education"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        },
+        {
+          "target": "deb",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "www/logo.png",
+      "artifactName": "${productName}-${version}-Linux.${ext}",
+      "category": "Science"
+    }
+  }
+}
