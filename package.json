@@ -11,7 +11,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "tnaj": "file:/tmp/tna-js",
+    "tnaj": "github:mohsaqr/tna-js",
     "d3": "^7.9.0",
     "papaparse": "^5.5.2",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
