@@ -1,0 +1,136 @@
+/**
+ * Data preview screen: shows parsed data table and format selection.
+ */
+import { state, render } from '../main';
+import { wideToSequences, longToSequences } from '../data';
+
+export function renderPreview(container: HTMLElement) {
+  // Toolbar
+  const toolbar = document.createElement('div');
+  toolbar.className = 'toolbar';
+  toolbar.innerHTML = `
+    <h1>TNA Desktop</h1>
+    <span class="filename">${state.filename}</span>
+    <div class="spacer"></div>
+  `;
+  container.appendChild(toolbar);
+
+  const screen = document.createElement('div');
+  screen.className = 'preview-screen';
+  container.appendChild(screen);
+
+  // Header
+  const header = document.createElement('div');
+  header.className = 'preview-header';
+  const nRows = state.rawData.length;
+  const nCols = state.headers.length;
+  header.innerHTML = `
+    <h2>Data Preview</h2>
+    <div class="preview-info">
+      <span><strong>${nRows}</strong> rows</span>
+      <span><strong>${nCols}</strong> columns</span>
+    </div>
+  `;
+  screen.appendChild(header);
+
+  // Format selector
+  const formatDiv = document.createElement('div');
+  formatDiv.className = 'format-selector';
+  formatDiv.innerHTML = `
+    <label>Format:</label>
+    <select id="format-select">
+      <option value="wide" ${state.format === 'wide' ? 'selected' : ''}>Wide (rows = sequences, cols = time steps)</option>
+      <option value="long" ${state.format === 'long' ? 'selected' : ''}>Long (ID, time, state columns)</option>
+    </select>
+  `;
+  screen.appendChild(formatDiv);
+
+  // Long format column selectors
+  const longCols = document.createElement('div');
+  longCols.className = 'format-selector';
+  longCols.id = 'long-cols';
+  longCols.style.display = state.format === 'long' ? 'flex' : 'none';
+  const colOpts = state.headers.map((h, i) => `<option value="${i}" ${i === 0 ? 'selected' : ''}>${h}</option>`).join('');
+  longCols.innerHTML = `
+    <label>ID col:</label>
+    <select id="long-id">${colOpts}</select>
+    <label>Time col:</label>
+    <select id="long-time">${state.headers.map((h, i) => `<option value="${i}" ${i === 1 ? 'selected' : ''}>${h}</option>`).join('')}</select>
+    <label>State col:</label>
+    <select id="long-state">${state.headers.map((h, i) => `<option value="${i}" ${i === 2 ? 'selected' : ''}>${h}</option>`).join('')}</select>
+  `;
+  screen.appendChild(longCols);
+
+  // Table
+  const tableWrap = document.createElement('div');
+  tableWrap.className = 'preview-table-wrap';
+  const maxPreview = Math.min(nRows, 50);
+  let tableHtml = '<table class="preview-table"><thead><tr>';
+  for (const h of state.headers) {
+    tableHtml += `<th>${escHtml(h)}</th>`;
+  }
+  tableHtml += '</tr></thead><tbody>';
+  for (let i = 0; i < maxPreview; i++) {
+    tableHtml += '<tr>';
+    for (const cell of state.rawData[i]!) {
+      tableHtml += `<td>${escHtml(cell)}</td>`;
+    }
+    tableHtml += '</tr>';
+  }
+  if (nRows > maxPreview) {
+    tableHtml += `<tr><td colspan="${nCols}" style="text-align:center;color:#888;font-style:italic;">... ${nRows - maxPreview} more rows</td></tr>`;
+  }
+  tableHtml += '</tbody></table>';
+  tableWrap.innerHTML = tableHtml;
+  screen.appendChild(tableWrap);
+
+  // Actions
+  const actions = document.createElement('div');
+  actions.className = 'preview-actions';
+  actions.innerHTML = `
+    <button class="btn-secondary" id="back-btn">Back</button>
+    <button class="btn-primary" id="analyze-btn">Analyze</button>
+  `;
+  screen.appendChild(actions);
+
+  // Events
+  document.getElementById('format-select')!.addEventListener('change', (e) => {
+    state.format = (e.target as HTMLSelectElement).value as 'wide' | 'long';
+    document.getElementById('long-cols')!.style.display = state.format === 'long' ? 'flex' : 'none';
+  });
+
+  document.getElementById('back-btn')!.addEventListener('click', () => {
+    state.view = 'welcome';
+    render();
+  });
+
+  document.getElementById('analyze-btn')!.addEventListener('click', () => {
+    try {
+      if (state.format === 'wide') {
+        state.sequenceData = wideToSequences(state.rawData);
+      } else {
+        const idCol = parseInt((document.getElementById('long-id') as HTMLSelectElement).value);
+        const timeCol = parseInt((document.getElementById('long-time') as HTMLSelectElement).value);
+        const stateCol = parseInt((document.getElementById('long-state') as HTMLSelectElement).value);
+        state.longIdCol = idCol;
+        state.longTimeCol = timeCol;
+        state.longStateCol = stateCol;
+        state.sequenceData = longToSequences(state.rawData, idCol, timeCol, stateCol);
+      }
+
+      if (!state.sequenceData || state.sequenceData.length === 0) {
+        alert('No valid sequences found. Check your data format.');
+        return;
+      }
+
+      state.view = 'dashboard';
+      render();
+    } catch (err) {
+      alert('Error building sequences: ' + (err as Error).message);
+    }
+  });
+}
+
+function escHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
