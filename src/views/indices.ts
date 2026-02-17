@@ -9,6 +9,7 @@ import type { SequenceIndex, IndicesSummary } from '../analysis/indices';
 export function renderIndicesTab(
   container: HTMLElement,
   model: TNA,
+  idSuffix = '',
 ) {
   if (!model.data) {
     container.innerHTML = '<div class="panel" style="text-align:center;color:#888;padding:40px">No sequence data available for index computation.</div>';
@@ -59,7 +60,7 @@ export function renderIndicesTab(
   for (const def of metricDefs) {
     const panel = document.createElement('div');
     panel.className = 'panel';
-    panel.innerHTML = `<div class="panel-title">${def.label}</div><div id="viz-idx-${def.key}" style="width:100%"></div>`;
+    panel.innerHTML = `<div class="panel-title">${def.label}</div><div id="viz-idx-${def.key}${idSuffix}" style="width:100%"></div>`;
     chartGrid.appendChild(panel);
   }
 
@@ -101,7 +102,7 @@ export function renderIndicesTab(
   // Render histograms
   requestAnimationFrame(() => {
     for (const def of metricDefs) {
-      const el = document.getElementById(`viz-idx-${def.key}`);
+      const el = document.getElementById(`viz-idx-${def.key}${idSuffix}`);
       if (el) {
         const vals = indices.map(idx => idx[def.key] as number);
         renderIndexHistogram(el, vals, def.label);

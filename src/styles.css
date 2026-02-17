@@ -730,3 +730,43 @@ body {
   background: #eee;
   color: var(--text);
 }
+
+/* ─── Multi-Group Grid ─── */
+.multi-group-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+  gap: 16px;
+}
+
+.group-card {
+  background: var(--panel);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.group-card-header {
+  background: #f8f9fa;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.group-card-header .group-color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.group-card-content {
+  padding: 12px;
+}
+
+.multi-group-controls {
+  margin-bottom: 16px;
+}

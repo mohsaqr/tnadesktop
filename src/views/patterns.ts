@@ -10,6 +10,7 @@ import { showTooltip, hideTooltip } from '../main';
 export function renderPatternsTab(
   container: HTMLElement,
   model: TNA,
+  idSuffix = '',
 ) {
   if (!model.data) {
     container.innerHTML = '<div class="panel" style="text-align:center;color:#888;padding:40px">No sequence data available for pattern extraction.</div>';
@@ -27,7 +28,7 @@ export function renderPatternsTab(
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:6px">
         <label style="font-size:12px;color:#777">Min n-gram:</label>
-        <select id="pat-min-n" style="font-size:12px">
+        <select id="pat-min-n${idSuffix}" style="font-size:12px">
           <option value="2" selected>2</option>
           <option value="3">3</option>
           <option value="4">4</option>
@@ -35,7 +36,7 @@ export function renderPatternsTab(
       </div>
       <div style="display:flex;align-items:center;gap:6px">
         <label style="font-size:12px;color:#777">Max n-gram:</label>
-        <select id="pat-max-n" style="font-size:12px">
+        <select id="pat-max-n${idSuffix}" style="font-size:12px">
           <option value="2">2</option>
           <option value="3" selected>3</option>
           <option value="4">4</option>
@@ -44,40 +45,40 @@ export function renderPatternsTab(
       </div>
       <div style="display:flex;align-items:center;gap:6px">
         <label style="font-size:12px;color:#777">Min count:</label>
-        <input type="number" id="pat-min-count" value="2" min="1" max="100" style="font-size:12px;width:50px">
+        <input type="number" id="pat-min-count${idSuffix}" value="2" min="1" max="100" style="font-size:12px;width:50px">
       </div>
       <div style="display:flex;align-items:center;gap:6px">
         <label style="font-size:12px;color:#777">Min support:</label>
-        <input type="number" id="pat-min-support" value="0" min="0" max="1" step="0.05" style="font-size:12px;width:60px">
+        <input type="number" id="pat-min-support${idSuffix}" value="0" min="0" max="1" step="0.05" style="font-size:12px;width:60px">
       </div>
-      <button id="run-patterns" class="btn-primary" style="font-size:12px;padding:6px 16px">Extract Patterns</button>
+      <button id="run-patterns${idSuffix}" class="btn-primary" style="font-size:12px;padding:6px 16px">Extract Patterns</button>
     </div>
   `;
   grid.appendChild(controls);
 
   const resultsDiv = document.createElement('div');
-  resultsDiv.id = 'pattern-results';
+  resultsDiv.id = `pattern-results${idSuffix}`;
   grid.appendChild(resultsDiv);
   container.appendChild(grid);
 
   // Run initial extraction
   const runExtraction = () => {
-    const minN = parseInt((document.getElementById('pat-min-n') as HTMLSelectElement).value);
-    const maxN = parseInt((document.getElementById('pat-max-n') as HTMLSelectElement).value);
-    const minCount = parseInt((document.getElementById('pat-min-count') as HTMLInputElement).value);
-    const minSupport = parseFloat((document.getElementById('pat-min-support') as HTMLInputElement).value);
+    const minN = parseInt((document.getElementById(`pat-min-n${idSuffix}`) as HTMLSelectElement).value);
+    const maxN = parseInt((document.getElementById(`pat-max-n${idSuffix}`) as HTMLSelectElement).value);
+    const minCount = parseInt((document.getElementById(`pat-min-count${idSuffix}`) as HTMLInputElement).value);
+    const minSupport = parseFloat((document.getElementById(`pat-min-support${idSuffix}`) as HTMLInputElement).value);
 
     const results = extractPatterns(model.data!, { minN, maxN, minCount, minSupport });
-    renderPatternResults(resultsDiv, results);
+    renderPatternResults(resultsDiv, results, idSuffix);
   };
 
   setTimeout(() => {
-    document.getElementById('run-patterns')?.addEventListener('click', runExtraction);
+    document.getElementById(`run-patterns${idSuffix}`)?.addEventListener('click', runExtraction);
     runExtraction(); // auto-run with defaults
   }, 0);
 }
 
-function renderPatternResults(container: HTMLElement, results: PatternResult[]) {
+function renderPatternResults(container: HTMLElement, results: PatternResult[], idSuffix = '') {
   container.innerHTML = '';
 
   if (results.length === 0) {
@@ -119,13 +120,13 @@ function renderPatternResults(container: HTMLElement, results: PatternResult[]) 
   // Bar chart of top 20 patterns
   const chartPanel = document.createElement('div');
   chartPanel.className = 'panel';
-  chartPanel.innerHTML = `<div class="panel-title">Top Patterns by Count</div><div id="viz-pattern-chart" style="width:100%"></div>`;
+  chartPanel.innerHTML = `<div class="panel-title">Top Patterns by Count</div><div id="viz-pattern-chart${idSuffix}" style="width:100%"></div>`;
   resultGrid.appendChild(chartPanel);
 
   container.appendChild(resultGrid);
 
   requestAnimationFrame(() => {
-    const el = document.getElementById('viz-pattern-chart');
+    const el = document.getElementById(`viz-pattern-chart${idSuffix}`);
     if (el) renderPatternChart(el, results.slice(0, 20));
   });
 }

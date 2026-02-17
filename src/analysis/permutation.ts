@@ -108,19 +108,36 @@ export function permutationTest(
   const combined = [...dataX, ...dataY];
   const nXY = nX + nY;
 
-  // True differences (x - y)
+  // Pad all sequences to uniform length so computeTransitions3D uses all transitions.
+  // tnaj's computeTransitions3D uses data[0].length as nCols for ALL sequences,
+  // which truncates longer sequences. Padding with null (caught by isNA) fixes this.
+  let maxLen = 0;
+  for (const seq of combined) {
+    if (seq.length > maxLen) maxLen = seq.length;
+  }
+  const padded = combined.map(seq => {
+    if (seq.length >= maxLen) return seq;
+    const pad: (string | null)[] = new Array(maxLen - seq.length).fill(null);
+    return [...seq, ...pad];
+  });
+
+  // Compute per-sequence transitions for combined data
+  const combinedTrans = computeTransitions3D(padded, labels, modelType);
+
+  // Compute true differences from the 3D transitions (same pipeline as permutations)
+  // rather than from original model weights, which may use different nCols per group.
+  const wTrueX = computeWeightsFrom3D(combinedTrans.slice(0, nX), modelType, modelScaling);
+  const wTrueY = computeWeightsFrom3D(combinedTrans.slice(nX), modelType, modelScaling);
+
   const trueDiff = new Float64Array(a * a);
   const absTrueDiff = new Float64Array(a * a);
   for (let i = 0; i < a; i++) {
     for (let j = 0; j < a; j++) {
       const idx = i * a + j;
-      trueDiff[idx] = x.weights.get(i, j) - y.weights.get(i, j);
+      trueDiff[idx] = wTrueX.get(i, j) - wTrueY.get(i, j);
       absTrueDiff[idx] = Math.abs(trueDiff[idx]!);
     }
   }
-
-  // Compute per-sequence transitions for combined data
-  const combinedTrans = computeTransitions3D(combined, labels, modelType);
 
   const rng = new SeededRNG(seed);
 

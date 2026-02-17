@@ -3,7 +3,7 @@
  */
 import type { TNA, GroupTNA, CentralityResult, CommunityResult, CentralityMeasure, CommunityMethod } from 'tnaj';
 import type { NetworkSettings } from '../main';
-import { state, render, saveState, buildModel, getActiveTNA, getGroupNames, isGroupTNA, computeCentralities, computeCommunities, computeSummary, defaultNetworkSettings, AVAILABLE_MEASURES, AVAILABLE_METHODS } from '../main';
+import { state, render, saveState, buildModel, getActiveTNA, getGroupNames, isGroupTNA, computeCentralities, computeCommunities, computeSummary, defaultNetworkSettings, AVAILABLE_MEASURES, AVAILABLE_METHODS, prune } from '../main';
 import { renderNetwork } from './network';
 import { renderCentralityChart } from './centralities';
 import { renderFrequencies, renderWeightHistogram } from './frequencies';
@@ -49,6 +49,13 @@ let cachedModel: TNA | null = null;                  // active group's TNA (alwa
 let cachedCent: CentralityResult | null = null;
 let cachedComm: CommunityResult | undefined = undefined;
 
+// ─── Per-group caches (populated in group mode) ───
+let cachedModels: Map<string, TNA> = new Map();
+let cachedCents: Map<string, CentralityResult> = new Map();
+let cachedComms: Map<string, CommunityResult | undefined> = new Map();
+
+const GROUP_CARD_COLORS = ['#4e79a7', '#e15759', '#59a14f', '#edc948', '#b07aa1', '#76b7b2', '#f28e2b', '#ff9da7'];
+
 // ─── Debounce helper ───
 let networkDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 function debouncedNetworkUpdate() {
@@ -57,13 +64,35 @@ function debouncedNetworkUpdate() {
 }
 
 function updateNetworkOnly() {
-  if (!cachedModel) return;
-  if (state.activeTab === 'network') {
-    const el = document.getElementById('viz-network');
-    if (el) renderNetwork(el, cachedModel, state.networkSettings);
-  } else if (state.activeTab === 'communities') {
-    const el = document.getElementById('viz-community-network');
-    if (el) renderNetwork(el, cachedModel, state.networkSettings, cachedComm ?? undefined);
+  const isGroup = cachedFullModel && isGroupTNA(cachedFullModel) && cachedModels.size > 0;
+
+  if (isGroup) {
+    // Multi-group: re-render all group network elements
+    if (state.activeTab === 'network') {
+      let i = 0;
+      for (const [, model] of cachedModels) {
+        const el = document.getElementById(`viz-network-g${i}`);
+        if (el) renderNetwork(el, model, state.networkSettings);
+        i++;
+      }
+    } else if (state.activeTab === 'communities') {
+      let i = 0;
+      for (const [groupName, model] of cachedModels) {
+        const el = document.getElementById(`viz-community-network-g${i}`);
+        if (el) renderNetwork(el, model, state.networkSettings, cachedComms.get(groupName) ?? undefined);
+        i++;
+      }
+    }
+  } else {
+    // Single model
+    if (!cachedModel) return;
+    if (state.activeTab === 'network') {
+      const el = document.getElementById('viz-network');
+      if (el) renderNetwork(el, cachedModel, state.networkSettings);
+    } else if (state.activeTab === 'communities') {
+      const el = document.getElementById('viz-community-network');
+      if (el) renderNetwork(el, cachedModel, state.networkSettings, cachedComm ?? undefined);
+    }
   }
 }
 
@@ -473,11 +502,24 @@ export function renderDashboard(container: HTMLElement) {
       state.networkSettings.networkHeight = val;
       const valEl = document.getElementById('ns-networkHeight-val');
       if (valEl) valEl.textContent = String(val);
-      // Resize the viz container
-      const vizEl = document.getElementById('viz-network') || document.getElementById('viz-community-network');
-      if (vizEl) vizEl.style.height = `${val}px`;
-      const panel = vizEl?.closest('.panel') as HTMLElement | null;
-      if (panel) panel.style.minHeight = `${val + 40}px`;
+
+      const isGroup = cachedFullModel && isGroupTNA(cachedFullModel) && cachedModels.size > 0;
+      if (isGroup) {
+        // Resize all group viz containers
+        const h = groupNetworkHeight();
+        for (let i = 0; i < cachedModels.size; i++) {
+          const vizEl = document.getElementById(`viz-network-g${i}`) || document.getElementById(`viz-community-network-g${i}`);
+          if (vizEl) vizEl.style.height = `${h}px`;
+          const panel = vizEl?.closest('.panel, .group-card-content') as HTMLElement | null;
+          if (panel) panel.style.minHeight = `${h + 40}px`;
+        }
+      } else {
+        // Resize the single viz container
+        const vizEl = document.getElementById('viz-network') || document.getElementById('viz-community-network');
+        if (vizEl) vizEl.style.height = `${val}px`;
+        const panel = vizEl?.closest('.panel') as HTMLElement | null;
+        if (panel) panel.style.minHeight = `${val + 40}px`;
+      }
       debouncedNetworkUpdate();
     });
   }
@@ -558,22 +600,26 @@ function updateAll() {
     const groupWrap = document.getElementById('group-selector-wrap');
     const groupSelect = document.getElementById('group-select') as HTMLSelectElement | null;
     const groupNames = getGroupNames(fullModel);
-    if (groupNames.length > 0 && groupWrap && groupSelect) {
-      groupWrap.style.display = '';
-      // Only rebuild options if group names changed
-      const currentOpts = Array.from(groupSelect.options).map(o => o.value);
-      if (JSON.stringify(currentOpts) !== JSON.stringify(groupNames)) {
-        groupSelect.innerHTML = groupNames.map(name =>
-          `<option value="${name}" ${name === state.activeGroup ? 'selected' : ''}>${name}</option>`
-        ).join('');
-      }
-      // Ensure activeGroup is valid
+
+    // In group mode, hide the dropdown — all groups shown simultaneously
+    if (groupWrap) groupWrap.style.display = 'none';
+
+    // Build per-group caches
+    cachedModels.clear();
+    cachedCents.clear();
+    cachedComms.clear();
+
+    if (groupNames.length > 0 && isGroupTNA(fullModel)) {
+      // Ensure activeGroup is valid (still used for node-color pickers etc.)
       if (!state.activeGroup || !groupNames.includes(state.activeGroup)) {
         state.activeGroup = groupNames[0]!;
-        groupSelect.value = state.activeGroup;
       }
-    } else if (groupWrap) {
-      groupWrap.style.display = 'none';
+      for (const name of groupNames) {
+        let m = (fullModel as GroupTNA).models[name]!;
+        if (state.threshold > 0) m = prune(m, state.threshold) as TNA;
+        cachedModels.set(name, m);
+        cachedCents.set(name, computeCentralities(m));
+      }
     }
 
     // Hide cluster controls when manual group labels are present
@@ -591,26 +637,48 @@ function updateAll() {
     cachedComm = undefined; // communities are computed on-demand in the tab
 
     // Update summary
-    const s = computeSummary(model);
     const summaryEl = document.getElementById('model-summary');
     if (summaryEl) {
-      const clusterInfo = state.clusterMode && !state.groupLabels
-        ? row('Mode', `Cluster (k=${state.clusterK}, ${state.clusterDissimilarity})`)
-        : '';
-      const groupInfo = groupNames.length > 0
-        ? row('Group', `${state.activeGroup} (${groupNames.length} groups)`)
-        : '';
-      summaryEl.innerHTML = [
-        row('Type', model.type),
-        clusterInfo,
-        groupInfo,
-        row('States', s.nStates),
-        row('Edges', s.nEdges),
-        row('Density', (s.density as number).toFixed(3)),
-        row('Mean Wt', (s.meanWeight as number).toFixed(4)),
-        row('Max Wt', (s.maxWeight as number).toFixed(4)),
-        row('Self-loops', s.hasSelfLoops ? 'Yes' : 'No'),
-      ].join('');
+      if (groupNames.length > 0) {
+        // Aggregate summary across groups
+        let totalEdges = 0;
+        let totalDensity = 0;
+        let nStates = 0;
+        for (const [, m] of cachedModels) {
+          const s = computeSummary(m);
+          totalEdges += s.nEdges as number;
+          totalDensity += s.density as number;
+          nStates = s.nStates as number; // same across groups
+        }
+        const avgEdges = Math.round(totalEdges / cachedModels.size);
+        const avgDensity = totalDensity / cachedModels.size;
+        const clusterInfo = state.clusterMode && !state.groupLabels
+          ? row('Mode', `Cluster (k=${state.clusterK}, ${state.clusterDissimilarity})`)
+          : '';
+        summaryEl.innerHTML = [
+          row('Mode', `Group (${groupNames.length} groups)`),
+          row('Type', model.type),
+          clusterInfo,
+          row('States', nStates),
+          row('Avg Edges', avgEdges),
+          row('Avg Density', avgDensity.toFixed(3)),
+        ].join('');
+      } else {
+        const s = computeSummary(model);
+        const clusterInfo = state.clusterMode && !state.groupLabels
+          ? row('Mode', `Cluster (k=${state.clusterK}, ${state.clusterDissimilarity})`)
+          : '';
+        summaryEl.innerHTML = [
+          row('Type', model.type),
+          clusterInfo,
+          row('States', s.nStates),
+          row('Edges', s.nEdges),
+          row('Density', (s.density as number).toFixed(3)),
+          row('Mean Wt', (s.meanWeight as number).toFixed(4)),
+          row('Max Wt', (s.maxWeight as number).toFixed(4)),
+          row('Self-loops', s.hasSelfLoops ? 'Yes' : 'No'),
+        ].join('');
+      }
     }
 
     // Populate node color pickers
@@ -665,38 +733,50 @@ function updateTabContent(model?: any, cent?: any, comm?: any) {
 
   content.innerHTML = '';
 
+  const isGroup = cachedFullModel && isGroupTNA(cachedFullModel) && cachedModels.size > 0;
+
   switch (state.activeTab as Tab) {
     case 'network':
-      renderNetworkTab(content, model);
+      if (isGroup) renderNetworkTabMulti(content);
+      else renderNetworkTab(content, model);
       break;
     case 'centralities':
-      renderCentralitiesTab(content, model, cent);
+      if (isGroup) renderCentralitiesTabMulti(content);
+      else renderCentralitiesTab(content, model, cent);
       break;
     case 'betweenness':
-      renderBetweennessTab(content, model, state.networkSettings);
+      if (isGroup) renderMultiGroupTab(content, (card, m, suffix) => renderBetweennessTab(card, m, state.networkSettings, suffix));
+      else renderBetweennessTab(content, model, state.networkSettings);
       break;
     case 'frequencies':
-      renderFrequenciesTab(content, model);
+      if (isGroup) renderFrequenciesTabMulti(content);
+      else renderFrequenciesTab(content, model);
       break;
     case 'sequences':
-      renderSequencesTab(content, model);
+      if (isGroup) renderSequencesTabMulti(content);
+      else renderSequencesTab(content, model);
       break;
     case 'communities':
-      renderCommunitiesTab(content, model, comm);
+      if (isGroup) renderCommunitiesTabMulti(content);
+      else renderCommunitiesTab(content, model, comm);
       break;
     case 'cliques':
-      renderCliquesTab(content, model, state.networkSettings);
+      if (isGroup) renderMultiGroupTab(content, (card, m, suffix) => renderCliquesTab(card, m, state.networkSettings, suffix));
+      else renderCliquesTab(content, model, state.networkSettings);
       break;
     case 'bootstrap':
-      renderBootstrapTab(content, model, state.networkSettings);
+      if (isGroup) renderMultiGroupTab(content, (card, m, suffix) => renderBootstrapTab(card, m, state.networkSettings, suffix));
+      else renderBootstrapTab(content, model, state.networkSettings);
       break;
     case 'patterns':
-      renderPatternsTab(content, model);
+      if (isGroup) renderMultiGroupTab(content, (card, m, suffix) => renderPatternsTab(card, m, suffix));
+      else renderPatternsTab(content, model);
       break;
     case 'indices':
-      renderIndicesTab(content, model);
+      if (isGroup) renderMultiGroupTab(content, (card, m, suffix) => renderIndicesTab(card, m, suffix));
+      else renderIndicesTab(content, model);
       break;
-    // Group-only tabs: use the full model (GroupTNA)
+    // Group-only tabs: use the full model (GroupTNA) — unchanged, already multi-group internally
     case 'permutation':
       if (cachedFullModel && isGroupTNA(cachedFullModel)) {
         renderPermutationTab(content, cachedFullModel);
@@ -998,6 +1078,353 @@ function renderCommunitiesTab(content: HTMLElement, model: any, _comm: any) {
     document.getElementById('community-method')?.addEventListener('change', () => {
       state.communityMethod = (document.getElementById('community-method') as HTMLSelectElement).value as CommunityMethod;
       saveState();
+    });
+  }, 0);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Multi-group helpers
+// ═══════════════════════════════════════════════════════════
+
+/** Compute the network height for group cards, scaled down for many groups. */
+function groupNetworkHeight(): number {
+  const n = cachedModels.size;
+  const maxH = n <= 2 ? 450 : 380;
+  return Math.min(state.networkSettings.networkHeight, maxH);
+}
+
+/** Create the grid container and return it. */
+function createMultiGroupGrid(parent: HTMLElement): HTMLElement {
+  const grid = document.createElement('div');
+  grid.className = 'multi-group-grid';
+  parent.appendChild(grid);
+  return grid;
+}
+
+/** Create a group card inside the grid and return its content div. */
+function createGroupCard(grid: HTMLElement, groupName: string, index: number): HTMLElement {
+  const card = document.createElement('div');
+  card.className = 'group-card';
+  const color = GROUP_CARD_COLORS[index % GROUP_CARD_COLORS.length]!;
+  card.innerHTML = `
+    <div class="group-card-header">
+      <span class="group-color-dot" style="background:${color}"></span>
+      ${groupName}
+    </div>
+    <div class="group-card-content"></div>
+  `;
+  grid.appendChild(card);
+  return card.querySelector('.group-card-content')! as HTMLElement;
+}
+
+/** Generic multi-group wrapper for external tab renderers that accept idSuffix. */
+function renderMultiGroupTab(
+  content: HTMLElement,
+  renderFn: (cardContent: HTMLElement, model: TNA, idSuffix: string) => void,
+) {
+  const grid = createMultiGroupGrid(content);
+  let i = 0;
+  for (const [groupName, model] of cachedModels) {
+    const card = createGroupCard(grid, groupName, i);
+    renderFn(card, model, `-g${i}`);
+    i++;
+  }
+}
+
+// ─── Network tab (multi-group) ───
+function renderNetworkTabMulti(content: HTMLElement) {
+  const grid = createMultiGroupGrid(content);
+  const h = groupNetworkHeight();
+  let i = 0;
+  for (const [groupName, model] of cachedModels) {
+    const card = createGroupCard(grid, groupName, i);
+    const vizId = `viz-network-g${i}`;
+    card.innerHTML = `
+      <div class="panel" style="min-height:${h + 40}px;box-shadow:none;padding:8px">
+        <div id="${vizId}" style="width:100%;height:${h}px"></div>
+      </div>
+    `;
+    i++;
+  }
+  requestAnimationFrame(() => {
+    let j = 0;
+    for (const [, model] of cachedModels) {
+      const el = document.getElementById(`viz-network-g${j}`);
+      if (el) renderNetwork(el, model, state.networkSettings);
+      j++;
+    }
+  });
+}
+
+// ─── Centralities tab (multi-group) ───
+function renderCentralitiesTabMulti(content: HTMLElement) {
+  // Shared controls at the top
+  const controls = document.createElement('div');
+  controls.className = 'panel multi-group-controls';
+  controls.style.padding = '12px 16px';
+  controls.innerHTML = `
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:6px">
+        <label style="font-size:12px;color:#777">Measure 1:</label>
+        <select id="measure-sel-1" style="font-size:12px">
+          ${AVAILABLE_MEASURES.map(m => `<option value="${m}" ${m === state.selectedMeasure1 ? 'selected' : ''}>${m}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <label style="font-size:12px;color:#777">Measure 2:</label>
+        <select id="measure-sel-2" style="font-size:12px">
+          ${AVAILABLE_MEASURES.map(m => `<option value="${m}" ${m === state.selectedMeasure2 ? 'selected' : ''}>${m}</option>`).join('')}
+        </select>
+      </div>
+      <button id="run-stability" class="btn-primary" style="font-size:11px;padding:4px 12px">Run Stability Analysis</button>
+    </div>
+  `;
+  content.appendChild(controls);
+
+  const grid = createMultiGroupGrid(content);
+  let i = 0;
+  for (const [groupName] of cachedModels) {
+    const card = createGroupCard(grid, groupName, i);
+    const cent = cachedCents.get(groupName)!;
+    card.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div style="min-height:280px">
+          <div id="viz-cent-1-g${i}" style="width:100%;height:280px"></div>
+        </div>
+        <div style="min-height:280px">
+          <div id="viz-cent-2-g${i}" style="width:100%;height:280px"></div>
+        </div>
+      </div>
+      <div id="stability-results-g${i}" style="color:#888;font-size:12px;margin-top:8px"></div>
+    `;
+    i++;
+  }
+
+  requestAnimationFrame(() => {
+    let j = 0;
+    for (const [groupName] of cachedModels) {
+      const cent = cachedCents.get(groupName)!;
+      const el1 = document.getElementById(`viz-cent-1-g${j}`);
+      const el2 = document.getElementById(`viz-cent-2-g${j}`);
+      if (el1) renderCentralityChart(el1, cent, state.selectedMeasure1);
+      if (el2) renderCentralityChart(el2, cent, state.selectedMeasure2);
+      j++;
+    }
+  });
+
+  // Wire shared measure selectors
+  setTimeout(() => {
+    document.getElementById('measure-sel-1')?.addEventListener('change', (e) => {
+      state.selectedMeasure1 = (e.target as HTMLSelectElement).value as CentralityMeasure;
+      let j = 0;
+      for (const [groupName] of cachedModels) {
+        const cent = cachedCents.get(groupName)!;
+        const el = document.getElementById(`viz-cent-1-g${j}`);
+        if (el) renderCentralityChart(el, cent, state.selectedMeasure1);
+        j++;
+      }
+    });
+    document.getElementById('measure-sel-2')?.addEventListener('change', (e) => {
+      state.selectedMeasure2 = (e.target as HTMLSelectElement).value as CentralityMeasure;
+      let j = 0;
+      for (const [groupName] of cachedModels) {
+        const cent = cachedCents.get(groupName)!;
+        const el = document.getElementById(`viz-cent-2-g${j}`);
+        if (el) renderCentralityChart(el, cent, state.selectedMeasure2);
+        j++;
+      }
+    });
+
+    document.getElementById('run-stability')?.addEventListener('click', () => {
+      let j = 0;
+      for (const [groupName, model] of cachedModels) {
+        const resultsEl = document.getElementById(`stability-results-g${j}`);
+        if (resultsEl) {
+          resultsEl.innerHTML = '<div style="display:flex;align-items:center;gap:8px"><div class="spinner" style="width:16px;height:16px;border-width:2px"></div><span>Running...</span></div>';
+        }
+        j++;
+      }
+      setTimeout(() => {
+        let k = 0;
+        for (const [groupName, model] of cachedModels) {
+          const resultsEl = document.getElementById(`stability-results-g${k}`);
+          if (resultsEl) {
+            try {
+              const result = estimateCS(model, { iter: 500, seed: 42 });
+              let html = '<table class="preview-table" style="font-size:11px"><thead><tr><th>Measure</th><th>CS</th><th>Interp.</th></tr></thead><tbody>';
+              for (const [measure, cs] of Object.entries(result.csCoefficients)) {
+                const interp = cs >= 0.5 ? 'Good' : cs >= 0.25 ? 'Moderate' : 'Unstable';
+                const color = cs >= 0.5 ? '#28a745' : cs >= 0.25 ? '#ffc107' : '#dc3545';
+                html += `<tr><td>${measure}</td><td>${cs.toFixed(2)}</td><td style="color:${color};font-weight:600">${interp}</td></tr>`;
+              }
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+            } catch (err) {
+              resultsEl.innerHTML = `<span style="color:#dc3545">Error: ${(err as Error).message}</span>`;
+            }
+          }
+          k++;
+        }
+      }, 50);
+    });
+  }, 0);
+}
+
+// ─── Frequencies tab (multi-group) ───
+function renderFrequenciesTabMulti(content: HTMLElement) {
+  const grid = createMultiGroupGrid(content);
+  let i = 0;
+  for (const [groupName, model] of cachedModels) {
+    const card = createGroupCard(grid, groupName, i);
+    card.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div><div id="viz-freq-g${i}" style="width:100%"></div></div>
+        <div><div id="viz-mosaic-g${i}" style="width:100%"></div></div>
+      </div>
+      <div><div id="viz-histogram-g${i}" style="width:100%"></div></div>
+    `;
+    i++;
+  }
+
+  requestAnimationFrame(() => {
+    let j = 0;
+    for (const [, model] of cachedModels) {
+      const freqEl = document.getElementById(`viz-freq-g${j}`);
+      const mosaicEl = document.getElementById(`viz-mosaic-g${j}`);
+      const histEl = document.getElementById(`viz-histogram-g${j}`);
+      if (freqEl) renderFrequencies(freqEl, model);
+      if (mosaicEl) renderMosaic(mosaicEl, model);
+      if (histEl) renderWeightHistogram(histEl, model);
+      j++;
+    }
+  });
+}
+
+// ─── Sequences tab (multi-group) ───
+function renderSequencesTabMulti(content: HTMLElement) {
+  if (!state.sequenceData) return;
+  const grid = createMultiGroupGrid(content);
+  let i = 0;
+  for (const [groupName, model] of cachedModels) {
+    const card = createGroupCard(grid, groupName, i);
+    card.innerHTML = `
+      <div style="margin-bottom:12px"><div id="viz-dist-g${i}" style="width:100%"></div></div>
+      <div style="overflow-x:auto"><div id="viz-seq-g${i}" style="width:100%"></div></div>
+    `;
+    i++;
+  }
+
+  requestAnimationFrame(() => {
+    let j = 0;
+    for (const [, model] of cachedModels) {
+      const distEl = document.getElementById(`viz-dist-g${j}`);
+      const seqEl = document.getElementById(`viz-seq-g${j}`);
+      if (distEl && model.data) renderDistribution(distEl, model.data, model);
+      if (seqEl && model.data) renderSequences(seqEl, model.data, model);
+      j++;
+    }
+  });
+}
+
+// ─── Communities tab (multi-group) ───
+function renderCommunitiesTabMulti(content: HTMLElement) {
+  // Shared controls
+  const controls = document.createElement('div');
+  controls.className = 'panel multi-group-controls';
+  controls.style.padding = '12px 16px';
+  controls.innerHTML = `
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:6px">
+        <label style="font-size:12px;color:#777">Method:</label>
+        <select id="community-method" style="font-size:12px">
+          ${AVAILABLE_METHODS.map(m =>
+            `<option value="${m}" ${m === state.communityMethod ? 'selected' : ''}>${m.replace(/_/g, ' ')}</option>`
+          ).join('')}
+        </select>
+      </div>
+      <button id="run-communities" class="btn-primary" style="font-size:12px;padding:6px 16px">Detect All</button>
+    </div>
+  `;
+  content.appendChild(controls);
+
+  const grid = createMultiGroupGrid(content);
+  const h = groupNetworkHeight();
+  let i = 0;
+  for (const [groupName, model] of cachedModels) {
+    const card = createGroupCard(grid, groupName, i);
+    card.innerHTML = `
+      <div style="min-height:${h + 40}px;padding:8px">
+        <div id="viz-community-network-g${i}" style="width:100%;height:${h}px"></div>
+      </div>
+      <div id="community-results-g${i}"></div>
+    `;
+    i++;
+  }
+
+  // Render plain networks initially
+  requestAnimationFrame(() => {
+    let j = 0;
+    for (const [, model] of cachedModels) {
+      const el = document.getElementById(`viz-community-network-g${j}`);
+      if (el) renderNetwork(el, model, state.networkSettings);
+      j++;
+    }
+  });
+
+  // Wire detect-all button
+  setTimeout(() => {
+    document.getElementById('community-method')?.addEventListener('change', () => {
+      state.communityMethod = (document.getElementById('community-method') as HTMLSelectElement).value as CommunityMethod;
+      saveState();
+    });
+
+    document.getElementById('run-communities')?.addEventListener('click', () => {
+      state.communityMethod = (document.getElementById('community-method') as HTMLSelectElement).value as CommunityMethod;
+      state.showCommunities = true;
+
+      // Show loading for each group
+      let idx = 0;
+      for (const [groupName] of cachedModels) {
+        const resultsEl = document.getElementById(`community-results-g${idx}`);
+        if (resultsEl) resultsEl.innerHTML = '<div style="text-align:center;padding:12px;color:#888;font-size:12px"><div class="spinner" style="width:16px;height:16px;border-width:2px;margin:0 auto 8px"></div>Detecting...</div>';
+        idx++;
+      }
+
+      setTimeout(() => {
+        let k = 0;
+        for (const [groupName, model] of cachedModels) {
+          try {
+            const comm = computeCommunities(model, state.communityMethod);
+            cachedComms.set(groupName, comm);
+
+            const el = document.getElementById(`viz-community-network-g${k}`);
+            if (el && comm) renderNetwork(el, model, state.networkSettings, comm);
+
+            const resultsEl = document.getElementById(`community-results-g${k}`);
+            if (resultsEl && comm?.assignments) {
+              const methodKey = Object.keys(comm.assignments)[0];
+              const assign: number[] | undefined = methodKey ? comm.assignments[methodKey] : undefined;
+              if (assign && assign.length > 0) {
+                const nComms = Math.max(...assign) + 1;
+                let html = `<div style="font-size:11px;margin-top:8px"><strong>${nComms} communities</strong>: `;
+                for (let c = 0; c < nComms; c++) {
+                  const members = model.labels.filter((_: string, idx: number) => assign[idx] === c);
+                  html += `<span style="color:${GROUP_CARD_COLORS[c % GROUP_CARD_COLORS.length]}">C${c + 1}</span> (${members.join(', ')})${c < nComms - 1 ? ' | ' : ''}`;
+                }
+                html += '</div>';
+                resultsEl.innerHTML = html;
+              } else {
+                resultsEl.innerHTML = '<div style="font-size:11px;color:#888;margin-top:8px">No communities detected.</div>';
+              }
+            }
+          } catch (err) {
+            const resultsEl = document.getElementById(`community-results-g${k}`);
+            if (resultsEl) resultsEl.innerHTML = `<span style="color:#dc3545;font-size:11px">Error: ${(err as Error).message}</span>`;
+          }
+          k++;
+        }
+        saveState();
+      }, 50);
     });
   }, 0);
 }

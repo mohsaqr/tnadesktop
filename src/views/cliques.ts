@@ -13,6 +13,7 @@ export function renderCliquesTab(
   container: HTMLElement,
   model: TNA,
   networkSettings: NetworkSettings,
+  idSuffix = '',
 ) {
   const grid = document.createElement('div');
   grid.className = 'panels-grid';
@@ -25,7 +26,7 @@ export function renderCliquesTab(
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:6px">
         <label style="font-size:12px;color:#777">Min Size:</label>
-        <select id="clique-size" style="font-size:12px">
+        <select id="clique-size${idSuffix}" style="font-size:12px">
           ${[2, 3, 4, 5, 6, 7, 8].map(s =>
             `<option value="${s}" ${s === 3 ? 'selected' : ''}>${s}</option>`
           ).join('')}
@@ -33,26 +34,26 @@ export function renderCliquesTab(
       </div>
       <div style="display:flex;align-items:center;gap:6px">
         <label style="font-size:12px;color:#777">Threshold:</label>
-        <input type="range" id="clique-threshold" min="0" max="0.5" step="0.01" value="0.05" style="width:120px">
-        <span id="clique-threshold-val" style="font-size:12px;color:#555">0.05</span>
+        <input type="range" id="clique-threshold${idSuffix}" min="0" max="0.5" step="0.01" value="0.05" style="width:120px">
+        <span id="clique-threshold-val${idSuffix}" style="font-size:12px;color:#555">0.05</span>
       </div>
-      <span id="clique-count" style="font-size:12px;color:#888;margin-left:12px"></span>
+      <span id="clique-count${idSuffix}" style="font-size:12px;color:#888;margin-left:12px"></span>
     </div>
   `;
   grid.appendChild(controls);
 
   // Clique results container
   const resultsDiv = document.createElement('div');
-  resultsDiv.id = 'clique-results';
+  resultsDiv.id = `clique-results${idSuffix}`;
   grid.appendChild(resultsDiv);
   container.appendChild(grid);
 
   function renderCliques() {
-    const size = parseInt((document.getElementById('clique-size') as HTMLSelectElement).value);
-    const threshold = parseFloat((document.getElementById('clique-threshold') as HTMLInputElement).value);
+    const size = parseInt((document.getElementById(`clique-size${idSuffix}`) as HTMLSelectElement).value);
+    const threshold = parseFloat((document.getElementById(`clique-threshold${idSuffix}`) as HTMLInputElement).value);
     const results = cliques(model, { size, threshold }) as CliqueResult;
-    const countEl = document.getElementById('clique-count');
-    const resultsEl = document.getElementById('clique-results');
+    const countEl = document.getElementById(`clique-count${idSuffix}`);
+    const resultsEl = document.getElementById(`clique-results${idSuffix}`);
     if (!resultsEl) return;
     resultsEl.innerHTML = '';
 
@@ -82,7 +83,7 @@ export function renderCliquesTab(
       panel.className = 'panel';
       panel.innerHTML = `
         <div class="panel-title" style="font-size:12px">Clique ${c + 1}: ${cliqueLabels.join(', ')}</div>
-        <div id="viz-clique-${c}" style="width:100%;height:250px"></div>
+        <div id="viz-clique-${c}${idSuffix}" style="width:100%;height:250px"></div>
       `;
       cliqueGrid.appendChild(panel);
     }
@@ -92,7 +93,7 @@ export function renderCliquesTab(
     // Render mini networks
     requestAnimationFrame(() => {
       for (let c = 0; c < nCliques; c++) {
-        const el = document.getElementById(`viz-clique-${c}`);
+        const el = document.getElementById(`viz-clique-${c}${idSuffix}`);
         if (!el) continue;
         const cliqueLabels = results.labels[c]!;
         const cliqueWeights = results.weights[c]!;
@@ -117,11 +118,11 @@ export function renderCliquesTab(
 
   // Wire events
   setTimeout(() => {
-    document.getElementById('clique-size')?.addEventListener('change', renderCliques);
-    const thresholdSlider = document.getElementById('clique-threshold') as HTMLInputElement | null;
+    document.getElementById(`clique-size${idSuffix}`)?.addEventListener('change', renderCliques);
+    const thresholdSlider = document.getElementById(`clique-threshold${idSuffix}`) as HTMLInputElement | null;
     if (thresholdSlider) {
       thresholdSlider.addEventListener('input', () => {
-        document.getElementById('clique-threshold-val')!.textContent = parseFloat(thresholdSlider.value).toFixed(2);
+        document.getElementById(`clique-threshold-val${idSuffix}`)!.textContent = parseFloat(thresholdSlider.value).toFixed(2);
         renderCliques();
       });
     }

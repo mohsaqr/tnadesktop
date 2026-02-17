@@ -64,8 +64,17 @@ export function bootstrapTna(
   const modelType = model.type;
   const modelScaling = model.scaling.length > 0 ? model.scaling : null;
 
+  // Pad sequences to uniform length so computeTransitions3D uses all transitions.
+  let maxLen = 0;
+  for (const seq of seqData) { if (seq.length > maxLen) maxLen = seq.length; }
+  const padded = seqData.map(seq => {
+    if (seq.length >= maxLen) return seq;
+    const pad: (string | null)[] = new Array(maxLen - seq.length).fill(null);
+    return [...seq, ...pad];
+  });
+
   // Compute per-sequence 3D transitions
-  const trans = computeTransitions3D(seqData, labels, modelType);
+  const trans = computeTransitions3D(padded, labels, modelType);
 
   // Compute original weights from 3D transitions
   const weights = computeWeightsFrom3D(trans, modelType, modelScaling);

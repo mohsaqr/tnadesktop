@@ -12,6 +12,7 @@ export function renderBetweennessTab(
   container: HTMLElement,
   model: TNA,
   networkSettings: NetworkSettings,
+  idSuffix = '',
 ) {
   const bModel = betweennessNetwork(model) as TNA;
   const n = bModel.labels.length;
@@ -58,14 +59,14 @@ export function renderBetweennessTab(
   netPanel.style.minHeight = `${h + 40}px`;
   netPanel.innerHTML = `
     <div class="panel-title">Betweenness Network</div>
-    <div id="viz-betweenness-network" style="width:100%;height:${h}px"></div>
+    <div id="viz-betweenness-network${idSuffix}" style="width:100%;height:${h}px"></div>
   `;
   grid.appendChild(netPanel);
 
   container.appendChild(grid);
 
   requestAnimationFrame(() => {
-    const el = document.getElementById('viz-betweenness-network');
+    const el = document.getElementById(`viz-betweenness-network${idSuffix}`);
     if (el) {
       // Use a modified settings with lower threshold for betweenness network
       const bSettings = { ...networkSettings, edgeThreshold: 0 };

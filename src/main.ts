@@ -212,7 +212,7 @@ export function computeSummary(model: TNA) {
   return summary(model);
 }
 
-export { AVAILABLE_MEASURES, AVAILABLE_METHODS, clusterSequences };
+export { AVAILABLE_MEASURES, AVAILABLE_METHODS, clusterSequences, prune };
 
 // ═══════════════════════════════════════════════════════════
 //  State persistence
