@@ -101,7 +101,7 @@ export function renderMosaic(container: HTMLElement, model: TNA) {
           d3.select(this).attr('stroke-width', 2);
           showTooltip(event,
             `<b>${labels[i]} → ${labels[j]}</b><br>` +
-            `Weight: ${val.toFixed(2)}<br>Residual: ${stdres.toFixed(2)}`);
+            `Weight: ${Number.isInteger(val) ? val : val.toFixed(4)}<br>Residual: ${stdres.toFixed(2)}`);
         })
         .on('mousemove', function (event: MouseEvent) {
           const tt = document.getElementById('tooltip')!;
@@ -122,7 +122,7 @@ export function renderMosaic(container: HTMLElement, model: TNA) {
           .attr('font-size', '8px')
           .attr('fill', Math.abs(stdres) > 2.5 ? '#fff' : '#333')
           .attr('pointer-events', 'none')
-          .text(val.toFixed(2));
+          .text(Number.isInteger(val) ? val : val.toFixed(2));
       }
 
       yStart += h;
