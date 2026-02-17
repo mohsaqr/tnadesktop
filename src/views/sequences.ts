@@ -21,7 +21,7 @@ export function renderSequences(container: HTMLElement, data: SequenceData, mode
   const rect = container.getBoundingClientRect();
   const width = Math.max(rect.width, 500);
   const margin = { top: 10, right: 120, bottom: 30, left: 70 };
-  const cellH = Math.min(18, Math.max(4, 400 / cleaned.length));
+  const cellH = Math.min(1, Math.max(0.3, 60 / cleaned.length));
   const innerH = cleaned.length * cellH;
   const height = innerH + margin.top + margin.bottom;
   const innerW = width - margin.left - margin.right;
@@ -42,10 +42,9 @@ export function renderSequences(container: HTMLElement, data: SequenceData, mode
       g.append('rect')
         .attr('x', col * cellW)
         .attr('y', row * cellH)
-        .attr('width', cellW - 0.5)
-        .attr('height', cellH - 1)
+        .attr('width', cellW)
+        .attr('height', cellH)
         .attr('fill', colorMap.get(state) ?? '#ccc')
-        .attr('rx', 1)
         .on('mouseover', function (event: MouseEvent) {
           d3.select(this).attr('stroke', '#333').attr('stroke-width', 1.5);
           showTooltip(event, `<b>${state}</b><br>Seq ${row + 1}, Step ${col + 1}`);
@@ -146,7 +145,7 @@ export function renderDistribution(container: HTMLElement, data: SequenceData, m
 
   const rect = container.getBoundingClientRect();
   const width = Math.max(rect.width, 500);
-  const height = 260;
+  const height = 585;
   const margin = { top: 10, right: 120, bottom: 35, left: 55 };
   const innerW = width - margin.left - margin.right;
   const innerH = height - margin.top - margin.bottom;

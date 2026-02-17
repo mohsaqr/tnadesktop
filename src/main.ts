@@ -9,6 +9,83 @@ import { renderPreview } from './views/preview';
 import { renderDashboard } from './views/dashboard';
 
 // ═══════════════════════════════════════════════════════════
+//  Network Settings
+// ═══════════════════════════════════════════════════════════
+export interface NetworkSettings {
+  // Nodes
+  nodeRadius: number;
+  nodeBorderWidth: number;
+  nodeBorderColor: string;
+  nodeLabelSize: number;
+  nodeLabelColor: string;
+  showNodeLabels: boolean;
+  nodeColors: Record<string, string>;
+
+  // Pie (donut ring)
+  pieBorderWidth: number;
+  pieBorderColor: string;
+
+  // Edges
+  edgeWidthMin: number;
+  edgeWidthMax: number;
+  edgeOpacityMin: number;
+  edgeOpacityMax: number;
+  edgeColor: string;
+  edgeLabelSize: number;
+  edgeLabelColor: string;
+  showEdgeLabels: boolean;
+  edgeCurvature: number;
+  edgeThreshold: number;
+
+  // Arrows
+  arrowSize: number;
+  arrowColor: string;
+
+  // Self-loops
+  showSelfLoops: boolean;
+
+  // Layout
+  layout: 'circular' | 'spring' | 'kamada_kawai' | 'spectral';
+  graphPadding: number;
+  networkHeight: number;
+}
+
+export function defaultNetworkSettings(): NetworkSettings {
+  return {
+    nodeRadius: 35,
+    nodeBorderWidth: 2.5,
+    nodeBorderColor: '#ffffff',
+    nodeLabelSize: 9,
+    nodeLabelColor: '#ffffff',
+    showNodeLabels: true,
+    nodeColors: {},
+
+    pieBorderWidth: 0,
+    pieBorderColor: '#666666',
+
+    edgeWidthMin: 0.6,
+    edgeWidthMax: 2.8,
+    edgeOpacityMin: 0.2,
+    edgeOpacityMax: 0.55,
+    edgeColor: '#4a7fba',
+    edgeLabelSize: 7,
+    edgeLabelColor: '#555566',
+    showEdgeLabels: true,
+    edgeCurvature: 22,
+    edgeThreshold: 0.05,
+
+    arrowSize: 10,
+    arrowColor: '#3a6a9f',
+
+    showSelfLoops: false,
+
+    layout: 'circular',
+    graphPadding: 0,
+    networkHeight: 580,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════
 //  App State
 // ═══════════════════════════════════════════════════════════
 export interface AppState {
@@ -29,6 +106,7 @@ export interface AppState {
   selectedMeasure2: CentralityMeasure;
   activeTab: string;
   error: string | null;
+  networkSettings: NetworkSettings;
 }
 
 export const state: AppState = {
@@ -49,6 +127,7 @@ export const state: AppState = {
   selectedMeasure2: 'Betweenness',
   activeTab: 'network',
   error: null,
+  networkSettings: defaultNetworkSettings(),
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -81,6 +160,46 @@ export function computeSummary(model: TNA) {
 export { AVAILABLE_MEASURES, AVAILABLE_METHODS };
 
 // ═══════════════════════════════════════════════════════════
+//  State persistence
+// ═══════════════════════════════════════════════════════════
+const STORAGE_KEY = 'tna-desktop-state';
+
+export function saveState() {
+  try {
+    const { error, ...rest } = state;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(rest));
+  } catch { /* quota exceeded or private browsing — ignore */ }
+}
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw) as Partial<AppState>;
+    // Only restore if there was actual data loaded
+    if (!saved.sequenceData || !saved.rawData?.length) return;
+    // Restore all persisted fields
+    state.view = saved.view ?? 'welcome';
+    state.filename = saved.filename ?? '';
+    state.rawData = saved.rawData ?? [];
+    state.headers = saved.headers ?? [];
+    state.sequenceData = saved.sequenceData ?? null;
+    state.format = saved.format ?? 'wide';
+    state.longIdCol = saved.longIdCol ?? 0;
+    state.longTimeCol = saved.longTimeCol ?? 1;
+    state.longStateCol = saved.longStateCol ?? 2;
+    state.modelType = saved.modelType ?? 'tna';
+    state.threshold = saved.threshold ?? 0;
+    state.showCommunities = saved.showCommunities ?? false;
+    state.communityMethod = saved.communityMethod ?? 'louvain';
+    state.selectedMeasure1 = saved.selectedMeasure1 ?? 'OutStrength';
+    state.selectedMeasure2 = saved.selectedMeasure2 ?? 'Betweenness';
+    state.activeTab = saved.activeTab ?? 'network';
+    state.networkSettings = { ...defaultNetworkSettings(), ...(saved.networkSettings ?? {}) };
+  } catch { /* corrupt data — start fresh */ }
+}
+
+// ═══════════════════════════════════════════════════════════
 //  Render
 // ═══════════════════════════════════════════════════════════
 const app = document.getElementById('app')!;
@@ -98,6 +217,7 @@ export function render() {
       renderDashboard(app);
       break;
   }
+  saveState();
 }
 
 // ─── Tooltip helpers (global) ───
@@ -128,4 +248,5 @@ export function hideLoading() {
 }
 
 // ─── Init ───
+loadState();
 render();

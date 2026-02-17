@@ -593,3 +593,140 @@ body {
   color: #991b1b;
   font-size: 16px;
 }
+
+/* ─── Collapsible Sections ─── */
+.collapsible-section {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  background: #f8f9fa;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.section-header:hover {
+  background: #eef0f3;
+}
+
+.section-header .chevron {
+  font-size: 10px;
+  color: var(--text-light);
+  width: 12px;
+  text-align: center;
+}
+
+.section-body {
+  padding: 10px;
+}
+
+.collapsible-section.collapsed .section-body {
+  display: none;
+}
+
+/* ─── Sub-sections ─── */
+.sub-section {
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.sub-section:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.sub-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--blue);
+  margin-bottom: 8px;
+}
+
+/* ─── Color Picker Row ─── */
+.color-picker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.color-picker-row label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 0 !important;
+  text-transform: none !important;
+}
+
+.color-picker-row input[type="color"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 28px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.color-picker-row input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.color-picker-row input[type="color"]::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+/* ─── Node Color Container ─── */
+.node-color-container {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+
+.node-color-container .color-picker-row {
+  padding: 2px 0;
+}
+
+/* ─── Reset Button ─── */
+.btn-reset {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  background: #f5f5f5;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-reset:hover {
+  background: #eee;
+  color: var(--text);
+}

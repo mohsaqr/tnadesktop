@@ -1,13 +1,11 @@
 /**
- * Network graph visualization (circular layout with curved edges).
- * Extracted from the tnaj demo.
+ * Network graph visualization with configurable layout, edges, and self-loops.
  */
 import * as d3 from 'd3';
 import type { TNA, CommunityResult } from 'tnaj';
+import type { NetworkSettings } from '../main';
 import { showTooltip, hideTooltip } from '../main';
 import { NODE_COLORS, COMMUNITY_COLORS } from './colors';
-
-const NODE_R = 26;
 
 interface NodeDatum {
   id: string;
@@ -23,8 +21,240 @@ interface EdgeDatum {
   weight: number;
 }
 
+// ═══════════════════════════════════════════════════════════
+//  Layout algorithms
+// ═══════════════════════════════════════════════════════════
+
+function rescalePositions(
+  positions: { x: number; y: number }[],
+  width: number, height: number, padding: number,
+) {
+  if (positions.length === 0) return;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of positions) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+  const usableW = width - 2 * padding;
+  const usableH = height - 2 * padding;
+  for (const p of positions) {
+    p.x = padding + ((p.x - minX) / rangeX) * usableW;
+    p.y = padding + ((p.y - minY) / rangeY) * usableH;
+  }
+}
+
+function circularLayout(
+  n: number, cx: number, cy: number, radius: number,
+): { x: number; y: number }[] {
+  return Array.from({ length: n }, (_, i) => {
+    const angle = (2 * Math.PI * i) / n - Math.PI / 2;
+    return { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) };
+  });
+}
+
+function springLayout(
+  n: number, weights: { get(i: number, j: number): number },
+  width: number, height: number, padding: number,
+): { x: number; y: number }[] {
+  // Build links from weight matrix
+  const links: { source: number; target: number; weight: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      const w = weights.get(i, j);
+      if (w > 0) links.push({ source: i, target: j, weight: w });
+    }
+  }
+
+  const nodes = Array.from({ length: n }, (_, i) => ({ index: i, x: 0, y: 0 }));
+
+  const sim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id((_d, i) => i).distance(100).strength((d: any) => d.weight))
+    .force('charge', d3.forceManyBody().strength(-300))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('collide', d3.forceCollide(padding * 0.5))
+    .stop();
+
+  for (let i = 0; i < 300; i++) sim.tick();
+
+  const positions = nodes.map(nd => ({ x: nd.x!, y: nd.y! }));
+  rescalePositions(positions, width, height, padding);
+  return positions;
+}
+
+function kamadaKawaiLayout(
+  n: number, weights: { get(i: number, j: number): number },
+  width: number, height: number, padding: number,
+): { x: number; y: number }[] {
+  // Floyd-Warshall shortest paths with 1/weight distances
+  const INF = 1e9;
+  const dist: number[][] = Array.from({ length: n }, () => Array(n).fill(INF));
+  for (let i = 0; i < n; i++) dist[i]![i] = 0;
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      const w = weights.get(i, j);
+      if (w > 0) {
+        const d = 1 / w;
+        if (d < dist[i]![j]!) dist[i]![j] = d;
+      }
+    }
+  }
+  for (let k = 0; k < n; k++) {
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        if (dist[i]![k]! + dist[k]![j]! < dist[i]![j]!) {
+          dist[i]![j] = dist[i]![k]! + dist[k]![j]!;
+        }
+      }
+    }
+  }
+
+  // Initialize from circular layout
+  const cx = width / 2, cy = height / 2;
+  const radius = Math.min(cx, cy) - padding;
+  const pos = circularLayout(n, cx, cy, radius);
+
+  // Desired distance scaling
+  let maxDist = 0;
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (dist[i]![j]! < INF && dist[i]![j]! > maxDist) maxDist = dist[i]![j]!;
+    }
+  }
+  const L0 = Math.min(width, height) * 0.4;
+  const scale = maxDist > 0 ? L0 / maxDist : 1;
+
+  // Spring constants k_ij = 1 / d_ij^2
+  const iterations = 300;
+  const eps = 0.01;
+  for (let iter = 0; iter < iterations; iter++) {
+    for (let m = 0; m < n; m++) {
+      let dEx = 0, dEy = 0;
+      for (let i = 0; i < n; i++) {
+        if (i === m || dist[m]![i]! >= INF) continue;
+        const dij = dist[m]![i]! * scale;
+        const kij = 1 / (dij * dij);
+        const dx = pos[m]!.x - pos[i]!.x;
+        const dy = pos[m]!.y - pos[i]!.y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1;
+        dEx += kij * (dx - dij * dx / d);
+        dEy += kij * (dy - dij * dy / d);
+      }
+      const step = 1;
+      pos[m]!.x -= step * dEx;
+      pos[m]!.y -= step * dEy;
+    }
+    if (Math.abs(eps) < 1e-6) break;
+  }
+
+  rescalePositions(pos, width, height, padding);
+  return pos;
+}
+
+function spectralLayout(
+  n: number, weights: { get(i: number, j: number): number },
+  width: number, height: number, padding: number,
+): { x: number; y: number }[] {
+  if (n <= 2) {
+    const pos = circularLayout(n, width / 2, height / 2, Math.min(width, height) / 2 - padding);
+    return pos;
+  }
+
+  // Symmetrize weights
+  const W: number[][] = Array.from({ length: n }, () => Array(n).fill(0));
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      W[i]![j] = (weights.get(i, j) + weights.get(j, i)) / 2;
+    }
+  }
+
+  // Build Laplacian L = D - W
+  const L: number[][] = Array.from({ length: n }, () => Array(n).fill(0));
+  for (let i = 0; i < n; i++) {
+    let deg = 0;
+    for (let j = 0; j < n; j++) deg += W[i]![j]!;
+    L[i]![i] = deg;
+    for (let j = 0; j < n; j++) {
+      if (i !== j) L[i]![j] = -W[i]![j]!;
+    }
+  }
+
+  // Power iteration to find smallest non-trivial eigenvectors
+  // We use inverse power iteration on L + shift to avoid the zero eigenvalue
+  function randomVec(): number[] {
+    const v = Array.from({ length: n }, () => Math.random() - 0.5);
+    const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
+    return v.map(x => x / norm);
+  }
+
+  function matVecMul(M: number[][], v: number[]): number[] {
+    return M.map(row => row.reduce((s, val, j) => s + val * v[j]!, 0));
+  }
+
+  function normalize(v: number[]): number[] {
+    const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0)) || 1;
+    return v.map(x => x / norm);
+  }
+
+  function orthogonalize(v: number[], basis: number[][]): number[] {
+    const result = [...v];
+    for (const b of basis) {
+      const dot = result.reduce((s, x, i) => s + x * b[i]!, 0);
+      for (let i = 0; i < n; i++) result[i]! -= dot * b[i]!;
+    }
+    return result;
+  }
+
+  // Use L directly, find eigenvectors via power iteration on (maxEig*I - L)
+  // to convert smallest eigenvectors to largest
+  // Estimate max eigenvalue (Gershgorin)
+  let maxEig = 0;
+  for (let i = 0; i < n; i++) {
+    let s = 0;
+    for (let j = 0; j < n; j++) s += Math.abs(L[i]![j]!);
+    if (s > maxEig) maxEig = s;
+  }
+  maxEig *= 1.1;
+
+  // Shifted matrix: M = maxEig*I - L (largest eigvecs of M = smallest of L)
+  const M: number[][] = Array.from({ length: n }, (_, i) =>
+    Array.from({ length: n }, (_, j) => (i === j ? maxEig : 0) - L[i]![j]!)
+  );
+
+  // Find 3 dominant eigenvectors of M (= 3 smallest of L)
+  const eigvecs: number[][] = [];
+  for (let k = 0; k < 3; k++) {
+    let v = randomVec();
+    for (let iter = 0; iter < 200; iter++) {
+      v = matVecMul(M, v);
+      v = orthogonalize(v, eigvecs);
+      v = normalize(v);
+    }
+    eigvecs.push(v);
+  }
+
+  // eigvecs[0] ≈ constant (Fiedler: skip), use [1] and [2] as x,y
+  const xCoords = eigvecs[1] ?? randomVec();
+  const yCoords = eigvecs[2] ?? randomVec();
+
+  const pos = xCoords.map((x, i) => ({ x, y: yCoords[i]! }));
+  rescalePositions(pos, width, height, padding);
+  return pos;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Edge path helpers
+// ═══════════════════════════════════════════════════════════
+
 function computeEdgePath(
-  sx: number, sy: number, tx: number, ty: number, curvature: number,
+  sx: number, sy: number, tx: number, ty: number,
+  curvature: number, nodeRadius: number,
 ) {
   const dx = tx - sx;
   const dy = ty - sy;
@@ -42,8 +272,8 @@ function computeEdgePath(
   const sdx = mx - sx;
   const sdy = my - sy;
   const slen = Math.sqrt(sdx * sdx + sdy * sdy);
-  const startX = sx + (sdx / slen) * NODE_R;
-  const startY = sy + (sdy / slen) * NODE_R;
+  const startX = sx + (sdx / slen) * nodeRadius;
+  const startY = sy + (sdy / slen) * nodeRadius;
 
   const edx = tx - mx;
   const edy = ty - my;
@@ -51,10 +281,10 @@ function computeEdgePath(
   const eux = edx / elen;
   const euy = edy / elen;
 
-  const tipX = tx - eux * NODE_R;
-  const tipY = ty - euy * NODE_R;
-  const endX = tx - eux * (NODE_R + 8);
-  const endY = ty - euy * (NODE_R + 8);
+  const tipX = tx - eux * nodeRadius;
+  const tipY = ty - euy * nodeRadius;
+  const endX = tx - eux * (nodeRadius + 8);
+  const endY = ty - euy * (nodeRadius + 8);
 
   const t = 0.55;
   const labelX = (1 - t) * (1 - t) * startX + 2 * (1 - t) * t * mx + t * t * endX;
@@ -66,11 +296,12 @@ function computeEdgePath(
   };
 }
 
-function arrowPoly(tipX: number, tipY: number, dx: number, dy: number): string {
-  const len = 7;
-  const halfW = 3.5;
-  const baseX = tipX - dx * len;
-  const baseY = tipY - dy * len;
+function arrowPoly(
+  tipX: number, tipY: number, dx: number, dy: number, arrowSize: number,
+): string {
+  const halfW = arrowSize / 2;
+  const baseX = tipX - dx * arrowSize;
+  const baseY = tipY - dy * arrowSize;
   const lx = baseX - dy * halfW;
   const ly = baseY + dx * halfW;
   const rx = baseX + dy * halfW;
@@ -78,25 +309,127 @@ function arrowPoly(tipX: number, tipY: number, dx: number, dy: number): string {
   return `${tipX},${tipY} ${lx},${ly} ${rx},${ry}`;
 }
 
-export function renderNetwork(container: HTMLElement, model: TNA, comm?: CommunityResult) {
+// ═══════════════════════════════════════════════════════════
+//  Self-loop rendering
+// ═══════════════════════════════════════════════════════════
+
+function renderSelfLoop(
+  edgeGroup: d3.Selection<SVGGElement, unknown, null, undefined>,
+  arrowGroup: d3.Selection<SVGGElement, unknown, null, undefined>,
+  edgeLabelGroup: d3.Selection<SVGGElement, unknown, null, undefined>,
+  node: NodeDatum,
+  weight: number,
+  settings: NetworkSettings,
+  widthScale: d3.ScaleLinear<number, number>,
+  opacityScale: d3.ScaleLinear<number, number>,
+  cx: number, cy: number,
+) {
+  const r = settings.nodeRadius;
+  const loopR = r * 0.55;
+
+  // Direction outward from graph center
+  let dirX = node.x - cx;
+  let dirY = node.y - cy;
+  const dirLen = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
+  dirX /= dirLen;
+  dirY /= dirLen;
+
+  // Place loop center outward from node (fully outside)
+  const loopCX = node.x + dirX * (r + loopR);
+  const loopCY = node.y + dirY * (r + loopR);
+
+  // Gap faces the node (toward center). Compute angle of the "toward node" direction
+  // relative to the loop circle center
+  const toNodeAngle = Math.atan2(node.y - loopCY, node.x - loopCX);
+  const gapHalf = 0.4;
+  const startAngle = toNodeAngle + gapHalf;
+  const endAngle = toNodeAngle - gapHalf + 2 * Math.PI;
+
+  const sx = loopCX + loopR * Math.cos(startAngle);
+  const sy = loopCY + loopR * Math.sin(startAngle);
+  const ex = loopCX + loopR * Math.cos(endAngle);
+  const ey = loopCY + loopR * Math.sin(endAngle);
+
+  const op = Math.min(opacityScale(weight) + 0.15, 1); // boost self-loop visibility
+  const sw = Math.max(widthScale(weight), 1.2); // minimum visible thickness
+
+  edgeGroup.append('path')
+    .attr('d', `M${sx},${sy} A${loopR},${loopR} 0 1,0 ${ex},${ey}`)
+    .attr('fill', 'none')
+    .attr('stroke', settings.edgeColor)
+    .attr('stroke-width', sw)
+    .attr('stroke-opacity', op)
+    .attr('stroke-linecap', 'round');
+
+  // Arrow at end pointing back toward node
+  const adx = node.x - ex;
+  const ady = node.y - ey;
+  const al = Math.sqrt(adx * adx + ady * ady) || 1;
+  arrowGroup.append('polygon')
+    .attr('points', arrowPoly(ex, ey, adx / al, ady / al, settings.arrowSize))
+    .attr('fill', settings.arrowColor)
+    .attr('opacity', op);
+
+  // Label on far side of loop (away from node)
+  const labelX = loopCX + dirX * (loopR + 6);
+  const labelY = loopCY + dirY * (loopR + 6);
+  if (settings.showEdgeLabels) {
+    edgeLabelGroup.append('text')
+      .attr('x', labelX)
+      .attr('y', labelY)
+      .attr('text-anchor', 'middle')
+      .attr('dy', '0.3em')
+      .attr('font-size', `${settings.edgeLabelSize}px`)
+      .attr('fill', settings.edgeLabelColor)
+      .attr('pointer-events', 'none')
+      .text(weight.toFixed(2).replace(/^0\./, '.'));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Main render
+// ═══════════════════════════════════════════════════════════
+
+export function renderNetwork(
+  container: HTMLElement, model: TNA, settings: NetworkSettings, comm?: CommunityResult,
+) {
   const rect = container.getBoundingClientRect();
   const graphWidth = Math.max(rect.width, 400);
   const graphHeight = Math.max(rect.height - 30, 350);
   const n = model.labels.length;
   const weights = model.weights;
+  const nodeRadius = settings.nodeRadius;
+  const padding = nodeRadius + settings.graphPadding;
 
-  // Layout
-  const cx = graphWidth / 2;
-  const cy = graphHeight / 2;
-  const radius = Math.min(cx, cy) - NODE_R - 30;
+  // ─── Layout ───
+  let positions: { x: number; y: number }[];
+  switch (settings.layout) {
+    case 'spring':
+      positions = springLayout(n, weights, graphWidth, graphHeight, padding);
+      break;
+    case 'kamada_kawai':
+      positions = kamadaKawaiLayout(n, weights, graphWidth, graphHeight, padding);
+      break;
+    case 'spectral':
+      positions = spectralLayout(n, weights, graphWidth, graphHeight, padding);
+      break;
+    case 'circular':
+    default: {
+      const cx = graphWidth / 2;
+      const cy = graphHeight / 2;
+      const radius = Math.min(cx, cy) - padding;
+      positions = circularLayout(n, cx, cy, radius);
+      break;
+    }
+  }
 
   const nodes: NodeDatum[] = model.labels.map((id, i) => {
-    const angle = (2 * Math.PI * i) / n - Math.PI / 2;
+    const customColor = settings.nodeColors[id];
     return {
       id, idx: i,
-      color: NODE_COLORS[i % NODE_COLORS.length]!,
-      x: cx + radius * Math.cos(angle),
-      y: cy + radius * Math.sin(angle),
+      color: customColor ?? NODE_COLORS[i % NODE_COLORS.length]!,
+      x: positions[i]!.x,
+      y: positions[i]!.y,
     };
   });
 
@@ -109,13 +442,13 @@ export function renderNetwork(container: HTMLElement, model: TNA, comm?: Communi
     });
   }
 
-  // Build edges
+  // ─── Build edges ───
   const edges: EdgeDatum[] = [];
   for (let i = 0; i < n; i++) {
     for (let j = 0; j < n; j++) {
       if (i === j) continue;
       const w = weights.get(i, j);
-      if (w >= 0.05) edges.push({ fromIdx: i, toIdx: j, weight: w });
+      if (w >= settings.edgeThreshold) edges.push({ fromIdx: i, toIdx: j, weight: w });
     }
   }
 
@@ -127,12 +460,10 @@ export function renderNetwork(container: HTMLElement, model: TNA, comm?: Communi
   }
 
   const maxW = Math.max(...edges.map(e => e.weight), 1e-6);
-  const widthScale = d3.scaleLinear().domain([0, maxW]).range([0.6, 2.8]);
-  const opacityScale = d3.scaleLinear().domain([0, maxW]).range([0.2, 0.55]);
+  const widthScale = d3.scaleLinear().domain([0, maxW]).range([settings.edgeWidthMin, settings.edgeWidthMax]);
+  const opacityScale = d3.scaleLinear().domain([0, maxW]).range([settings.edgeOpacityMin, settings.edgeOpacityMax]);
 
-  const EDGE_COLOR = '#4a7fba';
-  const ARROW_COLOR = '#3a6a9f';
-
+  // ─── SVG ───
   container.innerHTML = '';
   const svg = d3.select(container)
     .append('svg')
@@ -146,14 +477,27 @@ export function renderNetwork(container: HTMLElement, model: TNA, comm?: Communi
   const edgeLabelGroup = svg.append('g');
   const nodeGroup = svg.append('g');
 
-  // Edges
+  // ─── Self-loops ───
+  if (settings.showSelfLoops) {
+    // Compute graph centroid for outward direction
+    const centX = nodes.reduce((s, nd) => s + nd.x, 0) / nodes.length;
+    const centY = nodes.reduce((s, nd) => s + nd.y, 0) / nodes.length;
+    for (let i = 0; i < n; i++) {
+      const w = weights.get(i, i);
+      if (w >= settings.edgeThreshold) {
+        renderSelfLoop(edgeGroup, arrowGroup, edgeLabelGroup, nodes[i]!, w, settings, widthScale, opacityScale, centX, centY);
+      }
+    }
+  }
+
+  // ─── Edges ───
   for (const e of edges) {
     const src = nodes[e.fromIdx]!;
     const tgt = nodes[e.toIdx]!;
     const isBidir = bidir.has(`${e.fromIdx}-${e.toIdx}`);
-    const curvature = isBidir ? 22 : 0;
+    const curvature = isBidir ? settings.edgeCurvature : 0;
     const { path, tipX, tipY, tipDx, tipDy, labelX, labelY } = computeEdgePath(
-      src.x, src.y, tgt.x, tgt.y, curvature,
+      src.x, src.y, tgt.x, tgt.y, curvature, nodeRadius,
     );
     if (!path) continue;
 
@@ -162,7 +506,7 @@ export function renderNetwork(container: HTMLElement, model: TNA, comm?: Communi
     edgeGroup.append('path')
       .attr('d', path)
       .attr('fill', 'none')
-      .attr('stroke', EDGE_COLOR)
+      .attr('stroke', settings.edgeColor)
       .attr('stroke-width', widthScale(e.weight))
       .attr('stroke-opacity', op)
       .attr('stroke-linecap', 'round')
@@ -176,27 +520,32 @@ export function renderNetwork(container: HTMLElement, model: TNA, comm?: Communi
         tt.style.top = event.clientY - 10 + 'px';
       })
       .on('mouseout', function () {
-        d3.select(this).attr('stroke', EDGE_COLOR).attr('stroke-opacity', op);
+        d3.select(this).attr('stroke', settings.edgeColor).attr('stroke-opacity', op);
         hideTooltip();
       });
 
     arrowGroup.append('polygon')
-      .attr('points', arrowPoly(tipX, tipY, tipDx, tipDy))
-      .attr('fill', ARROW_COLOR)
-      .attr('opacity', op + 0.15);
+      .attr('points', arrowPoly(tipX, tipY, tipDx, tipDy, settings.arrowSize))
+      .attr('fill', settings.arrowColor)
+      .attr('opacity', Math.min(op + 0.15, 1));
 
-    edgeLabelGroup.append('text')
-      .attr('x', labelX)
-      .attr('y', labelY)
-      .attr('text-anchor', 'middle')
-      .attr('dy', '0.3em')
-      .attr('font-size', '7px')
-      .attr('fill', '#556')
-      .attr('pointer-events', 'none')
-      .text(e.weight.toFixed(2).replace(/^0\./, '.'));
+    if (settings.showEdgeLabels) {
+      edgeLabelGroup.append('text')
+        .attr('x', labelX)
+        .attr('y', labelY)
+        .attr('text-anchor', 'middle')
+        .attr('dy', '0.3em')
+        .attr('font-size', `${settings.edgeLabelSize}px`)
+        .attr('fill', settings.edgeLabelColor)
+        .attr('pointer-events', 'none')
+        .text(e.weight.toFixed(2).replace(/^0\./, '.'));
+    }
   }
 
-  // Nodes
+  // ─── Nodes ───
+  const rimWidth = nodeRadius * 0.18; // donut ring thickness
+  const rimRadius = nodeRadius + rimWidth * 0.7; // center of the donut ring
+
   const nodeEnter = nodeGroup.selectAll('g.node')
     .data(nodes)
     .enter()
@@ -204,21 +553,79 @@ export function renderNetwork(container: HTMLElement, model: TNA, comm?: Communi
     .attr('class', 'node')
     .attr('transform', d => `translate(${d.x},${d.y})`);
 
+  // Donut ring: background track (light gray full circle)
   nodeEnter.append('circle')
-    .attr('r', NODE_R)
-    .attr('fill', d => d.color)
-    .attr('stroke', '#fff')
-    .attr('stroke-width', 2.5);
+    .attr('class', 'node-rim-bg')
+    .attr('r', rimRadius)
+    .attr('fill', 'none')
+    .attr('stroke', '#e0e0e0')
+    .attr('stroke-width', rimWidth);
 
-  nodeEnter.append('text')
-    .attr('class', 'node-label')
-    .attr('dy', '0.35em')
-    .text(d => d.id);
+  // Donut ring: filled arc proportional to init probability
+  nodeEnter.append('path')
+    .attr('class', 'node-rim-arc')
+    .attr('fill', 'none')
+    .attr('stroke', d => d.color)
+    .attr('stroke-width', rimWidth)
+    .attr('stroke-linecap', 'butt')
+    .attr('d', d => {
+      const frac = model.inits[d.idx]!; // 0–1
+      if (frac <= 0) return '';
+      if (frac >= 0.9999) {
+        return [
+          `M 0 ${-rimRadius}`,
+          `A ${rimRadius} ${rimRadius} 0 1 1 0 ${rimRadius}`,
+          `A ${rimRadius} ${rimRadius} 0 1 1 0 ${-rimRadius}`,
+        ].join(' ');
+      }
+      const angle = frac * 2 * Math.PI;
+      const startX = 0;
+      const startY = -rimRadius;
+      const endX = rimRadius * Math.sin(angle);
+      const endY = -rimRadius * Math.cos(angle);
+      const largeArc = angle > Math.PI ? 1 : 0;
+      return `M ${startX} ${startY} A ${rimRadius} ${rimRadius} 0 ${largeArc} 1 ${endX} ${endY}`;
+    });
+
+  // Pie border: optional stroke around the donut ring
+  if (settings.pieBorderWidth > 0) {
+    // Outer border
+    nodeEnter.append('circle')
+      .attr('class', 'node-rim-border-outer')
+      .attr('r', rimRadius + rimWidth / 2)
+      .attr('fill', 'none')
+      .attr('stroke', settings.pieBorderColor)
+      .attr('stroke-width', settings.pieBorderWidth);
+    // Inner border
+    nodeEnter.append('circle')
+      .attr('class', 'node-rim-border-inner')
+      .attr('r', rimRadius - rimWidth / 2)
+      .attr('fill', 'none')
+      .attr('stroke', settings.pieBorderColor)
+      .attr('stroke-width', settings.pieBorderWidth);
+  }
+
+  // Main node circle
+  nodeEnter.append('circle')
+    .attr('class', 'node-main')
+    .attr('r', nodeRadius)
+    .attr('fill', d => d.color)
+    .attr('stroke', settings.nodeBorderColor)
+    .attr('stroke-width', settings.nodeBorderWidth);
+
+  if (settings.showNodeLabels) {
+    nodeEnter.append('text')
+      .attr('class', 'node-label')
+      .attr('dy', '0.35em')
+      .style('font-size', `${settings.nodeLabelSize}px`)
+      .style('fill', settings.nodeLabelColor)
+      .text(d => d.id);
+  }
 
   nodeEnter
     .on('mouseover', function (event: MouseEvent, d: NodeDatum) {
-      d3.select(this).select('circle').attr('stroke', '#333').attr('stroke-width', 3);
-      showTooltip(event, `<b>${d.id}</b><br>Init prob: ${model.inits[d.idx]!.toFixed(4)}`);
+      d3.select(this).select('.node-main').attr('stroke', '#333').attr('stroke-width', settings.nodeBorderWidth + 0.5);
+      showTooltip(event, `<b>${d.id}</b><br>Init prob: ${(model.inits[d.idx]! * 100).toFixed(1)}%`);
     })
     .on('mousemove', function (event: MouseEvent) {
       const tt = document.getElementById('tooltip')!;
@@ -226,7 +633,9 @@ export function renderNetwork(container: HTMLElement, model: TNA, comm?: Communi
       tt.style.top = event.clientY - 10 + 'px';
     })
     .on('mouseout', function () {
-      d3.select(this).select('circle').attr('stroke', '#fff').attr('stroke-width', 2.5);
+      d3.select(this).select('.node-main')
+        .attr('stroke', settings.nodeBorderColor)
+        .attr('stroke-width', settings.nodeBorderWidth);
       hideTooltip();
     });
 }

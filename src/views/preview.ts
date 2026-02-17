@@ -2,7 +2,7 @@
  * Data preview screen: shows parsed data table and format selection.
  */
 import { state, render } from '../main';
-import { wideToSequences, longToSequences } from '../data';
+import { wideToSequences, longToSequences, guessColumns } from '../data';
 
 export function renderPreview(container: HTMLElement) {
   // Toolbar
@@ -33,6 +33,14 @@ export function renderPreview(container: HTMLElement) {
   `;
   screen.appendChild(header);
 
+  // Guess columns for long format
+  const guessed = guessColumns(state.headers, state.rawData);
+  if (state.format === 'long') {
+    state.longIdCol = guessed.idCol;
+    state.longTimeCol = guessed.timeCol;
+    state.longStateCol = guessed.stateCol;
+  }
+
   // Format selector
   const formatDiv = document.createElement('div');
   formatDiv.className = 'format-selector';
@@ -45,19 +53,27 @@ export function renderPreview(container: HTMLElement) {
   `;
   screen.appendChild(formatDiv);
 
-  // Long format column selectors
+  // Long format column selectors (with "None" for time)
   const longCols = document.createElement('div');
   longCols.className = 'format-selector';
   longCols.id = 'long-cols';
   longCols.style.display = state.format === 'long' ? 'flex' : 'none';
-  const colOpts = state.headers.map((h, i) => `<option value="${i}" ${i === 0 ? 'selected' : ''}>${h}</option>`).join('');
+
+  const makeColOpts = (selected: number, includeNone = false) => {
+    let opts = includeNone ? `<option value="-1" ${selected === -1 ? 'selected' : ''}>None (row order)</option>` : '';
+    opts += state.headers.map((h, i) =>
+      `<option value="${i}" ${i === selected ? 'selected' : ''}>${h}</option>`
+    ).join('');
+    return opts;
+  };
+
   longCols.innerHTML = `
     <label>ID col:</label>
-    <select id="long-id">${colOpts}</select>
+    <select id="long-id">${makeColOpts(state.longIdCol)}</select>
     <label>Time col:</label>
-    <select id="long-time">${state.headers.map((h, i) => `<option value="${i}" ${i === 1 ? 'selected' : ''}>${h}</option>`).join('')}</select>
+    <select id="long-time">${makeColOpts(state.longTimeCol, true)}</select>
     <label>State col:</label>
-    <select id="long-state">${state.headers.map((h, i) => `<option value="${i}" ${i === 2 ? 'selected' : ''}>${h}</option>`).join('')}</select>
+    <select id="long-state">${makeColOpts(state.longStateCol)}</select>
   `;
   screen.appendChild(longCols);
 
