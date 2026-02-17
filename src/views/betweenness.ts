@@ -7,6 +7,7 @@ import { betweennessNetwork } from 'tnaj';
 import type { NetworkSettings } from '../main';
 import { showTooltip, hideTooltip } from '../main';
 import { renderNetwork } from './network';
+import { addPanelDownloadButtons } from './export';
 
 export function renderBetweennessTab(
   container: HTMLElement,
@@ -50,6 +51,7 @@ export function renderBetweennessTab(
   }
   tableHtml += '</tbody></table>';
   tablePanel.innerHTML += tableHtml;
+  addPanelDownloadButtons(tablePanel, { csv: true, filename: `betweenness-table${idSuffix}` });
   grid.appendChild(tablePanel);
 
   // Network panel (using betweenness weights)
@@ -61,6 +63,7 @@ export function renderBetweennessTab(
     <div class="panel-title">Betweenness Network</div>
     <div id="viz-betweenness-network${idSuffix}" style="width:100%;height:${h}px"></div>
   `;
+  addPanelDownloadButtons(netPanel, { image: true, filename: `betweenness-network${idSuffix}` });
   grid.appendChild(netPanel);
 
   container.appendChild(grid);

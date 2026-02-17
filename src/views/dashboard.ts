@@ -3,34 +3,35 @@
  */
 import type { TNA, GroupTNA, CentralityResult, CommunityResult, CentralityMeasure, CommunityMethod } from 'tnaj';
 import type { NetworkSettings } from '../main';
-import { state, render, saveState, buildModel, getActiveTNA, getGroupNames, isGroupTNA, computeCentralities, computeCommunities, computeSummary, defaultNetworkSettings, groupNetworkSettings, AVAILABLE_MEASURES, AVAILABLE_METHODS, prune } from '../main';
+import { state, render, saveState, buildModel, buildGroupModel, computeCentralities, computeCommunities, computeSummary, groupNetworkSettings, AVAILABLE_MEASURES, AVAILABLE_METHODS, prune } from '../main';
 import { renderNetwork } from './network';
 import { renderCentralityChart } from './centralities';
 import { renderFrequencies, renderWeightHistogram } from './frequencies';
-import { renderMosaic } from './mosaic';
+
 import { renderSequences, renderDistribution } from './sequences';
-import { showExportDialog } from './export';
+import { showExportDialog, addPanelDownloadButtons } from './export';
 import { renderBetweennessTab } from './betweenness';
 import { renderCliquesTab } from './cliques';
 import { renderPermutationTab } from './permutation';
 import { renderCompareSequencesTab } from './compare-sequences';
-import { renderCompareNetworksTab } from './compare-networks';
 import { renderBootstrapTab, renderBootstrapResults } from './bootstrap';
 import { bootstrapTna } from '../analysis/bootstrap';
 import type { BootstrapOptions } from '../analysis/bootstrap';
 import { renderPatternsTab } from './patterns';
 import { renderIndicesTab } from './indices';
+import { renderGroupAnalysisTab } from './clustering';
 import { estimateCS } from '../analysis/stability';
 import type { StabilityResult } from '../analysis/stability';
 import { NODE_COLORS } from './colors';
 import * as d3 from 'd3';
 
-type Tab = 'network' | 'centralities' | 'betweenness' | 'communities' | 'cliques' | 'bootstrap' | 'frequencies' | 'sequences' | 'patterns' | 'indices' | 'permutation' | 'compare-sequences' | 'compare-networks';
+type Tab = 'network' | 'group-analysis' | 'centralities' | 'betweenness' | 'communities' | 'cliques' | 'bootstrap' | 'frequencies' | 'sequences' | 'patterns' | 'indices' | 'permutation' | 'compare-sequences';
 
-interface TabDef { id: Tab; label: string; groupOnly?: boolean }
+interface TabDef { id: Tab; label: string; groupOnly?: boolean; singleOnly?: boolean }
 
 const TABS: TabDef[] = [
   { id: 'network', label: 'Network' },
+  { id: 'group-analysis', label: 'Group Analysis' },
   { id: 'frequencies', label: 'Frequencies' },
   { id: 'centralities', label: 'Centralities' },
   { id: 'communities', label: 'Communities' },
@@ -41,11 +42,10 @@ const TABS: TabDef[] = [
   { id: 'indices', label: 'Seq. Indices' },
   { id: 'permutation', label: 'Permutation Test', groupOnly: true },
   { id: 'compare-sequences', label: 'Compare Sequences', groupOnly: true },
-  { id: 'compare-networks', label: 'Compare Networks', groupOnly: true },
 ];
 
 // ─── Cached model data for fast network-only re-render ───
-let cachedFullModel: TNA | GroupTNA | null = null;  // the raw model (possibly GroupTNA)
+let cachedFullModel: TNA | null = null;
 let cachedModel: TNA | null = null;                  // active group's TNA (always single)
 let cachedCent: CentralityResult | null = null;
 let cachedComm: CommunityResult | undefined = undefined;
@@ -54,6 +54,74 @@ let cachedComm: CommunityResult | undefined = undefined;
 let cachedModels: Map<string, TNA> = new Map();
 let cachedCents: Map<string, CentralityResult> = new Map();
 let cachedComms: Map<string, CommunityResult | undefined> = new Map();
+
+// ─── Group-analysis caches (populated by clustering or column-group activation) ───
+let activeGroupModels: Map<string, TNA> = new Map();
+let activeGroupCents: Map<string, CentralityResult> = new Map();
+let activeGroupFullModel: GroupTNA | null = null;
+let activeGroupLabels: string[] | null = null;
+let activeGroupSource: 'column' | 'clustering' | null = null;
+
+/** Set group analysis data (called from clustering tab or column-group activation). */
+export function setGroupAnalysisData(
+  models: Map<string, TNA>,
+  cents: Map<string, CentralityResult>,
+  groupModel: GroupTNA,
+  labels: string[],
+  source: 'column' | 'clustering' = 'clustering',
+) {
+  activeGroupModels = models;
+  activeGroupCents = cents;
+  activeGroupFullModel = groupModel;
+  activeGroupLabels = labels;
+  activeGroupSource = source;
+}
+
+/** Clear group analysis data. */
+export function clearGroupAnalysisData() {
+  activeGroupModels.clear();
+  activeGroupCents.clear();
+  activeGroupFullModel = null;
+  activeGroupLabels = null;
+  activeGroupSource = null;
+}
+
+/** Whether group analysis is currently active. */
+export function isGroupAnalysisActive(): boolean {
+  return activeGroupModels.size > 0;
+}
+
+/** Get the source of the active group analysis. */
+export function getGroupAnalysisSource(): 'column' | 'clustering' | null {
+  return activeGroupSource;
+}
+
+/** Get the active group models map. */
+export function getActiveGroupModels(): Map<string, TNA> {
+  return activeGroupModels;
+}
+
+/** Get the active group centralities map. */
+export function getActiveGroupCents(): Map<string, CentralityResult> {
+  return activeGroupCents;
+}
+
+/** Update group tab visibility (called from clustering.ts after activation/deactivation). */
+export function updateGroupTabVisibility() {
+  const hasMulti = isGroupAnalysisActive();
+  const tabBar = document.getElementById('main-tab-bar');
+  if (tabBar) {
+    tabBar.querySelectorAll('button').forEach(btn => {
+      const b = btn as HTMLElement;
+      if (b.dataset.groupOnly === 'true') {
+        b.style.display = hasMulti ? '' : 'none';
+      }
+    });
+  }
+  if (!hasMulti && TABS.find(t => t.id === state.activeTab)?.groupOnly) {
+    state.activeTab = 'network';
+  }
+}
 
 const GROUP_CARD_COLORS = ['#4e79a7', '#e15759', '#59a14f', '#edc948', '#b07aa1', '#76b7b2', '#f28e2b', '#ff9da7'];
 
@@ -65,33 +133,22 @@ function debouncedNetworkUpdate() {
 }
 
 function updateNetworkOnly() {
-  const isGroup = cachedFullModel && isGroupTNA(cachedFullModel) && cachedModels.size > 0;
-
-  if (isGroup) {
-    // Multi-group: re-render all group network elements with scaled-down settings
-    const gs = groupNetworkSettings(state.networkSettings);
-    if (state.activeTab === 'network') {
-      let i = 0;
-      for (const [, model] of cachedModels) {
-        const el = document.getElementById(`viz-network-g${i}`);
-        if (el) renderNetwork(el, model, gs);
-        i++;
-      }
-    } else if (state.activeTab === 'communities') {
+  // Network tab is always single model now
+  if (!cachedModel) return;
+  if (state.activeTab === 'network') {
+    const el = document.getElementById('viz-network');
+    if (el) renderNetwork(el, cachedModel, state.networkSettings);
+  } else if (state.activeTab === 'communities') {
+    // Communities tab may be multi-group when group analysis is active
+    if (isGroupAnalysisActive() && cachedModels.size > 0) {
+      const gs = groupNetworkSettings(state.networkSettings);
       let i = 0;
       for (const [groupName, model] of cachedModels) {
         const el = document.getElementById(`viz-community-network-g${i}`);
         if (el) renderNetwork(el, model, gs, cachedComms.get(groupName) ?? undefined);
         i++;
       }
-    }
-  } else {
-    // Single model
-    if (!cachedModel) return;
-    if (state.activeTab === 'network') {
-      const el = document.getElementById('viz-network');
-      if (el) renderNetwork(el, cachedModel, state.networkSettings);
-    } else if (state.activeTab === 'communities') {
+    } else {
       const el = document.getElementById('viz-community-network');
       if (el) renderNetwork(el, cachedModel, state.networkSettings, cachedComm ?? undefined);
     }
@@ -147,29 +204,6 @@ export function renderDashboard(container: HTMLElement) {
     <div class="control-group" id="group-selector-wrap" style="display:none">
       <label>Active Group</label>
       <select id="group-select"></select>
-    </div>
-
-    <!-- Cluster Mode -->
-    <div class="control-group" id="cluster-controls" style="${state.groupLabels ? 'display:none' : ''}">
-      <div class="checkbox-row">
-        <input type="checkbox" id="cluster-toggle" ${state.clusterMode ? 'checked' : ''}>
-        <span>Cluster Mode</span>
-      </div>
-      <div id="cluster-params" style="display:${state.clusterMode ? 'block' : 'none'}">
-        <div class="control-group" style="margin-top:6px">
-          <label>Clusters (k)</label>
-          <input type="number" id="cluster-k" value="${state.clusterK}" min="2" max="20" style="width:60px;font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
-        </div>
-        <div class="control-group" style="margin-top:4px">
-          <label>Dissimilarity</label>
-          <select id="cluster-dissim" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc"
-            <option value="hamming" ${state.clusterDissimilarity === 'hamming' ? 'selected' : ''}>Hamming</option>
-            <option value="lv" ${state.clusterDissimilarity === 'lv' ? 'selected' : ''}>Levenshtein</option>
-            <option value="osa" ${state.clusterDissimilarity === 'osa' ? 'selected' : ''}>OSA</option>
-            <option value="lcs" ${state.clusterDissimilarity === 'lcs' ? 'selected' : ''}>LCS</option>
-          </select>
-        </div>
-      </div>
     </div>
 
     <!-- Network Appearance (collapsible) -->
@@ -426,6 +460,7 @@ export function renderDashboard(container: HTMLElement) {
     btn.textContent = tab.label;
     btn.dataset.tab = tab.id;
     if (tab.groupOnly) btn.dataset.groupOnly = 'true';
+    if (tab.singleOnly) btn.dataset.singleOnly = 'true';
     if (tab.id === state.activeTab) btn.classList.add('active');
     btn.addEventListener('click', () => {
       state.activeTab = tab.id;
@@ -472,26 +507,8 @@ export function renderDashboard(container: HTMLElement) {
     updateAll();
   });
 
-  // Cluster controls
-  document.getElementById('cluster-toggle')?.addEventListener('change', (e) => {
-    state.clusterMode = (e.target as HTMLInputElement).checked;
-    const params = document.getElementById('cluster-params');
-    if (params) params.style.display = state.clusterMode ? 'block' : 'none';
-    state.activeGroup = null;
-    updateAll();
-  });
-  document.getElementById('cluster-k')?.addEventListener('change', (e) => {
-    state.clusterK = parseInt((e.target as HTMLInputElement).value) || 3;
-    if (state.clusterMode) { state.activeGroup = null; updateAll(); }
-  });
-  document.getElementById('cluster-dissim')?.addEventListener('change', (e) => {
-    state.clusterDissimilarity = (e.target as HTMLSelectElement).value as typeof state.clusterDissimilarity;
-    if (state.clusterMode) { state.activeGroup = null; updateAll(); }
-  });
-
   document.getElementById('export-btn')!.addEventListener('click', () => {
-    const fullModel = buildModel();
-    const model = getActiveTNA(fullModel);
+    const model = buildModel();
     const cent = computeCentralities(model);
     showExportDialog(model, cent);
   });
@@ -542,23 +559,11 @@ export function renderDashboard(container: HTMLElement) {
       const valEl = document.getElementById('ns-networkHeight-val');
       if (valEl) valEl.textContent = String(val);
 
-      const isGroup = cachedFullModel && isGroupTNA(cachedFullModel) && cachedModels.size > 0;
-      if (isGroup) {
-        // Resize all group viz containers
-        const h = groupNetworkHeight();
-        for (let i = 0; i < cachedModels.size; i++) {
-          const vizEl = document.getElementById(`viz-network-g${i}`) || document.getElementById(`viz-community-network-g${i}`);
-          if (vizEl) vizEl.style.height = `${h}px`;
-          const panel = vizEl?.closest('.panel, .group-card-content') as HTMLElement | null;
-          if (panel) panel.style.minHeight = `${h + 40}px`;
-        }
-      } else {
-        // Resize the single viz container
-        const vizEl = document.getElementById('viz-network') || document.getElementById('viz-community-network');
-        if (vizEl) vizEl.style.height = `${val}px`;
-        const panel = vizEl?.closest('.panel') as HTMLElement | null;
-        if (panel) panel.style.minHeight = `${val + 40}px`;
-      }
+      // Resize the single viz container (network tab is always single model)
+      const vizEl = document.getElementById('viz-network') || document.getElementById('viz-community-network');
+      if (vizEl) vizEl.style.height = `${val}px`;
+      const panel = vizEl?.closest('.panel') as HTMLElement | null;
+      if (panel) panel.style.minHeight = `${val + 40}px`;
       debouncedNetworkUpdate();
     });
   }
@@ -632,114 +637,64 @@ function populateNodeColors() {
 
 function updateAll() {
   try {
-    const fullModel = buildModel();
-    cachedFullModel = fullModel;
+    // buildModel() always returns a single TNA now
+    const model = buildModel();
+    cachedFullModel = model;
+    cachedModel = model;
+    cachedCent = computeCentralities(model);
+    cachedComm = undefined; // communities are computed on-demand in the tab
 
-    // Populate group selector if GroupTNA
+    // Hide group dropdown — no longer used in sidebar
     const groupWrap = document.getElementById('group-selector-wrap');
-    const groupSelect = document.getElementById('group-select') as HTMLSelectElement | null;
-    const groupNames = getGroupNames(fullModel);
-
-    // In group mode, hide the dropdown — all groups shown simultaneously
     if (groupWrap) groupWrap.style.display = 'none';
 
-    // Build per-group caches
+    // Clear per-group caches (will be repopulated from activeGroupModels in updateTabContent)
     cachedModels.clear();
     cachedCents.clear();
     cachedComms.clear();
 
-    if (groupNames.length > 0 && isGroupTNA(fullModel)) {
-      // Ensure activeGroup is valid (still used for node-color pickers etc.)
-      if (!state.activeGroup || !groupNames.includes(state.activeGroup)) {
-        state.activeGroup = groupNames[0]!;
-      }
-      for (const name of groupNames) {
-        let m = (fullModel as GroupTNA).models[name]!;
+    // If group analysis is active, rebuild group models with current settings
+    if (isGroupAnalysisActive() && activeGroupLabels) {
+      const groupModel = buildGroupModel(activeGroupLabels);
+      const models = new Map<string, TNA>();
+      const cents = new Map<string, CentralityResult>();
+      for (const name of Object.keys(groupModel.models)) {
+        let m = groupModel.models[name]!;
         if (state.threshold > 0) m = prune(m, state.threshold) as TNA;
-        cachedModels.set(name, m);
-        cachedCents.set(name, computeCentralities(m));
+        models.set(name, m);
+        cents.set(name, computeCentralities(m));
       }
+      activeGroupModels = models;
+      activeGroupCents = cents;
+      activeGroupFullModel = groupModel;
     }
 
-    // Hide cluster controls when manual group labels are present
-    const clusterControls = document.getElementById('cluster-controls');
-    if (clusterControls) {
-      clusterControls.style.display = (state.groupLabels && state.groupLabels.length > 0) ? 'none' : '';
-    }
-
-    // Get the active single TNA (extracts from group if needed, applies pruning)
-    const model = getActiveTNA(fullModel);
-    const cent = computeCentralities(model);
-
-    cachedModel = model;
-    cachedCent = cent;
-    cachedComm = undefined; // communities are computed on-demand in the tab
-
-    // Update summary
+    // Update summary — always single model, with a line if groups are active
     const summaryEl = document.getElementById('model-summary');
     if (summaryEl) {
-      if (groupNames.length > 0) {
-        // Aggregate summary across groups
-        let totalEdges = 0;
-        let totalDensity = 0;
-        let nStates = 0;
-        for (const [, m] of cachedModels) {
-          const s = computeSummary(m);
-          totalEdges += s.nEdges as number;
-          totalDensity += s.density as number;
-          nStates = s.nStates as number; // same across groups
-        }
-        const avgEdges = Math.round(totalEdges / cachedModels.size);
-        const avgDensity = totalDensity / cachedModels.size;
-        const clusterInfo = state.clusterMode && !state.groupLabels
-          ? row('Mode', `Cluster (k=${state.clusterK}, ${state.clusterDissimilarity})`)
-          : '';
-        summaryEl.innerHTML = [
-          row('Mode', `Group (${groupNames.length} groups)`),
-          row('Type', model.type),
-          clusterInfo,
-          row('States', nStates),
-          row('Avg Edges', avgEdges),
-          row('Avg Density', avgDensity.toFixed(3)),
-        ].join('');
-      } else {
-        const s = computeSummary(model);
-        const clusterInfo = state.clusterMode && !state.groupLabels
-          ? row('Mode', `Cluster (k=${state.clusterK}, ${state.clusterDissimilarity})`)
-          : '';
-        summaryEl.innerHTML = [
-          row('Type', model.type),
-          clusterInfo,
-          row('States', s.nStates),
-          row('Edges', s.nEdges),
-          row('Density', (s.density as number).toFixed(3)),
-          row('Mean Wt', (s.meanWeight as number).toFixed(4)),
-          row('Max Wt', (s.maxWeight as number).toFixed(4)),
-          row('Self-loops', s.hasSelfLoops ? 'Yes' : 'No'),
-        ].join('');
-      }
+      const s = computeSummary(model);
+      const groupSummary = isGroupAnalysisActive()
+        ? row('Groups', `${activeGroupModels.size} active`)
+        : '';
+      summaryEl.innerHTML = [
+        row('Type', model.type),
+        groupSummary,
+        row('States', s.nStates),
+        row('Edges', s.nEdges),
+        row('Density', (s.density as number).toFixed(3)),
+        row('Mean Wt', (s.meanWeight as number).toFixed(4)),
+        row('Max Wt', (s.maxWeight as number).toFixed(4)),
+        row('Self-loops', s.hasSelfLoops ? 'Yes' : 'No'),
+      ].join('');
     }
 
     // Populate node color pickers
     populateNodeColors();
 
     // Show/hide group-only tabs
-    const isGroup = groupNames.length > 0;
-    const tabBar = document.getElementById('main-tab-bar');
-    if (tabBar) {
-      tabBar.querySelectorAll('button').forEach(btn => {
-        const b = btn as HTMLElement;
-        if (b.dataset.groupOnly === 'true') {
-          b.style.display = isGroup ? '' : 'none';
-        }
-      });
-    }
-    // If currently on a group-only tab but not in group mode, switch to network
-    if (!isGroup && TABS.find(t => t.id === state.activeTab)?.groupOnly) {
-      state.activeTab = 'network';
-    }
+    updateGroupTabVisibility();
 
-    updateTabContent(model, cent);
+    updateTabContent(model, cachedCent);
     saveState();
   } catch (err) {
     const content = document.getElementById('tab-content');
@@ -750,7 +705,7 @@ function updateAll() {
   }
 }
 
-function updateTabContent(model?: any, cent?: any, comm?: any) {
+export function updateTabContent(model?: any, cent?: any, comm?: any) {
   const content = document.getElementById('tab-content');
   if (!content) return;
 
@@ -762,8 +717,7 @@ function updateTabContent(model?: any, cent?: any, comm?: any) {
       comm = cachedComm;
     } else {
       try {
-        const fullModel = buildModel();
-        model = getActiveTNA(fullModel);
+        model = buildModel();
         cent = computeCentralities(model);
         comm = computeCommunities(model);
       } catch { return; }
@@ -772,68 +726,74 @@ function updateTabContent(model?: any, cent?: any, comm?: any) {
 
   content.innerHTML = '';
 
-  const isGroup = cachedFullModel && isGroupTNA(cachedFullModel) && cachedModels.size > 0;
+  const tab = state.activeTab as Tab;
+  const isDownstreamTab = tab !== 'network' && tab !== 'group-analysis';
+  const groupActive = isGroupAnalysisActive();
 
-  switch (state.activeTab as Tab) {
+  // For downstream tabs, populate cachedModels/cachedCents from active group data
+  if (isDownstreamTab && groupActive) {
+    cachedModels = new Map(activeGroupModels);
+    cachedCents = new Map(activeGroupCents);
+  }
+
+  const useMulti = isDownstreamTab && groupActive;
+
+  switch (tab) {
     case 'network':
-      if (isGroup) renderNetworkTabMulti(content);
-      else renderNetworkTab(content, model);
+      // Network tab: always single model
+      renderNetworkTab(content, model);
+      break;
+    case 'group-analysis':
+      renderGroupAnalysisTab(content, model, state.networkSettings);
       break;
     case 'centralities':
-      if (isGroup) renderCentralitiesTabMulti(content);
+      if (useMulti) renderCentralitiesTabMulti(content);
       else renderCentralitiesTab(content, model, cent);
       break;
     case 'betweenness':
       // Legacy: redirect to centralities tab
       state.activeTab = 'centralities';
       currentCentSubView = 'betweenness';
-      if (isGroup) renderCentralitiesTabMulti(content);
+      if (useMulti) renderCentralitiesTabMulti(content);
       else renderCentralitiesTab(content, model, cent);
       break;
     case 'frequencies':
-      if (isGroup) renderFrequenciesTabMulti(content);
+      if (useMulti) renderFrequenciesTabMulti(content);
       else renderFrequenciesTab(content, model);
       break;
     case 'sequences':
-      if (isGroup) renderSequencesTabMulti(content);
+      if (useMulti) renderSequencesTabMulti(content);
       else renderSequencesTab(content, model);
       break;
     case 'communities':
-      if (isGroup) renderCommunitiesTabMulti(content);
+      if (useMulti) renderCommunitiesTabMulti(content);
       else renderCommunitiesTab(content, model, comm);
       break;
     case 'cliques':
-      if (isGroup) renderMultiGroupTab(content, (card, m, suffix) => renderCliquesTab(card, m, state.networkSettings, suffix));
+      if (useMulti) renderMultiGroupTab(content, (card, m, suffix) => renderCliquesTab(card, m, state.networkSettings, suffix));
       else renderCliquesTab(content, model, state.networkSettings);
       break;
     case 'bootstrap':
-      if (isGroup) renderBootstrapTabMulti(content);
+      if (useMulti) renderBootstrapTabMulti(content);
       else renderBootstrapTab(content, model, state.networkSettings);
       break;
     case 'patterns':
-      if (isGroup) renderMultiGroupTab(content, (card, m, suffix) => renderPatternsTab(card, m, suffix));
+      if (useMulti) renderMultiGroupTab(content, (card, m, suffix) => renderPatternsTab(card, m, suffix));
       else renderPatternsTab(content, model);
       break;
     case 'indices':
-      if (isGroup) renderMultiGroupTab(content, (card, m, suffix) => renderIndicesTab(card, m, suffix));
+      if (useMulti) renderMultiGroupTab(content, (card, m, suffix) => renderIndicesTab(card, m, suffix));
       else renderIndicesTab(content, model);
       break;
-    // Group-only tabs: use the full model (GroupTNA) — unchanged, already multi-group internally
-    case 'permutation':
-      if (cachedFullModel && isGroupTNA(cachedFullModel)) {
-        renderPermutationTab(content, cachedFullModel);
-      }
+    // Group-only tabs: use the full GroupTNA from group analysis
+    case 'permutation': {
+      if (activeGroupFullModel) renderPermutationTab(content, activeGroupFullModel);
       break;
-    case 'compare-sequences':
-      if (cachedFullModel && isGroupTNA(cachedFullModel)) {
-        renderCompareSequencesTab(content, cachedFullModel);
-      }
+    }
+    case 'compare-sequences': {
+      if (activeGroupFullModel) renderCompareSequencesTab(content, activeGroupFullModel);
       break;
-    case 'compare-networks':
-      if (cachedFullModel && isGroupTNA(cachedFullModel)) {
-        renderCompareNetworksTab(content, cachedFullModel);
-      }
-      break;
+    }
   }
 }
 
@@ -850,6 +810,12 @@ function renderNetworkTab(content: HTMLElement, model: any) {
     </div>
   `;
   content.appendChild(grid);
+
+  // Download buttons for network panel
+  requestAnimationFrame(() => {
+    const netPanel = grid.querySelector('.panel') as HTMLElement;
+    if (netPanel) addPanelDownloadButtons(netPanel, { image: true, filename: 'tna-network' });
+  });
 
   requestAnimationFrame(() => {
     const el = document.getElementById('viz-network');
@@ -918,7 +884,9 @@ function renderCentralitiesTab(content: HTMLElement, model: any, cent: any) {
       const panel = document.createElement('div');
       panel.className = 'panel';
       panel.style.minHeight = '320px';
-      panel.innerHTML = `<div id="viz-cent-${i}" style="width:100%;height:300px"></div>`;
+      const measure = i === 1 ? state.selectedMeasure1 : i === 2 ? state.selectedMeasure2 : state.selectedMeasure3;
+      panel.innerHTML = `<div class="panel-title">${measure}</div><div id="viz-cent-${i}" style="width:100%;height:300px"></div>`;
+      addPanelDownloadButtons(panel, { image: true, filename: `centrality-${measure}` });
       grid.appendChild(panel);
     }
     body.appendChild(grid);
@@ -937,7 +905,8 @@ function renderCentralitiesTab(content: HTMLElement, model: any, cent: any) {
     const panel = document.createElement('div');
     panel.className = 'panel';
     const measures = Object.keys(currentCent.measures);
-    let html = '<table class="preview-table" style="font-size:12px"><thead><tr><th>Node</th>';
+    let html = '<div class="panel-title">Centrality Values</div>';
+    html += '<table class="preview-table" style="font-size:12px"><thead><tr><th>Node</th>';
     for (const m of measures) html += `<th>${m}</th>`;
     html += '</tr></thead><tbody>';
     for (let i = 0; i < currentCent.labels.length; i++) {
@@ -950,6 +919,7 @@ function renderCentralitiesTab(content: HTMLElement, model: any, cent: any) {
     }
     html += '</tbody></table>';
     panel.innerHTML = html;
+    addPanelDownloadButtons(panel, { csv: true, filename: 'centralities' });
     body.appendChild(panel);
   }
 
@@ -987,6 +957,12 @@ function renderCentralitiesTab(content: HTMLElement, model: any, cent: any) {
             html += '</tbody></table>';
             html += '<div id="viz-cs-chart" style="width:100%;height:220px"></div>';
             resultsEl.innerHTML = html;
+            // Add CSV download to stability table
+            const stabTable = resultsEl.querySelector('table');
+            if (stabTable) {
+              const stabPanel = stabTable.closest('.panel') as HTMLElement;
+              if (stabPanel) addPanelDownloadButtons(stabPanel, { csv: true, filename: 'stability-cs' });
+            }
             requestAnimationFrame(() => {
               const chartEl = document.getElementById('viz-cs-chart');
               if (chartEl) renderCSChart(chartEl, result);
@@ -1053,11 +1029,13 @@ function renderFrequenciesTab(content: HTMLElement, model: any) {
   const p1 = document.createElement('div');
   p1.className = 'panel';
   p1.innerHTML = `<div class="panel-title">State Frequencies</div><div id="viz-freq" style="width:100%"></div>`;
+  addPanelDownloadButtons(p1, { image: true, filename: 'frequencies' });
   grid.appendChild(p1);
 
   const p2 = document.createElement('div');
   p2.className = 'panel';
   p2.innerHTML = `<div class="panel-title">Weight Distribution</div><div id="viz-histogram" style="width:100%"></div>`;
+  addPanelDownloadButtons(p2, { image: true, filename: 'weight-histogram' });
   grid.appendChild(p2);
 
   content.appendChild(grid);
@@ -1090,6 +1068,13 @@ function renderSequencesTab(content: HTMLElement, _model: any) {
     </div>
   `;
   content.appendChild(grid);
+
+  // Download buttons for sequence panels
+  requestAnimationFrame(() => {
+    const panels = grid.querySelectorAll('.panel');
+    if (panels[0]) addPanelDownloadButtons(panels[0] as HTMLElement, { image: true, filename: 'state-distribution' });
+    if (panels[1]) addPanelDownloadButtons(panels[1] as HTMLElement, { image: true, filename: 'sequence-index' });
+  });
 
   requestAnimationFrame(() => {
     const distEl = document.getElementById('viz-dist');
@@ -1136,6 +1121,7 @@ function renderCommunitiesTab(content: HTMLElement, model: any, _comm: any) {
     <div class="panel-title">Network with Communities</div>
     <div id="viz-community-network" style="width:100%;height:${h}px"></div>
   `;
+  addPanelDownloadButtons(netPanel, { image: true, filename: 'community-network' });
   row.appendChild(netPanel);
 
   const resultsDiv = document.createElement('div');
@@ -1182,6 +1168,9 @@ function renderCommunitiesTab(content: HTMLElement, model: any, _comm: any) {
             }
             html += '</tbody></table></div>';
             resultsEl.innerHTML = html;
+            // Add CSV download to membership table
+            const memberPanel = resultsEl.querySelector('.panel') as HTMLElement;
+            if (memberPanel) addPanelDownloadButtons(memberPanel, { csv: true, filename: 'community-membership' });
           } else {
             resultsEl.innerHTML = '<div class="panel" style="text-align:center;padding:20px;color:#888">No communities detected.</div>';
           }
@@ -1253,32 +1242,6 @@ function renderMultiGroupTab(
   }
 }
 
-// ─── Network tab (multi-group) ───
-function renderNetworkTabMulti(content: HTMLElement) {
-  const grid = createMultiGroupGrid(content);
-  const h = groupNetworkHeight();
-  let i = 0;
-  for (const [groupName, model] of cachedModels) {
-    const card = createGroupCard(grid, groupName, i);
-    const vizId = `viz-network-g${i}`;
-    card.innerHTML = `
-      <div class="panel" style="min-height:${h + 40}px;box-shadow:none;padding:8px">
-        <div id="${vizId}" style="width:100%;height:${h}px"></div>
-      </div>
-    `;
-    i++;
-  }
-  requestAnimationFrame(() => {
-    const gs = groupNetworkSettings(state.networkSettings);
-    let j = 0;
-    for (const [, model] of cachedModels) {
-      const el = document.getElementById(`viz-network-g${j}`);
-      if (el) renderNetwork(el, model, gs);
-      j++;
-    }
-  });
-}
-
 // ─── Centralities tab (multi-group) ───
 function renderCentralitiesTabMulti(content: HTMLElement) {
   // Shared controls at the top
@@ -1346,9 +1309,9 @@ function renderCentralitiesTabMulti(content: HTMLElement) {
       </div>
       <div class="group-card-content" style="padding:8px">
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-          <div id="viz-cent-1-g${i}" style="width:100%;height:240px"></div>
-          <div id="viz-cent-2-g${i}" style="width:100%;height:240px"></div>
-          <div id="viz-cent-3-g${i}" style="width:100%;height:240px"></div>
+          <div class="panel" style="box-shadow:none;padding:4px"><div class="panel-title" style="font-size:10px">${state.selectedMeasure1}</div><div id="viz-cent-1-g${i}" style="width:100%;height:240px"></div></div>
+          <div class="panel" style="box-shadow:none;padding:4px"><div class="panel-title" style="font-size:10px">${state.selectedMeasure2}</div><div id="viz-cent-2-g${i}" style="width:100%;height:240px"></div></div>
+          <div class="panel" style="box-shadow:none;padding:4px"><div class="panel-title" style="font-size:10px">${state.selectedMeasure3}</div><div id="viz-cent-3-g${i}" style="width:100%;height:240px"></div></div>
         </div>
         <div id="stability-results-g${i}" style="color:#888;font-size:12px;margin-top:4px"></div>
       </div>
@@ -1357,7 +1320,19 @@ function renderCentralitiesTabMulti(content: HTMLElement) {
     i++;
   }
 
-  requestAnimationFrame(() => renderAllGroupCharts());
+  requestAnimationFrame(() => {
+    renderAllGroupCharts();
+    // Add download buttons to per-group centrality chart panels
+    let gi = 0;
+    for (const [groupName] of cachedModels) {
+      for (let m = 1; m <= 3; m++) {
+        const chartEl = document.getElementById(`viz-cent-${m}-g${gi}`);
+        const miniPanel = chartEl?.closest('.panel') as HTMLElement | null;
+        if (miniPanel) addPanelDownloadButtons(miniPanel, { image: true, filename: `centrality-${groupName}-m${m}` });
+      }
+      gi++;
+    }
+  });
 
   // Wire shared measure selectors
   setTimeout(() => {
@@ -1422,29 +1397,43 @@ function renderCentralitiesTabMulti(content: HTMLElement) {
 }
 
 // ─── Frequencies tab (multi-group) ───
+// (download buttons for frequency sections are not added here because they use
+// a shared section renderer — buttons are added inside addSection below)
 function renderFrequenciesTabMulti(content: HTMLElement) {
-  const grid = createMultiGroupGrid(content);
-  let i = 0;
-  for (const [groupName, model] of cachedModels) {
-    const card = createGroupCard(grid, groupName, i);
-    card.innerHTML = `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div><div id="viz-freq-g${i}" style="width:100%"></div></div>
-        <div><div id="viz-mosaic-g${i}" style="width:100%"></div></div>
-      </div>
-      <div><div id="viz-histogram-g${i}" style="width:100%"></div></div>
-    `;
-    i++;
+  const n = cachedModels.size;
+  const cols = Math.min(n, 4);
+
+  // Helper: create a row with a title and side-by-side panels per group
+  function addSection(title: string, idPrefix: string) {
+    const section = document.createElement('div');
+    section.className = 'panel';
+    section.style.marginBottom = '16px';
+    let headerHtml = `<div class="panel-title">${title}</div>`;
+    let gridHtml = `<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:12px">`;
+    let i = 0;
+    for (const [groupName] of cachedModels) {
+      const color = GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]!;
+      gridHtml += `<div>
+        <div style="font-size:12px;font-weight:600;color:${color};margin-bottom:4px;text-align:center">${groupName}</div>
+        <div id="${idPrefix}-g${i}" style="width:100%"></div>
+      </div>`;
+      i++;
+    }
+    gridHtml += '</div>';
+    section.innerHTML = headerHtml + gridHtml;
+    addPanelDownloadButtons(section, { image: true, filename: `${idPrefix}-all-groups` });
+    content.appendChild(section);
   }
+
+  addSection('State Frequencies', 'viz-freq');
+  addSection('Weight Distribution', 'viz-histogram');
 
   requestAnimationFrame(() => {
     let j = 0;
-    for (const [, model] of cachedModels) {
+    for (const [groupName, model] of cachedModels) {
       const freqEl = document.getElementById(`viz-freq-g${j}`);
-      const mosaicEl = document.getElementById(`viz-mosaic-g${j}`);
       const histEl = document.getElementById(`viz-histogram-g${j}`);
       if (freqEl) renderFrequencies(freqEl, model);
-      if (mosaicEl) renderMosaic(mosaicEl, model);
       if (histEl) renderWeightHistogram(histEl, model);
       j++;
     }
@@ -1591,6 +1580,7 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
 }
 
 // ─── Bootstrap tab (multi-group) ───
+// (download buttons for bootstrap results are added in renderBootstrapResults)
 function renderBootstrapTabMulti(content: HTMLElement) {
   // Shared controls at top
   const controls = document.createElement('div');

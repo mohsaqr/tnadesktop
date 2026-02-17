@@ -7,6 +7,7 @@ import type { TNA, GroupTNA } from 'tnaj';
 import { showTooltip, hideTooltip } from '../main';
 import { permutationTest } from '../analysis/permutation';
 import type { PermutationResult, PermutationOptions } from '../analysis/permutation';
+import { addPanelDownloadButtons } from './export';
 
 export function renderPermutationTab(
   container: HTMLElement,
@@ -150,12 +151,14 @@ function renderPermutationResults(
   }
   tableHtml += '</tbody></table>';
   tablePanel.innerHTML += tableHtml;
+  addPanelDownloadButtons(tablePanel, { csv: true, filename: `permutation-results` });
   grid.appendChild(tablePanel);
 
   // Difference heatmap
   const heatPanel = document.createElement('div');
   heatPanel.className = 'panel';
   heatPanel.innerHTML = `<div class="panel-title">Significant Differences Heatmap</div><div id="viz-perm-heatmap" style="width:100%"></div>`;
+  addPanelDownloadButtons(heatPanel, { image: true, filename: 'permutation-heatmap' });
   grid.appendChild(heatPanel);
 
   container.appendChild(grid);

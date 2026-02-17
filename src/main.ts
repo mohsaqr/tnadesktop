@@ -142,7 +142,6 @@ export interface AppState {
   selectedMeasure2: CentralityMeasure;
   selectedMeasure3: CentralityMeasure;
   centralityLoops: boolean;
-  clusterMode: boolean;
   clusterK: number;
   clusterDissimilarity: 'hamming' | 'lv' | 'osa' | 'lcs';
   activeTab: string;
@@ -165,7 +164,6 @@ export const state: AppState = {
   activeGroup: null,
   modelType: 'tna',
   threshold: 0,
-  clusterMode: false,
   clusterK: 3,
   clusterDissimilarity: 'hamming',
   showCommunities: false,
@@ -183,29 +181,22 @@ export const state: AppState = {
 //  Model building
 // ═══════════════════════════════════════════════════════════
 const builders = { tna, ftna, ctna, atna } as const;
-const groupBuilders = { tna: groupTna, ftna: groupFtna, ctna: groupCtna, atna: groupAtna } as const;
+export const groupBuilders = { tna: groupTna, ftna: groupFtna, ctna: groupCtna, atna: groupAtna } as const;
 
-/** Build the raw model (single TNA or GroupTNA). Pruning is NOT applied here for GroupTNA. */
-export function buildModel(): TNA | GroupTNA {
+/** Build a single TNA from all sequences (ignoring group labels). */
+export function buildModel(): TNA {
   if (!state.sequenceData) throw new Error('No data loaded');
-
-  // Determine group labels: from column or clustering
-  let groups = state.groupLabels;
-  if (!groups && state.clusterMode && state.sequenceData.length >= state.clusterK) {
-    const cr = clusterSequences(state.sequenceData, state.clusterK, {
-      dissimilarity: state.clusterDissimilarity,
-    });
-    groups = cr.assignments.map(a => `Cluster ${a + 1}`);
-  }
-
-  if (groups && groups.length > 0) {
-    return groupBuilders[state.modelType](state.sequenceData, groups);
-  }
   let model = builders[state.modelType](state.sequenceData);
   if (state.threshold > 0) {
     model = prune(model, state.threshold) as TNA;
   }
   return model;
+}
+
+/** Build a GroupTNA on demand (for opt-in group analysis). */
+export function buildGroupModel(labels: string[]): GroupTNA {
+  if (!state.sequenceData) throw new Error('No data loaded');
+  return groupBuilders[state.modelType](state.sequenceData, labels);
 }
 
 /** Extract the active single-group TNA from a model (applies pruning for group models). */
@@ -288,7 +279,6 @@ function loadState() {
     state.longGroupCol = saved.longGroupCol ?? -1;
     state.modelType = saved.modelType ?? 'tna';
     state.threshold = saved.threshold ?? 0;
-    state.clusterMode = saved.clusterMode ?? false;
     state.clusterK = saved.clusterK ?? 3;
     state.clusterDissimilarity = saved.clusterDissimilarity ?? 'hamming';
     state.showCommunities = saved.showCommunities ?? false;
@@ -297,7 +287,7 @@ function loadState() {
     state.selectedMeasure2 = saved.selectedMeasure2 ?? 'BetweennessRSP';
     state.selectedMeasure3 = saved.selectedMeasure3 ?? 'OutStrength';
     state.centralityLoops = saved.centralityLoops ?? false;
-    state.activeTab = saved.activeTab ?? 'network';
+    state.activeTab = 'network'; // always land on network tab
     // Reset network settings to fresh defaults when version bumps
     if (settingsStale) {
       state.networkSettings = defaultNetworkSettings();

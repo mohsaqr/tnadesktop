@@ -7,6 +7,7 @@ import * as d3 from 'd3';
 import type { GroupTNA, CompareRow } from 'tnaj';
 import { compareSequences } from 'tnaj';
 import { showTooltip, hideTooltip } from '../main';
+import { addPanelDownloadButtons } from './export';
 
 export function renderCompareSequencesTab(
   container: HTMLElement,
@@ -148,6 +149,7 @@ function renderCompareResults(
   }
   tableHtml += '</tbody></table>';
   panel.innerHTML += tableHtml;
+  addPanelDownloadButtons(panel, { csv: true, filename: 'compare-sequences' });
 
   container.appendChild(panel);
 }

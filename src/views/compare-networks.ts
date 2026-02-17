@@ -7,6 +7,7 @@ import * as d3 from 'd3';
 import type { GroupTNA, TNA } from 'tnaj';
 import { summary } from 'tnaj';
 import { showTooltip, hideTooltip } from '../main';
+import { addPanelDownloadButtons, downloadSvgFromElement, downloadPngFromElement } from './export';
 
 interface GroupMetrics {
   group: string;
@@ -85,6 +86,7 @@ export function renderCompareNetworksTab(
   }
   tableHtml += '</tbody></table>';
   tablePanel.innerHTML += tableHtml;
+  addPanelDownloadButtons(tablePanel, { csv: true, filename: 'compare-networks-table' });
   grid.appendChild(tablePanel);
 
   // Bar chart comparing key metrics across groups
@@ -104,6 +106,7 @@ export function renderCompareNetworksTab(
     const panel = document.createElement('div');
     panel.className = 'panel';
     panel.innerHTML = `<div class="panel-title">${def.label}</div><div id="viz-cmp-${def.key}" style="width:100%"></div>`;
+    addPanelDownloadButtons(panel, { image: true, filename: `compare-${def.key}` });
     chartGrid.appendChild(panel);
   }
 
@@ -114,7 +117,8 @@ export function renderCompareNetworksTab(
   heatPanel.className = 'panel';
   heatPanel.innerHTML = `
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
-      <div class="panel-title" style="margin-bottom:0">Weight Difference Heatmap</div>
+      <div class="panel-title" style="margin-bottom:0;flex:0 0 auto">Weight Difference Heatmap</div>
+      <span class="panel-download-btns" style="flex:0 0 auto"><button class="panel-dl-btn" id="dl-heatmap-svg">SVG</button><button class="panel-dl-btn" id="dl-heatmap-png">PNG</button></span>
       <select id="cmp-heat-g1" style="font-size:12px">
         ${groupNames.map((g, i) => `<option value="${g}" ${i === 0 ? 'selected' : ''}>${g}</option>`).join('')}
       </select>
@@ -142,8 +146,16 @@ export function renderCompareNetworksTab(
     );
   });
 
-  // Wire heatmap pair selectors
+  // Wire heatmap download buttons + pair selectors
   setTimeout(() => {
+    document.getElementById('dl-heatmap-svg')?.addEventListener('click', () => {
+      const el = document.getElementById('viz-cmp-heatmap');
+      if (el) downloadSvgFromElement(el, 'compare-heatmap');
+    });
+    document.getElementById('dl-heatmap-png')?.addEventListener('click', () => {
+      const el = document.getElementById('viz-cmp-heatmap');
+      if (el) downloadPngFromElement(el, 'compare-heatmap');
+    });
     const wireHeatmap = () => {
       const g1 = (document.getElementById('cmp-heat-g1') as HTMLSelectElement).value;
       const g2 = (document.getElementById('cmp-heat-g2') as HTMLSelectElement).value;

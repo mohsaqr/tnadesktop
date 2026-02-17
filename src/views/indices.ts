@@ -5,6 +5,7 @@ import * as d3 from 'd3';
 import type { TNA } from 'tnaj';
 import { computeSequenceIndices, summarizeIndices } from '../analysis/indices';
 import type { SequenceIndex, IndicesSummary } from '../analysis/indices';
+import { addPanelDownloadButtons } from './export';
 
 export function renderIndicesTab(
   container: HTMLElement,
@@ -42,6 +43,7 @@ export function renderIndicesTab(
   }
   summaryHtml += '</tbody></table>';
   summaryPanel.innerHTML += summaryHtml;
+  addPanelDownloadButtons(summaryPanel, { csv: true, filename: `indices-summary${idSuffix}` });
   grid.appendChild(summaryPanel);
 
   // Histograms for key metrics
@@ -61,6 +63,7 @@ export function renderIndicesTab(
     const panel = document.createElement('div');
     panel.className = 'panel';
     panel.innerHTML = `<div class="panel-title">${def.label}</div><div id="viz-idx-${def.key}${idSuffix}" style="width:100%"></div>`;
+    addPanelDownloadButtons(panel, { image: true, filename: `index-${def.key}${idSuffix}` });
     chartGrid.appendChild(panel);
   }
 
@@ -95,6 +98,7 @@ export function renderIndicesTab(
   }
   detailHtml += '</tbody></table>';
   detailPanel.innerHTML += detailHtml;
+  addPanelDownloadButtons(detailPanel, { csv: true, filename: `indices-detail${idSuffix}` });
   grid.appendChild(detailPanel);
 
   container.appendChild(grid);

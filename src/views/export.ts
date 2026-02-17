@@ -195,10 +195,124 @@ async function exportPdf(model: TNA, cent: CentralityResult) {
   doc.save('tna-report.pdf');
 }
 
-function downloadText(content: string, filename: string, mimeType: string) {
+export function downloadText(content: string, filename: string, mimeType: string) {
   const blob = new Blob([content], { type: mimeType });
   const link = document.createElement('a');
   link.download = filename;
   link.href = URL.createObjectURL(blob);
   link.click();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Per-panel download helpers
+// ═══════════════════════════════════════════════════════════
+
+/** Clone an SVG element and download as .svg file. */
+export function downloadSvgFromElement(container: HTMLElement, filename: string) {
+  const svg = container.querySelector('svg');
+  if (!svg) return;
+  const clone = svg.cloneNode(true) as SVGElement;
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  const data = new XMLSerializer().serializeToString(clone);
+  const blob = new Blob([data], { type: 'image/svg+xml' });
+  const link = document.createElement('a');
+  link.download = filename.endsWith('.svg') ? filename : `${filename}.svg`;
+  link.href = URL.createObjectURL(blob);
+  link.click();
+}
+
+/** Render an element to PNG via html2canvas (scale 2×), with SVG fallback. */
+export async function downloadPngFromElement(container: HTMLElement, filename: string) {
+  const fname = filename.endsWith('.png') ? filename : `${filename}.png`;
+  try {
+    const canvas = await html2canvas(container, { backgroundColor: '#fff', scale: 2 });
+    const link = document.createElement('a');
+    link.download = fname;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  } catch {
+    // Fallback: serialize SVG
+    downloadSvgFromElement(container, filename.replace(/\.png$/, '.svg'));
+  }
+}
+
+/** Extract rows/cells from an HTML table and download as CSV. */
+export function downloadTableAsCsv(tableOrContainer: HTMLElement, filename: string) {
+  const table = tableOrContainer.tagName === 'TABLE'
+    ? tableOrContainer as HTMLTableElement
+    : tableOrContainer.querySelector('table');
+  if (!table) return;
+
+  const rows: string[][] = [];
+  table.querySelectorAll('tr').forEach(tr => {
+    const cells: string[] = [];
+    tr.querySelectorAll('th, td').forEach(cell => {
+      let text = (cell as HTMLElement).innerText.replace(/"/g, '""').trim();
+      cells.push(`"${text}"`);
+    });
+    if (cells.length > 0) rows.push(cells);
+  });
+
+  const csv = rows.map(r => r.join(',')).join('\n');
+  const fname = filename.endsWith('.csv') ? filename : `${filename}.csv`;
+  downloadText(csv, fname, 'text/csv');
+}
+
+interface PanelDownloadOptions {
+  /** Base filename without extension. */
+  filename: string;
+  /** If true, offer SVG + PNG download (panel must contain an SVG). */
+  image?: boolean;
+  /** If true, offer CSV download (panel must contain a table). */
+  csv?: boolean;
+}
+
+/**
+ * Append small download buttons to a panel's .panel-title element.
+ * PNG always captures the entire panel. SVG extracts the inner <svg>.
+ * CSV extracts data from any <table> inside the panel.
+ */
+export function addPanelDownloadButtons(panelEl: HTMLElement, opts: PanelDownloadOptions) {
+  const titleEl = panelEl.querySelector('.panel-title');
+  if (!titleEl) return;
+
+  // Make title a flex row so buttons push to the right
+  (titleEl as HTMLElement).style.display = 'flex';
+  (titleEl as HTMLElement).style.alignItems = 'center';
+
+  const wrap = document.createElement('span');
+  wrap.className = 'panel-download-btns';
+
+  if (opts.image) {
+    const svgBtn = document.createElement('button');
+    svgBtn.className = 'panel-dl-btn';
+    svgBtn.textContent = 'SVG';
+    svgBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      downloadSvgFromElement(panelEl, opts.filename);
+    });
+    wrap.appendChild(svgBtn);
+
+    const pngBtn = document.createElement('button');
+    pngBtn.className = 'panel-dl-btn';
+    pngBtn.textContent = 'PNG';
+    pngBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      downloadPngFromElement(panelEl, opts.filename);
+    });
+    wrap.appendChild(pngBtn);
+  }
+
+  if (opts.csv) {
+    const csvBtn = document.createElement('button');
+    csvBtn.className = 'panel-dl-btn';
+    csvBtn.textContent = 'CSV';
+    csvBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      downloadTableAsCsv(panelEl, opts.filename);
+    });
+    wrap.appendChild(csvBtn);
+  }
+
+  titleEl.appendChild(wrap);
 }

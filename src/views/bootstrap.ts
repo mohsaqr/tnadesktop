@@ -7,6 +7,7 @@ import { showTooltip, hideTooltip } from '../main';
 import { bootstrapTna } from '../analysis/bootstrap';
 import type { BootstrapResult, BootstrapOptions } from '../analysis/bootstrap';
 import { renderNetwork } from './network';
+import { addPanelDownloadButtons } from './export';
 
 export function renderBootstrapTab(
   container: HTMLElement,
@@ -119,6 +120,7 @@ export function renderBootstrapResults(
   }
   tableHtml += '</tbody></table>';
   tablePanel.innerHTML += tableHtml;
+  addPanelDownloadButtons(tablePanel, { csv: true, filename: `bootstrap-results${idSuffix}` });
   resultGrid.appendChild(tablePanel);
 
   // Bootstrap network (significant edges only)
@@ -130,6 +132,7 @@ export function renderBootstrapResults(
     <div class="panel-title">Significant Edges Network</div>
     <div id="viz-boot-network${idSuffix}" style="width:100%;height:${h}px"></div>
   `;
+  addPanelDownloadButtons(netPanel, { image: true, filename: `bootstrap-network${idSuffix}` });
   resultGrid.appendChild(netPanel);
 
   container.appendChild(resultGrid);

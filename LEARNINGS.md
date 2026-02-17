@@ -1,0 +1,140 @@
+# TNA Desktop Learnings
+
+## 2026-02-17
+
+### Project Structure
+- Vite + TypeScript desktop app (was Tauri, now plain web)
+- Source lives in `/Users/mohammedsaqr/Documents/Git/tna-desktop/src/`
+- NOT in `tna-js/src` (that's the library). The desktop app is a separate repo.
+- Main entry: `src/main.ts` (state management, model building, tooltip helpers)
+- Views in `src/views/`: dashboard.ts is the central hub, each tab has its own file
+- Styles in `src/styles.css` (single CSS file, uses CSS variables)
+- Build: `npm run build` runs `tsc && vite build`, outputs to `dist/`
+- Preview: `npx vite preview --port 4173`
+
+### Architecture: Tab System
+- `dashboard.ts` defines a `TABS` array of `TabDef` objects with `{ id, label, groupOnly?, singleOnly? }`
+- `Tab` is a union type of all tab IDs — must update when adding/removing tabs
+- Tab switching calls `updateTabContent()` which dispatches via a switch statement
+- Group-only tabs are shown/hidden dynamically via `updateGroupTabVisibility()`
+- Multi-group rendering: downstream tabs check `isGroupAnalysisActive()` and dispatch to `*Multi` variants
+- Group analysis data lives in module-level variables (`activeGroupModels`, `activeGroupCents`, etc.)
+- `cachedModels` / `cachedCents` / `cachedComms` are populated from `activeGroup*` caches for downstream tabs
+
+### Architecture: Group Analysis (clustering.ts)
+- Three-state view: A) no groups, B) column groups exist but not activated, C) groups active
+- State C includes Card View / Combined toggle (segmented `.view-toggle` buttons)
+- Combined canvas: single SVG with `renderNetworkIntoGroup()` placing networks into `<g>` elements
+- Auto-grid: `cols = n<=2 ? n : n<=4 ? 2 : ceil(sqrt(n))`
+- `renderNetworkIntoGroup()` renders into an existing SVG `<g>` without tooltips (for combined view)
+- `drawNetwork()` is the extracted core from `renderNetwork()` — takes a root `<g>` element
+
+### Architecture: Export System (export.ts)
+- `showExportDialog()` — modal with PNG, CSV (centralities), CSV (weights), PDF options
+- `downloadText()` — generic blob download helper (now exported)
+- `downloadSvgFromElement(container, filename)` — clones SVG, XMLSerializer, downloads .svg
+- `downloadPngFromElement(container, filename)` — html2canvas at 2x scale, SVG fallback
+- `downloadTableAsCsv(tableOrContainer, filename)` — iterates `<tr>`/`<th>`/`<td>`, builds CSV
+- `addPanelDownloadButtons(panelEl, opts)` — appends SVG/PNG/CSV buttons to `.panel-title`
+
+### Per-Panel Download Buttons: API Design (Critical Learning)
+- **Old API** (broken): `{ svgContainer: string, tableSelector: string, filename: string }`
+  - `svgContainer` was a CSS selector string, resolved at click time
+  - Problem: downloaded only the inner SVG/image, not the whole panel
+- **New API** (correct): `{ filename: string, image?: boolean, csv?: boolean }`
+  - `image: true` → SVG button (extracts `<svg>` from `panelEl`) + PNG button (captures entire `panelEl` via html2canvas)
+  - `csv: true` → CSV button (extracts `<table>` from `panelEl`)
+  - PNG captures the **entire panel** including title, labels, legends — not just the visualization
+- When changing a utility function's API signature, **all call sites must be updated in the same pass**. There were ~30 call sites across 13 files. Missing even one breaks the build.
+- The `addPanelDownloadButtons` function finds `.panel-title` inside the panel and appends buttons there. It sets the title to `display:flex; align-items:center` so buttons push to the right via `margin-left:auto` on the wrapper.
+
+### Per-Panel Download Buttons: Call Site Patterns
+- Image panels (SVG viz): `addPanelDownloadButtons(panel, { image: true, filename: 'name' })`
+- Table panels (CSV data): `addPanelDownloadButtons(panel, { csv: true, filename: 'name' })`
+- Both are never used together on the same panel (a panel is either a visualization or a table)
+- For multi-group sections that contain multiple charts in one panel, `image: true` on the section panel captures all charts as one PNG
+- Buttons use classes `.panel-download-btns` (wrapper) and `.panel-dl-btn` (individual buttons)
+
+### CSS for Download Buttons
+```css
+.panel-download-btns { display: inline-flex; gap: 4px; margin-left: auto; }
+.panel-dl-btn { font-size: 10px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; background: #f0f2f5; color: var(--text-muted); cursor: pointer; text-transform: none; letter-spacing: 0; font-weight: 500; line-height: 1.4; }
+.panel-dl-btn:hover { background: var(--blue); color: #fff; border-color: var(--blue); }
+```
+
+### CSS for View Toggle (Card/Combined)
+```css
+.view-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.toggle-btn { padding: 4px 12px; font-size: 11px; font-weight: 600; border: none; background: transparent; color: var(--text-muted); cursor: pointer; }
+.toggle-btn.active { background: var(--blue); color: #fff; }
+```
+
+### Network Rendering Refactor
+- `renderNetwork(container, model, settings, comm?)` — creates SVG element, calls `drawNetwork()`
+- `drawNetwork(rootGroup, model, settings, graphWidth, graphHeight, comm?, enableTooltips?)` — core drawing logic
+- `renderNetworkIntoGroup(gEl, model, settings, width, height, comm?)` — renders into existing `<g>`, tooltips disabled
+- The separation allows reuse for combined canvas without creating a new SVG element
+- `enableTooltips` flag controls whether mouseover events are attached (false for combined view)
+
+### Removing a Tab
+- Remove from `TABS` array in `dashboard.ts`
+- Remove from `Tab` type union
+- Remove the `case` in the `switch` statement in `updateTabContent()`
+- Remove the `import` statement
+- The file itself can remain (dead code) or be deleted — leaving it avoids merge conflicts if referenced elsewhere
+- Compare Networks was removed because the user found it unhelpful ("non-sense")
+
+### Multi-Group Tab Rendering Patterns
+- `renderMultiGroupTab(content, renderFn)` — generic wrapper that creates group cards and calls `renderFn(card, model, suffix)` per group
+- Used for: cliques, patterns, indices (external tab renderers that accept `idSuffix`)
+- Custom multi-group renderers exist for: centralities, frequencies, sequences, communities, bootstrap
+- These custom ones have shared controls at the top and per-group result areas
+
+### html2canvas Gotchas
+- `html2canvas(element, { backgroundColor: '#fff', scale: 2 })` for high-quality PNG
+- Falls back to SVG serialization if html2canvas fails (e.g., cross-origin issues)
+- Captures the entire DOM subtree of the element — good for full-panel captures
+- Works with D3-rendered SVGs embedded in HTML panels
+
+### D3 Visualization Patterns in This Codebase
+- All charts use D3 v7 with `d3.select(container).append('svg')`
+- Standard margin convention: `{ top, right, bottom, left }` with `innerW`/`innerH`
+- Bar charts use `d3.scaleBand()` for categorical axis
+- Heatmaps use `d3.scaleDiverging(d3.interpolateRdBu)` for difference coloring
+- Tooltips use shared `showTooltip(event, html)` and `hideTooltip()` from `main.ts`
+
+### Event Wiring Pattern
+- DOM elements created via `innerHTML` template literals
+- Event listeners attached in `setTimeout(() => { ... }, 0)` to ensure DOM is ready
+- Visualization rendering in `requestAnimationFrame(() => { ... })` for layout measurement
+- Both patterns are necessary because innerHTML doesn't provide element references
+
+### Build & TypeScript
+- `npx tsc --noEmit` for type-checking only (fast, no output)
+- `npm run build` runs `tsc && vite build` (full build with output)
+- Zero TS errors required — the project uses strict TypeScript
+- Unused imports cause warnings but not errors in Vite
+- The chunk size warning for >500KB is expected and can be ignored
+
+### File-by-File Download Button Coverage
+Every panel that displays a visualization or data table should have download buttons:
+- **Network panels**: `image: true` (SVG + PNG)
+- **Centrality charts**: `image: true` per chart panel
+- **Centrality table**: `csv: true`
+- **Stability CS table**: `csv: true`
+- **Frequency charts**: `image: true`
+- **Weight histogram**: `image: true`
+- **Sequence distribution**: `image: true`
+- **Sequence index plot**: `image: true`
+- **Community network**: `image: true`
+- **Community membership table**: `csv: true`
+- **Betweenness table**: `csv: true`, **network**: `image: true`
+- **Bootstrap results table**: `csv: true`, **network**: `image: true`
+- **Clique mini-networks**: `image: true` per clique
+- **Pattern table**: `csv: true`, **chart**: `image: true`
+- **Index summary table**: `csv: true`, **histograms**: `image: true`, **detail table**: `csv: true`
+- **Permutation results table**: `csv: true`, **heatmap**: `image: true`
+- **Compare Sequences table**: `csv: true`
+- **Multi-group frequency sections**: `image: true` (captures all groups)
+- **Group analysis network/centrality panels**: `image: true`
+- **Combined canvas panel**: `image: true`

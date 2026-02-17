@@ -423,19 +423,21 @@ function renderSelfLoop(
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Main render
+//  Core drawing (shared between renderNetwork and renderNetworkIntoGroup)
 // ═══════════════════════════════════════════════════════════
 
-export function renderNetwork(
-  container: HTMLElement, model: TNA, settings: NetworkSettings, comm?: CommunityResult,
+function drawNetwork(
+  rootGroup: d3.Selection<SVGGElement, unknown, null, undefined>,
+  model: TNA,
+  settings: NetworkSettings,
+  graphWidth: number,
+  graphHeight: number,
+  comm?: CommunityResult,
+  enableTooltips = true,
 ) {
-  const rect = container.getBoundingClientRect();
-  const graphWidth = Math.max(rect.width, 400);
-  const graphHeight = Math.max(rect.height - 30, 350);
   const n = model.labels.length;
   const weights = model.weights;
   const nodeRadius = settings.nodeRadius;
-  // Padding: just enough for nodes + self-loops to not clip
   const selfLoopExtent = settings.showSelfLoops ? (nodeRadius * 0.7 * 2 + 6) : 0;
   const padding = nodeRadius + Math.max(settings.graphPadding, selfLoopExtent);
 
@@ -471,7 +473,6 @@ export function renderNetwork(
     };
   });
 
-  // Apply community colors
   if (comm) {
     const methodKey = Object.keys(comm.assignments)[0]!;
     const assign = comm.assignments[methodKey]!;
@@ -497,7 +498,6 @@ export function renderNetwork(
     }
   }
 
-  // ─── Compute effective outer radius (includes donut ring + border) ───
   const rimWidth = nodeRadius * 0.18;
   const rimRadius = nodeRadius + rimWidth * 0.7;
   const outerRadius = rimRadius + rimWidth / 2 + Math.max(settings.pieBorderWidth, 0) / 2 + 1;
@@ -510,7 +510,6 @@ export function renderNetwork(
   const { edgeDashEnabled, edgeDashDotted, edgeDashDashed } = settings;
   let dashThreshLow = 0, dashThreshHigh = 0;
   if (edgeDashEnabled) {
-    // Collect all edge weights (including self-loops if shown)
     const allWeights: number[] = edges.map(e => e.weight);
     if (settings.showSelfLoops) {
       for (let i = 0; i < n; i++) {
@@ -520,7 +519,6 @@ export function renderNetwork(
     }
     const sortedWeights = allWeights.slice().sort((a, b) => a - b);
     const nw = sortedWeights.length;
-    // Bottom 25% dotted, 25-50% dashed, top 50% solid
     dashThreshLow = sortedWeights[Math.floor(nw * 0.25)] ?? 0;
     dashThreshHigh = sortedWeights[Math.floor(nw * 0.50)] ?? 0;
   }
@@ -532,27 +530,17 @@ export function renderNetwork(
     return null;
   }
 
-  // ─── SVG ───
-  container.innerHTML = '';
-  const svg = d3.select(container)
-    .append('svg')
-    .attr('viewBox', `0 0 ${graphWidth} ${graphHeight}`)
-    .attr('width', '100%')
-    .attr('height', '100%')
-    .style('min-height', '300px');
-
-  const edgeGroup = svg.append('g');
-  const arrowGroup = svg.append('g');
-  const edgeLabelGroup = svg.append('g');
-  const nodeGroup = svg.append('g');
-  // Self-loop layer ABOVE nodes so donut ring doesn't cover them
-  const selfLoopGroup = svg.append('g');
-  const selfLoopArrowGroup = svg.append('g');
-  const selfLoopLabelGroup = svg.append('g');
+  // ─── Layer groups ───
+  const edgeGroup = rootGroup.append('g');
+  const arrowGroup = rootGroup.append('g');
+  const edgeLabelGroup = rootGroup.append('g');
+  const nodeGroup = rootGroup.append('g');
+  const selfLoopGroup = rootGroup.append('g');
+  const selfLoopArrowGroup = rootGroup.append('g');
+  const selfLoopLabelGroup = rootGroup.append('g');
 
   // ─── Self-loops ───
   if (settings.showSelfLoops) {
-    // Compute graph centroid for outward direction
     const centX = nodes.reduce((s, nd) => s + nd.x, 0) / nodes.length;
     const centY = nodes.reduce((s, nd) => s + nd.y, 0) / nodes.length;
     for (let i = 0; i < n; i++) {
@@ -585,20 +573,23 @@ export function renderNetwork(
       .attr('stroke-linecap', 'round');
     const dash = getDashArray(e.weight);
     if (dash) edgePath.attr('stroke-dasharray', dash);
-    edgePath
-      .on('mouseover', function (event: MouseEvent) {
-        d3.select(this).attr('stroke', '#e15759').attr('stroke-opacity', 0.85);
-        showTooltip(event, `<b>${src.id} → ${tgt.id}</b><br>Weight: ${e.weight.toFixed(4)}`);
-      })
-      .on('mousemove', function (event: MouseEvent) {
-        const tt = document.getElementById('tooltip')!;
-        tt.style.left = event.clientX + 12 + 'px';
-        tt.style.top = event.clientY - 10 + 'px';
-      })
-      .on('mouseout', function () {
-        d3.select(this).attr('stroke', settings.edgeColor).attr('stroke-opacity', op);
-        hideTooltip();
-      });
+
+    if (enableTooltips) {
+      edgePath
+        .on('mouseover', function (event: MouseEvent) {
+          d3.select(this).attr('stroke', '#e15759').attr('stroke-opacity', 0.85);
+          showTooltip(event, `<b>${src.id} → ${tgt.id}</b><br>Weight: ${e.weight.toFixed(4)}`);
+        })
+        .on('mousemove', function (event: MouseEvent) {
+          const tt = document.getElementById('tooltip')!;
+          tt.style.left = event.clientX + 12 + 'px';
+          tt.style.top = event.clientY - 10 + 'px';
+        })
+        .on('mouseout', function () {
+          d3.select(this).attr('stroke', settings.edgeColor).attr('stroke-opacity', op);
+          hideTooltip();
+        });
+    }
 
     arrowGroup.append('polygon')
       .attr('points', arrowPoly(tipX, tipY, tipDx, tipDy, settings.arrowSize))
@@ -630,7 +621,6 @@ export function renderNetwork(
     .attr('class', 'node')
     .attr('transform', d => `translate(${d.x},${d.y})`);
 
-  // Donut ring: background track (light gray full circle)
   nodeEnter.append('circle')
     .attr('class', 'node-rim-bg')
     .attr('r', rimRadius)
@@ -638,7 +628,6 @@ export function renderNetwork(
     .attr('stroke', '#e0e0e0')
     .attr('stroke-width', rimWidth);
 
-  // Donut ring: filled arc proportional to init probability
   nodeEnter.append('path')
     .attr('class', 'node-rim-arc')
     .attr('fill', 'none')
@@ -646,7 +635,7 @@ export function renderNetwork(
     .attr('stroke-width', rimWidth)
     .attr('stroke-linecap', 'butt')
     .attr('d', d => {
-      const frac = model.inits[d.idx]!; // 0–1
+      const frac = model.inits[d.idx]!;
       if (frac <= 0) return '';
       if (frac >= 0.9999) {
         return [
@@ -664,16 +653,13 @@ export function renderNetwork(
       return `M ${startX} ${startY} A ${rimRadius} ${rimRadius} 0 ${largeArc} 1 ${endX} ${endY}`;
     });
 
-  // Pie border: optional stroke around the donut ring
   if (settings.pieBorderWidth > 0) {
-    // Outer border
     nodeEnter.append('circle')
       .attr('class', 'node-rim-border-outer')
       .attr('r', rimRadius + rimWidth / 2)
       .attr('fill', 'none')
       .attr('stroke', settings.pieBorderColor)
       .attr('stroke-width', settings.pieBorderWidth);
-    // Inner border
     nodeEnter.append('circle')
       .attr('class', 'node-rim-border-inner')
       .attr('r', rimRadius - rimWidth / 2)
@@ -682,7 +668,6 @@ export function renderNetwork(
       .attr('stroke-width', settings.pieBorderWidth);
   }
 
-  // Main node circle
   nodeEnter.append('circle')
     .attr('class', 'node-main')
     .attr('r', nodeRadius)
@@ -690,7 +675,6 @@ export function renderNetwork(
     .attr('stroke', settings.nodeBorderColor)
     .attr('stroke-width', settings.nodeBorderWidth);
 
-  // Node labels with optional offset and halo
   if (settings.showNodeLabels) {
     const labelY = settings.nodeLabelOffset;
     nodeEnter.append('text')
@@ -708,20 +692,58 @@ export function renderNetwork(
       .text(d => d.id);
   }
 
-  nodeEnter
-    .on('mouseover', function (event: MouseEvent, d: NodeDatum) {
-      d3.select(this).select('.node-main').attr('stroke', '#333').attr('stroke-width', settings.nodeBorderWidth + 0.5);
-      showTooltip(event, `<b>${d.id}</b><br>Init prob: ${(model.inits[d.idx]! * 100).toFixed(1)}%`);
-    })
-    .on('mousemove', function (event: MouseEvent) {
-      const tt = document.getElementById('tooltip')!;
-      tt.style.left = event.clientX + 12 + 'px';
-      tt.style.top = event.clientY - 10 + 'px';
-    })
-    .on('mouseout', function () {
-      d3.select(this).select('.node-main')
-        .attr('stroke', settings.nodeBorderColor)
-        .attr('stroke-width', settings.nodeBorderWidth);
-      hideTooltip();
-    });
+  if (enableTooltips) {
+    nodeEnter
+      .on('mouseover', function (event: MouseEvent, d: NodeDatum) {
+        d3.select(this).select('.node-main').attr('stroke', '#333').attr('stroke-width', settings.nodeBorderWidth + 0.5);
+        showTooltip(event, `<b>${d.id}</b><br>Init prob: ${(model.inits[d.idx]! * 100).toFixed(1)}%`);
+      })
+      .on('mousemove', function (event: MouseEvent) {
+        const tt = document.getElementById('tooltip')!;
+        tt.style.left = event.clientX + 12 + 'px';
+        tt.style.top = event.clientY - 10 + 'px';
+      })
+      .on('mouseout', function () {
+        d3.select(this).select('.node-main')
+          .attr('stroke', settings.nodeBorderColor)
+          .attr('stroke-width', settings.nodeBorderWidth);
+        hideTooltip();
+      });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Main render (creates SVG element and delegates to drawNetwork)
+// ═══════════════════════════════════════════════════════════
+
+export function renderNetwork(
+  container: HTMLElement, model: TNA, settings: NetworkSettings, comm?: CommunityResult,
+) {
+  const rect = container.getBoundingClientRect();
+  const graphWidth = Math.max(rect.width, 400);
+  const graphHeight = Math.max(rect.height - 30, 350);
+
+  container.innerHTML = '';
+  const svg = d3.select(container)
+    .append('svg')
+    .attr('viewBox', `0 0 ${graphWidth} ${graphHeight}`)
+    .attr('width', '100%')
+    .attr('height', '100%')
+    .style('min-height', '300px');
+
+  const rootGroup = svg.append('g') as d3.Selection<SVGGElement, unknown, null, undefined>;
+  drawNetwork(rootGroup, model, settings, graphWidth, graphHeight, comm, true);
+}
+
+/**
+ * Render a network into an existing SVG <g> element.
+ * Used by the combined canvas mode to compose multiple networks into one SVG.
+ * Tooltips are disabled since the layout is for static export.
+ */
+export function renderNetworkIntoGroup(
+  gEl: SVGGElement, model: TNA, settings: NetworkSettings,
+  width: number, height: number, comm?: CommunityResult,
+) {
+  const g = d3.select(gEl) as d3.Selection<SVGGElement, unknown, null, undefined>;
+  drawNetwork(g, model, settings, width, height, comm, false);
 }

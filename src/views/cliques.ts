@@ -8,6 +8,7 @@ import { cliques, createTNA } from 'tnaj';
 import type { NetworkSettings } from '../main';
 import { renderNetwork } from './network';
 import { NODE_COLORS } from './colors';
+import { addPanelDownloadButtons } from './export';
 
 export function renderCliquesTab(
   container: HTMLElement,
@@ -85,6 +86,7 @@ export function renderCliquesTab(
         <div class="panel-title" style="font-size:12px">Clique ${c + 1}: ${cliqueLabels.join(', ')}</div>
         <div id="viz-clique-${c}${idSuffix}" style="width:100%;height:250px"></div>
       `;
+      addPanelDownloadButtons(panel, { image: true, filename: `clique-${c + 1}${idSuffix}` });
       cliqueGrid.appendChild(panel);
     }
 

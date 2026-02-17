@@ -6,6 +6,7 @@ import type { TNA } from 'tnaj';
 import { extractPatterns } from '../analysis/patterns';
 import type { PatternResult } from '../analysis/patterns';
 import { showTooltip, hideTooltip } from '../main';
+import { addPanelDownloadButtons } from './export';
 
 export function renderPatternsTab(
   container: HTMLElement,
@@ -115,12 +116,14 @@ function renderPatternResults(container: HTMLElement, results: PatternResult[], 
   }
   tableHtml += '</tbody></table>';
   tablePanel.innerHTML += tableHtml;
+  addPanelDownloadButtons(tablePanel, { csv: true, filename: `patterns-table${idSuffix}` });
   resultGrid.appendChild(tablePanel);
 
   // Bar chart of top 20 patterns
   const chartPanel = document.createElement('div');
   chartPanel.className = 'panel';
   chartPanel.innerHTML = `<div class="panel-title">Top Patterns by Count</div><div id="viz-pattern-chart${idSuffix}" style="width:100%"></div>`;
+  addPanelDownloadButtons(chartPanel, { image: true, filename: `patterns-chart${idSuffix}` });
   resultGrid.appendChild(chartPanel);
 
   container.appendChild(resultGrid);
