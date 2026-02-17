@@ -87,3 +87,97 @@ export function renderFrequencies(container: HTMLElement, model: TNA) {
     .attr('transform', `translate(0,${innerH})`)
     .call(d3.axisBottom(x).ticks(5).tickSize(3));
 }
+
+/** Histogram of transition weight values. */
+export function renderWeightHistogram(container: HTMLElement, model: TNA) {
+  const n = model.labels.length;
+  const weights: number[] = [];
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      const w = model.weights.get(i, j);
+      if (w > 0) weights.push(w);
+    }
+  }
+  if (weights.length === 0) {
+    container.innerHTML = '<div style="text-align:center;color:#888;padding:40px">No non-zero weights.</div>';
+    return;
+  }
+
+  const rect = container.getBoundingClientRect();
+  const width = Math.max(rect.width, 400);
+  const height = 260;
+  const margin = { top: 10, right: 20, bottom: 35, left: 50 };
+  const innerW = width - margin.left - margin.right;
+  const innerH = height - margin.top - margin.bottom;
+
+  d3.select(container).selectAll('*').remove();
+
+  const svg = d3.select(container)
+    .append('svg')
+    .attr('width', width)
+    .attr('height', height);
+
+  const g = svg.append('g')
+    .attr('transform', `translate(${margin.left},${margin.top})`);
+
+  const x = d3.scaleLinear()
+    .domain([0, d3.max(weights)! * 1.05])
+    .range([0, innerW]);
+
+  const bins = d3.bin()
+    .domain(x.domain() as [number, number])
+    .thresholds(x.ticks(20))(weights);
+
+  const y = d3.scaleLinear()
+    .domain([0, d3.max(bins, b => b.length)!])
+    .range([innerH, 0]);
+
+  g.selectAll('rect')
+    .data(bins)
+    .enter()
+    .append('rect')
+    .attr('x', d => x(d.x0!) + 1)
+    .attr('y', d => y(d.length))
+    .attr('width', d => Math.max(0, x(d.x1!) - x(d.x0!) - 1))
+    .attr('height', d => innerH - y(d.length))
+    .attr('fill', '#4e79a7')
+    .attr('opacity', 0.75)
+    .on('mouseover', function (event: MouseEvent, d) {
+      d3.select(this).attr('opacity', 1);
+      showTooltip(event,
+        `<b>${d.x0!.toFixed(3)} – ${d.x1!.toFixed(3)}</b><br>Count: ${d.length}`);
+    })
+    .on('mousemove', function (event: MouseEvent) {
+      const tt = document.getElementById('tooltip')!;
+      tt.style.left = event.clientX + 12 + 'px';
+      tt.style.top = event.clientY - 10 + 'px';
+    })
+    .on('mouseout', function () {
+      d3.select(this).attr('opacity', 0.75);
+      hideTooltip();
+    });
+
+  g.append('g')
+    .attr('class', 'axis')
+    .attr('transform', `translate(0,${innerH})`)
+    .call(d3.axisBottom(x).ticks(8).tickSize(3))
+    .selectAll('text').attr('font-size', '10px');
+
+  g.append('g')
+    .attr('class', 'axis')
+    .call(d3.axisLeft(y).ticks(5).tickSize(3))
+    .selectAll('text').attr('font-size', '10px');
+
+  g.append('text')
+    .attr('x', innerW / 2).attr('y', innerH + 30)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '11px').attr('fill', '#666')
+    .text('Edge Weight');
+
+  g.append('text')
+    .attr('transform', 'rotate(-90)')
+    .attr('x', -innerH / 2).attr('y', -35)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '11px').attr('fill', '#666')
+    .text('Count');
+}

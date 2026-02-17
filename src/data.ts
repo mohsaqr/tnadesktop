@@ -326,10 +326,13 @@ export function wideToSequences(rows: string[][]): SequenceData {
 /**
  * Convert long-format rows into SequenceData given column indices.
  * timeCol = -1 means "none" (use row order within each ID group).
+ * groupCol = -1 means no grouping; >= 0 extracts one group label per sequence.
  * Supports numeric, ISO 8601, and many common date/time formats.
  * Throws with descriptive error messages on parse failures.
  */
-export function longToSequences(rows: string[][], idCol: number, timeCol: number, stateCol: number): SequenceData {
+export function longToSequences(
+  rows: string[][], idCol: number, timeCol: number, stateCol: number, groupCol: number = -1,
+): { sequences: SequenceData; groups: string[] | null } {
   if (rows.length === 0) {
     throw new Error('No data rows found.');
   }
@@ -354,13 +357,14 @@ export function longToSequences(rows: string[][], idCol: number, timeCol: number
   }
 
   // Group rows by ID, sort by time (or preserve row order), extract states
-  const groups = new Map<string, { time: number; state: string }[]>();
+  const idGroups = new Map<string, { time: number; state: string; group: string }[]>();
   let skippedEmpty = 0;
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!;
     const id = (row[idCol] ?? '').trim();
     const st = (row[stateCol] ?? '').trim();
+    const grp = groupCol >= 0 ? (row[groupCol] ?? '').trim() : '';
 
     if (!id) { skippedEmpty++; continue; }
     if (!st) { skippedEmpty++; continue; }
@@ -374,11 +378,11 @@ export function longToSequences(rows: string[][], idCol: number, timeCol: number
       time = i; // row order
     }
 
-    if (!groups.has(id)) groups.set(id, []);
-    groups.get(id)!.push({ time, state: st });
+    if (!idGroups.has(id)) idGroups.set(id, []);
+    idGroups.get(id)!.push({ time, state: st, group: grp });
   }
 
-  if (groups.size === 0) {
+  if (idGroups.size === 0) {
     const hint = skippedEmpty > 0
       ? ` (${skippedEmpty} rows had empty ID or state values)`
       : '';
@@ -389,9 +393,11 @@ export function longToSequences(rows: string[][], idCol: number, timeCol: number
   }
 
   const sequences: SequenceData = [];
-  for (const entries of groups.values()) {
+  const groupLabels: string[] | null = groupCol >= 0 ? [] : null;
+  for (const entries of idGroups.values()) {
     entries.sort((a, b) => a.time - b.time);
     sequences.push(entries.map(e => e.state));
+    if (groupLabels !== null) groupLabels.push(entries[0]!.group);
   }
-  return sequences;
+  return { sequences, groups: groupLabels };
 }

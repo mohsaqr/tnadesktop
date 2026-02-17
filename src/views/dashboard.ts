@@ -1,29 +1,51 @@
 /**
  * Analysis dashboard: sidebar controls + tabbed visualization panels.
  */
-import type { TNA, CentralityResult, CommunityResult, CentralityMeasure, CommunityMethod } from 'tnaj';
+import type { TNA, GroupTNA, CentralityResult, CommunityResult, CentralityMeasure, CommunityMethod } from 'tnaj';
 import type { NetworkSettings } from '../main';
-import { state, render, saveState, buildModel, computeCentralities, computeCommunities, computeSummary, defaultNetworkSettings, AVAILABLE_MEASURES, AVAILABLE_METHODS } from '../main';
+import { state, render, saveState, buildModel, getActiveTNA, getGroupNames, isGroupTNA, computeCentralities, computeCommunities, computeSummary, defaultNetworkSettings, AVAILABLE_MEASURES, AVAILABLE_METHODS } from '../main';
 import { renderNetwork } from './network';
 import { renderCentralityChart } from './centralities';
-import { renderFrequencies } from './frequencies';
+import { renderFrequencies, renderWeightHistogram } from './frequencies';
 import { renderMosaic } from './mosaic';
 import { renderSequences, renderDistribution } from './sequences';
 import { showExportDialog } from './export';
+import { renderBetweennessTab } from './betweenness';
+import { renderCliquesTab } from './cliques';
+import { renderPermutationTab } from './permutation';
+import { renderCompareSequencesTab } from './compare-sequences';
+import { renderCompareNetworksTab } from './compare-networks';
+import { renderBootstrapTab } from './bootstrap';
+import { renderPatternsTab } from './patterns';
+import { renderIndicesTab } from './indices';
+import { estimateCS } from '../analysis/stability';
+import type { StabilityResult } from '../analysis/stability';
 import { NODE_COLORS } from './colors';
+import * as d3 from 'd3';
 
-type Tab = 'network' | 'centralities' | 'sequences' | 'frequencies' | 'communities';
+type Tab = 'network' | 'centralities' | 'betweenness' | 'communities' | 'cliques' | 'bootstrap' | 'frequencies' | 'sequences' | 'patterns' | 'indices' | 'permutation' | 'compare-sequences' | 'compare-networks';
 
-const TABS: { id: Tab; label: string }[] = [
+interface TabDef { id: Tab; label: string; groupOnly?: boolean }
+
+const TABS: TabDef[] = [
   { id: 'network', label: 'Network' },
   { id: 'centralities', label: 'Centralities' },
+  { id: 'betweenness', label: 'Edge Betweenness' },
+  { id: 'communities', label: 'Communities' },
+  { id: 'cliques', label: 'Cliques' },
+  { id: 'bootstrap', label: 'Bootstrap' },
   { id: 'frequencies', label: 'Frequencies' },
   { id: 'sequences', label: 'Sequences' },
-  { id: 'communities', label: 'Communities' },
+  { id: 'patterns', label: 'Patterns' },
+  { id: 'indices', label: 'Seq. Indices' },
+  { id: 'permutation', label: 'Permutation Test', groupOnly: true },
+  { id: 'compare-sequences', label: 'Compare Sequences', groupOnly: true },
+  { id: 'compare-networks', label: 'Compare Networks', groupOnly: true },
 ];
 
 // ─── Cached model data for fast network-only re-render ───
-let cachedModel: TNA | null = null;
+let cachedFullModel: TNA | GroupTNA | null = null;  // the raw model (possibly GroupTNA)
+let cachedModel: TNA | null = null;                  // active group's TNA (always single)
 let cachedCent: CentralityResult | null = null;
 let cachedComm: CommunityResult | undefined = undefined;
 
@@ -41,7 +63,7 @@ function updateNetworkOnly() {
     if (el) renderNetwork(el, cachedModel, state.networkSettings);
   } else if (state.activeTab === 'communities') {
     const el = document.getElementById('viz-community-network');
-    if (el) renderNetwork(el, cachedModel, state.networkSettings, cachedComm);
+    if (el) renderNetwork(el, cachedModel, state.networkSettings, cachedComm ?? undefined);
   }
 }
 
@@ -87,6 +109,35 @@ export function renderDashboard(container: HTMLElement) {
       <div class="slider-row">
         <input type="range" id="prune-threshold" min="0" max="0.30" step="0.01" value="${state.threshold}">
         <span class="slider-value" id="prune-value">${state.threshold.toFixed(2)}</span>
+      </div>
+    </div>
+
+    <!-- Group selector (visible only in group mode) -->
+    <div class="control-group" id="group-selector-wrap" style="display:none">
+      <label>Active Group</label>
+      <select id="group-select"></select>
+    </div>
+
+    <!-- Cluster Mode -->
+    <div class="control-group" id="cluster-controls" style="${state.groupLabels ? 'display:none' : ''}">
+      <div class="checkbox-row">
+        <input type="checkbox" id="cluster-toggle" ${state.clusterMode ? 'checked' : ''}>
+        <span>Cluster Mode</span>
+      </div>
+      <div id="cluster-params" style="display:${state.clusterMode ? 'block' : 'none'}">
+        <div class="control-group" style="margin-top:6px">
+          <label>Clusters (k)</label>
+          <input type="number" id="cluster-k" value="${state.clusterK}" min="2" max="20" style="width:60px;font-size:12px">
+        </div>
+        <div class="control-group" style="margin-top:4px">
+          <label>Dissimilarity</label>
+          <select id="cluster-dissim" style="font-size:12px">
+            <option value="hamming" ${state.clusterDissimilarity === 'hamming' ? 'selected' : ''}>Hamming</option>
+            <option value="lv" ${state.clusterDissimilarity === 'lv' ? 'selected' : ''}>Levenshtein</option>
+            <option value="osa" ${state.clusterDissimilarity === 'osa' ? 'selected' : ''}>OSA</option>
+            <option value="lcs" ${state.clusterDissimilarity === 'lcs' ? 'selected' : ''}>LCS</option>
+          </select>
+        </div>
       </div>
     </div>
 
@@ -303,13 +354,15 @@ export function renderDashboard(container: HTMLElement) {
   main.className = 'main-content';
   dashboard.appendChild(main);
 
-  // Tab bar
+  // Tab bar (group-only tabs are shown/hidden dynamically in updateAll)
   const tabBar = document.createElement('div');
   tabBar.className = 'tab-bar';
+  tabBar.id = 'main-tab-bar';
   for (const tab of TABS) {
     const btn = document.createElement('button');
     btn.textContent = tab.label;
     btn.dataset.tab = tab.id;
+    if (tab.groupOnly) btn.dataset.groupOnly = 'true';
     if (tab.id === state.activeTab) btn.classList.add('active');
     btn.addEventListener('click', () => {
       state.activeTab = tab.id;
@@ -350,8 +403,32 @@ export function renderDashboard(container: HTMLElement) {
     updateAll();
   });
 
+  // Group selector
+  document.getElementById('group-select')?.addEventListener('change', (e) => {
+    state.activeGroup = (e.target as HTMLSelectElement).value;
+    updateAll();
+  });
+
+  // Cluster controls
+  document.getElementById('cluster-toggle')?.addEventListener('change', (e) => {
+    state.clusterMode = (e.target as HTMLInputElement).checked;
+    const params = document.getElementById('cluster-params');
+    if (params) params.style.display = state.clusterMode ? 'block' : 'none';
+    state.activeGroup = null;
+    updateAll();
+  });
+  document.getElementById('cluster-k')?.addEventListener('change', (e) => {
+    state.clusterK = parseInt((e.target as HTMLInputElement).value) || 3;
+    if (state.clusterMode) { state.activeGroup = null; updateAll(); }
+  });
+  document.getElementById('cluster-dissim')?.addEventListener('change', (e) => {
+    state.clusterDissimilarity = (e.target as HTMLSelectElement).value as typeof state.clusterDissimilarity;
+    if (state.clusterMode) { state.activeGroup = null; updateAll(); }
+  });
+
   document.getElementById('export-btn')!.addEventListener('click', () => {
-    const model = buildModel();
+    const fullModel = buildModel();
+    const model = getActiveTNA(fullModel);
     const cent = computeCentralities(model);
     showExportDialog(model, cent);
   });
@@ -474,20 +551,59 @@ function populateNodeColors() {
 
 function updateAll() {
   try {
-    const model = buildModel();
+    const fullModel = buildModel();
+    cachedFullModel = fullModel;
+
+    // Populate group selector if GroupTNA
+    const groupWrap = document.getElementById('group-selector-wrap');
+    const groupSelect = document.getElementById('group-select') as HTMLSelectElement | null;
+    const groupNames = getGroupNames(fullModel);
+    if (groupNames.length > 0 && groupWrap && groupSelect) {
+      groupWrap.style.display = '';
+      // Only rebuild options if group names changed
+      const currentOpts = Array.from(groupSelect.options).map(o => o.value);
+      if (JSON.stringify(currentOpts) !== JSON.stringify(groupNames)) {
+        groupSelect.innerHTML = groupNames.map(name =>
+          `<option value="${name}" ${name === state.activeGroup ? 'selected' : ''}>${name}</option>`
+        ).join('');
+      }
+      // Ensure activeGroup is valid
+      if (!state.activeGroup || !groupNames.includes(state.activeGroup)) {
+        state.activeGroup = groupNames[0]!;
+        groupSelect.value = state.activeGroup;
+      }
+    } else if (groupWrap) {
+      groupWrap.style.display = 'none';
+    }
+
+    // Hide cluster controls when manual group labels are present
+    const clusterControls = document.getElementById('cluster-controls');
+    if (clusterControls) {
+      clusterControls.style.display = (state.groupLabels && state.groupLabels.length > 0) ? 'none' : '';
+    }
+
+    // Get the active single TNA (extracts from group if needed, applies pruning)
+    const model = getActiveTNA(fullModel);
     const cent = computeCentralities(model);
-    const comm = computeCommunities(model);
 
     cachedModel = model;
     cachedCent = cent;
-    cachedComm = comm;
+    cachedComm = undefined; // communities are computed on-demand in the tab
 
     // Update summary
     const s = computeSummary(model);
     const summaryEl = document.getElementById('model-summary');
     if (summaryEl) {
+      const clusterInfo = state.clusterMode && !state.groupLabels
+        ? row('Mode', `Cluster (k=${state.clusterK}, ${state.clusterDissimilarity})`)
+        : '';
+      const groupInfo = groupNames.length > 0
+        ? row('Group', `${state.activeGroup} (${groupNames.length} groups)`)
+        : '';
       summaryEl.innerHTML = [
         row('Type', model.type),
+        clusterInfo,
+        groupInfo,
         row('States', s.nStates),
         row('Edges', s.nEdges),
         row('Density', (s.density as number).toFixed(3)),
@@ -500,7 +616,23 @@ function updateAll() {
     // Populate node color pickers
     populateNodeColors();
 
-    updateTabContent(model, cent, comm);
+    // Show/hide group-only tabs
+    const isGroup = groupNames.length > 0;
+    const tabBar = document.getElementById('main-tab-bar');
+    if (tabBar) {
+      tabBar.querySelectorAll('button').forEach(btn => {
+        const b = btn as HTMLElement;
+        if (b.dataset.groupOnly === 'true') {
+          b.style.display = isGroup ? '' : 'none';
+        }
+      });
+    }
+    // If currently on a group-only tab but not in group mode, switch to network
+    if (!isGroup && TABS.find(t => t.id === state.activeTab)?.groupOnly) {
+      state.activeTab = 'network';
+    }
+
+    updateTabContent(model, cent);
     saveState();
   } catch (err) {
     const content = document.getElementById('tab-content');
@@ -516,11 +648,19 @@ function updateTabContent(model?: any, cent?: any, comm?: any) {
   if (!content) return;
 
   if (!model) {
-    try {
-      model = buildModel();
-      cent = computeCentralities(model);
-      comm = computeCommunities(model);
-    } catch { return; }
+    // Use cached values from updateAll() when just switching tabs
+    if (cachedModel) {
+      model = cachedModel;
+      cent = cachedCent;
+      comm = cachedComm;
+    } else {
+      try {
+        const fullModel = buildModel();
+        model = getActiveTNA(fullModel);
+        cent = computeCentralities(model);
+        comm = computeCommunities(model);
+      } catch { return; }
+    }
   }
 
   content.innerHTML = '';
@@ -532,6 +672,9 @@ function updateTabContent(model?: any, cent?: any, comm?: any) {
     case 'centralities':
       renderCentralitiesTab(content, model, cent);
       break;
+    case 'betweenness':
+      renderBetweennessTab(content, model, state.networkSettings);
+      break;
     case 'frequencies':
       renderFrequenciesTab(content, model);
       break;
@@ -540,6 +683,34 @@ function updateTabContent(model?: any, cent?: any, comm?: any) {
       break;
     case 'communities':
       renderCommunitiesTab(content, model, comm);
+      break;
+    case 'cliques':
+      renderCliquesTab(content, model, state.networkSettings);
+      break;
+    case 'bootstrap':
+      renderBootstrapTab(content, model, state.networkSettings);
+      break;
+    case 'patterns':
+      renderPatternsTab(content, model);
+      break;
+    case 'indices':
+      renderIndicesTab(content, model);
+      break;
+    // Group-only tabs: use the full model (GroupTNA)
+    case 'permutation':
+      if (cachedFullModel && isGroupTNA(cachedFullModel)) {
+        renderPermutationTab(content, cachedFullModel);
+      }
+      break;
+    case 'compare-sequences':
+      if (cachedFullModel && isGroupTNA(cachedFullModel)) {
+        renderCompareSequencesTab(content, cachedFullModel);
+      }
+      break;
+    case 'compare-networks':
+      if (cachedFullModel && isGroupTNA(cachedFullModel)) {
+        renderCompareNetworksTab(content, cachedFullModel);
+      }
       break;
   }
 }
@@ -608,6 +779,21 @@ function renderCentralitiesTab(content: HTMLElement, model: any, cent: any) {
     if (el2) renderCentralityChart(el2, cent, state.selectedMeasure2);
   });
 
+  // Centrality Stability section
+  const stabilityPanel = document.createElement('div');
+  stabilityPanel.className = 'panel';
+  stabilityPanel.style.gridColumn = '1 / -1';
+  stabilityPanel.innerHTML = `
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px">
+      <div class="panel-title" style="margin-bottom:0">Centrality Stability (CS Coefficients)</div>
+      <button id="run-stability" class="btn-primary" style="font-size:11px;padding:4px 12px">Run Stability Analysis</button>
+    </div>
+    <div id="stability-results" style="color:#888;font-size:12px">Click "Run Stability Analysis" to estimate CS coefficients via case-dropping bootstrap.</div>
+  `;
+  grid.appendChild(stabilityPanel);
+
+  content.appendChild(grid);
+
   // Events
   setTimeout(() => {
     document.getElementById('measure-sel-1')?.addEventListener('change', (e) => {
@@ -619,6 +805,36 @@ function renderCentralitiesTab(content: HTMLElement, model: any, cent: any) {
       state.selectedMeasure2 = (e.target as HTMLSelectElement).value as CentralityMeasure;
       const el = document.getElementById('viz-cent-2');
       if (el) renderCentralityChart(el, cent, state.selectedMeasure2);
+    });
+
+    document.getElementById('run-stability')?.addEventListener('click', () => {
+      const resultsEl = document.getElementById('stability-results')!;
+      resultsEl.innerHTML = '<div style="display:flex;align-items:center;gap:8px"><div class="spinner" style="width:16px;height:16px;border-width:2px"></div><span>Running stability analysis...</span></div>';
+
+      setTimeout(() => {
+        try {
+          const result = estimateCS(model, { iter: 500, seed: 42 });
+
+          let html = '<table class="preview-table" style="font-size:12px;margin-bottom:12px"><thead><tr><th>Measure</th><th>CS Coefficient</th><th>Interpretation</th></tr></thead><tbody>';
+          for (const [measure, cs] of Object.entries(result.csCoefficients)) {
+            const interp = cs >= 0.5 ? 'Good' : cs >= 0.25 ? 'Moderate' : 'Unstable';
+            const color = cs >= 0.5 ? '#28a745' : cs >= 0.25 ? '#ffc107' : '#dc3545';
+            html += `<tr><td>${measure}</td><td>${cs.toFixed(2)}</td><td style="color:${color};font-weight:600">${interp}</td></tr>`;
+          }
+          html += '</tbody></table>';
+
+          // Add line chart of mean correlation vs drop proportion
+          html += '<div id="viz-cs-chart" style="width:100%;height:220px"></div>';
+          resultsEl.innerHTML = html;
+
+          requestAnimationFrame(() => {
+            const chartEl = document.getElementById('viz-cs-chart');
+            if (chartEl) renderCSChart(chartEl, result);
+          });
+        } catch (err) {
+          resultsEl.innerHTML = `<span style="color:#dc3545">Error: ${(err as Error).message}</span>`;
+        }
+      }, 50);
     });
   }, 0);
 }
@@ -640,13 +856,22 @@ function renderFrequenciesTab(content: HTMLElement, model: any) {
   p2.innerHTML = `<div class="panel-title">State Associations (Mosaic)</div><div id="viz-mosaic" style="width:100%"></div>`;
   grid.appendChild(p2);
 
+  // Weight histogram (full-width row below)
+  const p3 = document.createElement('div');
+  p3.className = 'panel';
+  p3.style.gridColumn = '1 / -1';
+  p3.innerHTML = `<div class="panel-title">Weight Distribution</div><div id="viz-histogram" style="width:100%"></div>`;
+  grid.appendChild(p3);
+
   content.appendChild(grid);
 
   requestAnimationFrame(() => {
     const freqEl = document.getElementById('viz-freq');
     const mosaicEl = document.getElementById('viz-mosaic');
+    const histEl = document.getElementById('viz-histogram');
     if (freqEl) renderFrequencies(freqEl, model);
     if (mosaicEl) renderMosaic(mosaicEl, model);
+    if (histEl) renderWeightHistogram(histEl, model);
   });
 }
 
@@ -675,7 +900,7 @@ function renderSequencesTab(content: HTMLElement, _model: any) {
   });
 }
 
-function renderCommunitiesTab(content: HTMLElement, model: any, comm: any) {
+function renderCommunitiesTab(content: HTMLElement, model: any, _comm: any) {
   const grid = document.createElement('div');
   grid.className = 'panels-grid';
 
@@ -685,18 +910,15 @@ function renderCommunitiesTab(content: HTMLElement, model: any, comm: any) {
   controls.style.padding = '12px 16px';
   controls.innerHTML = `
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-      <div class="checkbox-row">
-        <input type="checkbox" id="community-toggle" ${state.showCommunities ? 'checked' : ''}>
-        <span>Enable Community Detection</span>
-      </div>
       <div style="display:flex;align-items:center;gap:6px">
         <label style="font-size:12px;color:#777">Method:</label>
-        <select id="community-method" style="font-size:12px" ${state.showCommunities ? '' : 'disabled'}>
+        <select id="community-method" style="font-size:12px">
           ${AVAILABLE_METHODS.map(m =>
             `<option value="${m}" ${m === state.communityMethod ? 'selected' : ''}>${m.replace(/_/g, ' ')}</option>`
           ).join('')}
         </select>
       </div>
+      <button id="run-communities" class="btn-primary" style="font-size:12px;padding:6px 16px">Detect Communities</button>
     </div>
   `;
   grid.appendChild(controls);
@@ -712,50 +934,202 @@ function renderCommunitiesTab(content: HTMLElement, model: any, comm: any) {
   `;
   grid.appendChild(netPanel);
 
-  // Community membership table
-  if (state.showCommunities && comm) {
-    const methodKey = Object.keys(comm.assignments)[0]!;
-    const assign: number[] = comm.assignments[methodKey]!;
-    const nComms = Math.max(...assign) + 1;
-
-    const memberPanel = document.createElement('div');
-    memberPanel.className = 'panel';
-    memberPanel.innerHTML = `<div class="panel-title">Community Membership (${methodKey})</div>`;
-
-    let tableHtml = '<table class="preview-table" style="font-size:12px"><thead><tr><th>Community</th><th>Members</th><th>Count</th></tr></thead><tbody>';
-    for (let c = 0; c < nComms; c++) {
-      const members = model.labels.filter((_: string, i: number) => assign[i] === c);
-      tableHtml += `<tr><td style="font-weight:600">C${c + 1}</td><td>${members.join(', ')}</td><td>${members.length}</td></tr>`;
-    }
-    tableHtml += '</tbody></table>';
-    memberPanel.innerHTML += tableHtml;
-    grid.appendChild(memberPanel);
-  }
+  // Results area (membership table appears here after detection)
+  const resultsDiv = document.createElement('div');
+  resultsDiv.id = 'community-results';
+  grid.appendChild(resultsDiv);
 
   content.appendChild(grid);
 
-  // Wire events
-  setTimeout(() => {
-    document.getElementById('community-toggle')?.addEventListener('change', (e) => {
-      state.showCommunities = (e.target as HTMLInputElement).checked;
-      const methodSel = document.getElementById('community-method') as HTMLSelectElement | null;
-      if (methodSel) methodSel.disabled = !state.showCommunities;
-      updateAll();
-    });
-
-    document.getElementById('community-method')?.addEventListener('change', (e) => {
-      state.communityMethod = (e.target as HTMLSelectElement).value as CommunityMethod;
-      if (state.showCommunities) updateAll();
-    });
-  }, 0);
-
-  // Render network
+  // Render plain network initially
   requestAnimationFrame(() => {
     const el = document.getElementById('viz-community-network');
-    if (el) renderNetwork(el, model, state.networkSettings, state.showCommunities ? comm : undefined);
+    if (el) renderNetwork(el, model, state.networkSettings);
   });
+
+  // Wire events
+  const runDetection = () => {
+    state.communityMethod = (document.getElementById('community-method') as HTMLSelectElement).value as CommunityMethod;
+    state.showCommunities = true;
+
+    // Show loading state
+    const resultsEl = document.getElementById('community-results')!;
+    resultsEl.innerHTML = '<div class="panel" style="text-align:center;padding:30px;color:#888"><div class="spinner" style="margin:0 auto 12px"></div>Running community detection...</div>';
+
+    // Run asynchronously so the UI updates
+    setTimeout(() => {
+      try {
+        const comm = computeCommunities(model, state.communityMethod);
+        cachedComm = comm;
+
+        // Re-render network with communities
+        const el = document.getElementById('viz-community-network');
+        if (el && comm) renderNetwork(el, model, state.networkSettings, comm);
+
+        // Render membership table
+        if (comm?.assignments) {
+          const methodKey = Object.keys(comm.assignments)[0];
+          const assign: number[] | undefined = methodKey ? comm.assignments[methodKey] : undefined;
+          if (assign && assign.length > 0) {
+            const nComms = Math.max(...assign) + 1;
+            let html = `<div class="panel"><div class="panel-title">Community Membership (${methodKey}) — ${nComms} communities</div>`;
+            html += '<table class="preview-table" style="font-size:12px"><thead><tr><th>Community</th><th>Members</th><th>Count</th></tr></thead><tbody>';
+            for (let c = 0; c < nComms; c++) {
+              const members = model.labels.filter((_: string, i: number) => assign[i] === c);
+              html += `<tr><td style="font-weight:600">C${c + 1}</td><td>${members.join(', ')}</td><td>${members.length}</td></tr>`;
+            }
+            html += '</tbody></table></div>';
+            resultsEl.innerHTML = html;
+          } else {
+            resultsEl.innerHTML = '<div class="panel" style="text-align:center;padding:20px;color:#888">No communities detected.</div>';
+          }
+        } else {
+          resultsEl.innerHTML = '<div class="panel" style="text-align:center;padding:20px;color:#888">Community detection returned no results.</div>';
+        }
+      } catch (err) {
+        resultsEl.innerHTML = `<div class="panel error-banner">Error: ${(err as Error).message}</div>`;
+      }
+      saveState();
+    }, 50);
+  };
+
+  setTimeout(() => {
+    document.getElementById('run-communities')?.addEventListener('click', runDetection);
+    document.getElementById('community-method')?.addEventListener('change', () => {
+      state.communityMethod = (document.getElementById('community-method') as HTMLSelectElement).value as CommunityMethod;
+      saveState();
+    });
+  }, 0);
 }
 
 function row(label: string, value: unknown): string {
   return `<div><strong>${label}</strong><span>${value}</span></div>`;
+}
+
+const CS_COLORS = ['#4e79a7', '#e15759', '#59a14f', '#edc948', '#b07aa1', '#76b7b2'];
+
+function renderCSChart(container: HTMLElement, result: StabilityResult) {
+  const rect = container.getBoundingClientRect();
+  const width = Math.max(rect.width, 400);
+  const height = 220;
+  const margin = { top: 10, right: 120, bottom: 35, left: 50 };
+  const innerW = width - margin.left - margin.right;
+  const innerH = height - margin.top - margin.bottom;
+
+  d3.select(container).selectAll('*').remove();
+  const svg = d3.select(container)
+    .append('svg')
+    .attr('width', width)
+    .attr('height', height);
+
+  const g = svg.append('g')
+    .attr('transform', `translate(${margin.left},${margin.top})`);
+
+  const x = d3.scaleLinear()
+    .domain([0, Math.max(...result.dropProps)])
+    .range([0, innerW]);
+
+  const y = d3.scaleLinear()
+    .domain([0, 1])
+    .range([innerH, 0]);
+
+  // Axes
+  g.append('g')
+    .attr('transform', `translate(0,${innerH})`)
+    .call(d3.axisBottom(x).ticks(5).tickFormat(d => `${(+d * 100).toFixed(0)}%`))
+    .selectAll('text').attr('font-size', '10px');
+
+  g.append('g')
+    .call(d3.axisLeft(y).ticks(5))
+    .selectAll('text').attr('font-size', '10px');
+
+  // Axis labels
+  g.append('text')
+    .attr('x', innerW / 2)
+    .attr('y', innerH + 30)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '11px')
+    .attr('fill', '#666')
+    .text('Proportion of Cases Dropped');
+
+  g.append('text')
+    .attr('transform', 'rotate(-90)')
+    .attr('x', -innerH / 2)
+    .attr('y', -38)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '11px')
+    .attr('fill', '#666')
+    .text('Mean Correlation');
+
+  // Threshold line
+  g.append('line')
+    .attr('x1', 0)
+    .attr('x2', innerW)
+    .attr('y1', y(result.threshold))
+    .attr('y2', y(result.threshold))
+    .attr('stroke', '#dc3545')
+    .attr('stroke-dasharray', '4,3')
+    .attr('stroke-width', 1);
+
+  g.append('text')
+    .attr('x', innerW + 4)
+    .attr('y', y(result.threshold))
+    .attr('dy', '0.35em')
+    .attr('font-size', '9px')
+    .attr('fill', '#dc3545')
+    .text(`threshold=${result.threshold}`);
+
+  // Lines per measure
+  const measures = Object.keys(result.meanCorrelations);
+  const line = d3.line<number>()
+    .defined(d => !isNaN(d))
+    .x((_d, i) => x(result.dropProps[i]!))
+    .y(d => y(d));
+
+  measures.forEach((measure, idx) => {
+    const vals = result.meanCorrelations[measure]!;
+    const color = CS_COLORS[idx % CS_COLORS.length]!;
+
+    g.append('path')
+      .datum(vals)
+      .attr('fill', 'none')
+      .attr('stroke', color)
+      .attr('stroke-width', 2)
+      .attr('d', line);
+
+    // Dots
+    g.selectAll(`.dot-${idx}`)
+      .data(vals.filter(v => !isNaN(v)))
+      .enter()
+      .append('circle')
+      .attr('cx', (_d, i) => {
+        // Find the actual index in dropProps for non-NaN values
+        let count = 0;
+        for (let j = 0; j < vals.length; j++) {
+          if (!isNaN(vals[j]!)) {
+            if (count === i) return x(result.dropProps[j]!);
+            count++;
+          }
+        }
+        return 0;
+      })
+      .attr('cy', d => y(d))
+      .attr('r', 3)
+      .attr('fill', color);
+
+    // Legend
+    svg.append('rect')
+      .attr('x', width - margin.right + 10)
+      .attr('y', margin.top + idx * 18)
+      .attr('width', 12)
+      .attr('height', 3)
+      .attr('fill', color);
+
+    svg.append('text')
+      .attr('x', width - margin.right + 26)
+      .attr('y', margin.top + idx * 18 + 4)
+      .attr('font-size', '9px')
+      .attr('fill', '#555')
+      .text(measure);
+  });
 }

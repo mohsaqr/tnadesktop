@@ -67,6 +67,14 @@ export function renderPreview(container: HTMLElement) {
     return opts;
   };
 
+  const makeGroupOpts = (selected: number) => {
+    let opts = `<option value="-1" ${selected === -1 ? 'selected' : ''}>None (single TNA)</option>`;
+    opts += state.headers.map((h, i) =>
+      `<option value="${i}" ${i === selected ? 'selected' : ''}>${h}</option>`
+    ).join('');
+    return opts;
+  };
+
   longCols.innerHTML = `
     <label>ID col:</label>
     <select id="long-id">${makeColOpts(state.longIdCol)}</select>
@@ -74,6 +82,8 @@ export function renderPreview(container: HTMLElement) {
     <select id="long-time">${makeColOpts(state.longTimeCol, true)}</select>
     <label>State col:</label>
     <select id="long-state">${makeColOpts(state.longStateCol)}</select>
+    <label>Group col:</label>
+    <select id="long-group">${makeGroupOpts(state.longGroupCol)}</select>
   `;
   screen.appendChild(longCols);
 
@@ -124,20 +134,29 @@ export function renderPreview(container: HTMLElement) {
     try {
       if (state.format === 'wide') {
         state.sequenceData = wideToSequences(state.rawData);
+        state.groupLabels = null;
+        state.longGroupCol = -1;
       } else {
         const idCol = parseInt((document.getElementById('long-id') as HTMLSelectElement).value);
         const timeCol = parseInt((document.getElementById('long-time') as HTMLSelectElement).value);
         const stateCol = parseInt((document.getElementById('long-state') as HTMLSelectElement).value);
+        const groupCol = parseInt((document.getElementById('long-group') as HTMLSelectElement).value);
         state.longIdCol = idCol;
         state.longTimeCol = timeCol;
         state.longStateCol = stateCol;
-        state.sequenceData = longToSequences(state.rawData, idCol, timeCol, stateCol);
+        state.longGroupCol = groupCol;
+        const result = longToSequences(state.rawData, idCol, timeCol, stateCol, groupCol);
+        state.sequenceData = result.sequences;
+        state.groupLabels = result.groups;
       }
 
       if (!state.sequenceData || state.sequenceData.length === 0) {
         alert('No valid sequences found. Check your data format.');
         return;
       }
+
+      // Reset active group when loading new data
+      state.activeGroup = null;
 
       state.view = 'dashboard';
       render();
