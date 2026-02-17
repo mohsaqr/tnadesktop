@@ -7,6 +7,12 @@ import type { NetworkSettings } from '../main';
 import { showTooltip, hideTooltip } from '../main';
 import { NODE_COLORS, COMMUNITY_COLORS } from './colors';
 
+/** Format edge weight: integers shown without decimals, others as .XX */
+function fmtWeight(w: number): string {
+  if (Number.isInteger(w)) return String(w);
+  return w.toFixed(2).replace(/^0\./, '.');
+}
+
 interface NodeDatum {
   id: string;
   idx: number;
@@ -412,7 +418,7 @@ function renderSelfLoop(
       .style('stroke', '#ffffff')
       .style('stroke-width', '3px')
       .style('stroke-linejoin', 'round')
-      .text(weight.toFixed(2).replace(/^0\./, '.'));
+      .text(fmtWeight(weight));
   }
 }
 
@@ -612,7 +618,7 @@ export function renderNetwork(
         .style('stroke', '#ffffff')
         .style('stroke-width', '3px')
         .style('stroke-linejoin', 'round')
-        .text(e.weight.toFixed(2).replace(/^0\./, '.'));
+        .text(fmtWeight(e.weight));
     }
   }
 

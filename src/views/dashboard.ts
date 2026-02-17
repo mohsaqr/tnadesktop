@@ -15,7 +15,9 @@ import { renderCliquesTab } from './cliques';
 import { renderPermutationTab } from './permutation';
 import { renderCompareSequencesTab } from './compare-sequences';
 import { renderCompareNetworksTab } from './compare-networks';
-import { renderBootstrapTab } from './bootstrap';
+import { renderBootstrapTab, renderBootstrapResults } from './bootstrap';
+import { bootstrapTna } from '../analysis/bootstrap';
+import type { BootstrapOptions } from '../analysis/bootstrap';
 import { renderPatternsTab } from './patterns';
 import { renderIndicesTab } from './indices';
 import { estimateCS } from '../analysis/stability';
@@ -29,11 +31,11 @@ interface TabDef { id: Tab; label: string; groupOnly?: boolean }
 
 const TABS: TabDef[] = [
   { id: 'network', label: 'Network' },
+  { id: 'frequencies', label: 'Frequencies' },
   { id: 'centralities', label: 'Centralities' },
   { id: 'communities', label: 'Communities' },
   { id: 'cliques', label: 'Cliques' },
   { id: 'bootstrap', label: 'Bootstrap' },
-  { id: 'frequencies', label: 'Frequencies' },
   { id: 'sequences', label: 'Sequences' },
   { id: 'patterns', label: 'Patterns' },
   { id: 'indices', label: 'Seq. Indices' },
@@ -805,7 +807,7 @@ function updateTabContent(model?: any, cent?: any, comm?: any) {
       else renderCliquesTab(content, model, state.networkSettings);
       break;
     case 'bootstrap':
-      if (isGroup) renderMultiGroupTab(content, (card, m, suffix) => renderBootstrapTab(card, m, state.networkSettings, suffix));
+      if (isGroup) renderBootstrapTabMulti(content);
       else renderBootstrapTab(content, model, state.networkSettings);
       break;
     case 'patterns':
@@ -1044,7 +1046,6 @@ function renderCentralitiesTab(content: HTMLElement, model: any, cent: any) {
 
 function renderFrequenciesTab(content: HTMLElement, model: any) {
   const grid = document.createElement('div');
-  grid.className = 'panels-grid row-2';
   grid.style.display = 'grid';
   grid.style.gridTemplateColumns = '1fr 1fr';
   grid.style.gap = '16px';
@@ -1054,12 +1055,10 @@ function renderFrequenciesTab(content: HTMLElement, model: any) {
   p1.innerHTML = `<div class="panel-title">State Frequencies</div><div id="viz-freq" style="width:100%"></div>`;
   grid.appendChild(p1);
 
-  // Weight histogram (full-width row below)
-  const p3 = document.createElement('div');
-  p3.className = 'panel';
-  p3.style.gridColumn = '1 / -1';
-  p3.innerHTML = `<div class="panel-title">Weight Distribution</div><div id="viz-histogram" style="width:100%"></div>`;
-  grid.appendChild(p3);
+  const p2 = document.createElement('div');
+  p2.className = 'panel';
+  p2.innerHTML = `<div class="panel-title">Weight Distribution</div><div id="viz-histogram" style="width:100%"></div>`;
+  grid.appendChild(p2);
 
   content.appendChild(grid);
 
@@ -1074,14 +1073,18 @@ function renderFrequenciesTab(content: HTMLElement, model: any) {
 function renderSequencesTab(content: HTMLElement, _model: any) {
   if (!state.sequenceData) return;
 
+  // Fixed width: 900px by default, shorter if < 10 sequences
+  const nSeq = state.sequenceData!.length;
+  const fixedW = nSeq < 10 ? 500 : 900;
+
   const grid = document.createElement('div');
   grid.className = 'panels-grid';
   grid.innerHTML = `
-    <div class="panel full-width">
+    <div class="panel full-width" style="max-width:${fixedW}px">
       <div class="panel-title">State Distribution Over Time</div>
       <div id="viz-dist" style="width:100%"></div>
     </div>
-    <div class="panel full-width">
+    <div class="panel full-width" style="max-width:${fixedW}px">
       <div class="panel-title">Sequence Index Plot</div>
       <div id="viz-seq" style="width:100%;overflow-x:auto"></div>
     </div>
@@ -1582,6 +1585,91 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
           k++;
         }
         saveState();
+      }, 50);
+    });
+  }, 0);
+}
+
+// ─── Bootstrap tab (multi-group) ───
+function renderBootstrapTabMulti(content: HTMLElement) {
+  // Shared controls at top
+  const controls = document.createElement('div');
+  controls.className = 'panel';
+  controls.style.padding = '12px 16px';
+  controls.innerHTML = `
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:6px">
+        <label style="font-size:13px;color:#555;font-weight:600">Iterations:</label>
+        <select id="boot-iter" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
+          <option value="500">500</option>
+          <option value="1000" selected>1000</option>
+          <option value="2000">2000</option>
+        </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <label style="font-size:13px;color:#555;font-weight:600">Significance:</label>
+        <select id="boot-level" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
+          <option value="0.01">0.01</option>
+          <option value="0.05" selected>0.05</option>
+          <option value="0.10">0.10</option>
+        </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <label style="font-size:13px;color:#555;font-weight:600">Method:</label>
+        <select id="boot-method" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
+          <option value="stability" selected>Stability</option>
+          <option value="threshold">Threshold</option>
+        </select>
+      </div>
+      <button id="run-bootstrap-all" class="btn-primary" style="font-size:13px;padding:6px 16px">Run Bootstrap (All Groups)</button>
+    </div>
+  `;
+  content.appendChild(controls);
+
+  // Per-group result areas
+  const gs = groupNetworkSettings(state.networkSettings);
+  let i = 0;
+  for (const [groupName] of cachedModels) {
+    const groupRow = document.createElement('div');
+    groupRow.className = 'panel';
+    groupRow.style.cssText = 'margin-top:12px;padding:12px';
+    groupRow.innerHTML = `
+      <div class="panel-title" style="margin-bottom:8px;font-size:14px;color:${GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]}">${groupName}</div>
+      <div id="boot-results-g${i}" style="text-align:center;color:#888;padding:20px;font-size:13px">Click "Run Bootstrap" to assess edge stability.</div>
+    `;
+    content.appendChild(groupRow);
+    i++;
+  }
+
+  // Wire single button to run all groups
+  setTimeout(() => {
+    document.getElementById('run-bootstrap-all')?.addEventListener('click', () => {
+      const iter = parseInt((document.getElementById('boot-iter') as HTMLSelectElement).value);
+      const level = parseFloat((document.getElementById('boot-level') as HTMLSelectElement).value);
+      const method = (document.getElementById('boot-method') as HTMLSelectElement).value as BootstrapOptions['method'];
+
+      // Show loading for all
+      let idx = 0;
+      for (const [groupName] of cachedModels) {
+        const el = document.getElementById(`boot-results-g${idx}`);
+        if (el) el.innerHTML = '<div style="text-align:center;padding:20px;color:#888"><div class="spinner" style="width:16px;height:16px;border-width:2px;margin:0 auto 8px"></div>Running bootstrap...</div>';
+        idx++;
+      }
+
+      setTimeout(() => {
+        let k = 0;
+        for (const [groupName, model] of cachedModels) {
+          const resultsEl = document.getElementById(`boot-results-g${k}`);
+          if (resultsEl) {
+            try {
+              const result = bootstrapTna(model, { iter, level, method, seed: 42 });
+              renderBootstrapResults(resultsEl, result, gs, `-g${k}`);
+            } catch (err) {
+              resultsEl.innerHTML = `<div class="panel error-banner">Error: ${(err as Error).message}</div>`;
+            }
+          }
+          k++;
+        }
       }, 50);
     });
   }, 0);

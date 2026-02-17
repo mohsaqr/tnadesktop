@@ -3,6 +3,7 @@
  */
 import { state, render, showLoading, hideLoading } from '../main';
 import { parseFile } from '../data';
+import sampleCsv from '../sample-data.csv?raw';
 
 export function renderWelcome(container: HTMLElement) {
   // Toolbar
@@ -25,6 +26,7 @@ export function renderWelcome(container: HTMLElement) {
         <div class="sublabel">or click to browse (.csv, .xlsx, .xls)</div>
       </div>
       <button class="btn-primary" id="open-btn">Open File</button>
+      <button class="btn-primary" id="sample-btn" style="margin-left:8px;background:#5a8f5a">Load Sample Data</button>
     </div>
   `;
   container.appendChild(welcome);
@@ -42,6 +44,7 @@ export function renderWelcome(container: HTMLElement) {
   // Click handlers
   dropZone.addEventListener('click', () => fileInput.click());
   openBtn.addEventListener('click', () => fileInput.click());
+  document.getElementById('sample-btn')!.addEventListener('click', loadSampleData);
 
   // Drag and drop
   dropZone.addEventListener('dragover', (e) => {
@@ -64,6 +67,25 @@ export function renderWelcome(container: HTMLElement) {
     const file = fileInput.files?.[0];
     if (file) handleFile(file);
   });
+}
+
+function loadSampleData() {
+  showLoading('Loading sample data...');
+  try {
+    const lines = sampleCsv.split('\n').filter((l: string) => l.trim());
+    const headers = lines[0]!.split(',').map((h: string) => h.trim());
+    const rows = lines.slice(1).map((line: string) => line.split(',').map((c: string) => c.trim()));
+    state.filename = 'group_regulation_long.csv';
+    state.headers = headers;
+    state.rawData = rows;
+    state.format = 'long';
+    state.view = 'preview';
+    hideLoading();
+    render();
+  } catch (err) {
+    hideLoading();
+    alert('Error loading sample data: ' + (err as Error).message);
+  }
 }
 
 async function handleFile(file: File) {

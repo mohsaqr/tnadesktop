@@ -24,29 +24,29 @@ export function renderBootstrapTab(
   controls.innerHTML = `
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:6px">
-        <label style="font-size:12px;color:#777">Iterations:</label>
-        <select id="boot-iter${idSuffix}" style="font-size:12px">
+        <label style="font-size:13px;color:#555;font-weight:600">Iterations:</label>
+        <select id="boot-iter${idSuffix}" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
           <option value="500">500</option>
           <option value="1000" selected>1000</option>
           <option value="2000">2000</option>
         </select>
       </div>
       <div style="display:flex;align-items:center;gap:6px">
-        <label style="font-size:12px;color:#777">Significance:</label>
-        <select id="boot-level${idSuffix}" style="font-size:12px">
+        <label style="font-size:13px;color:#555;font-weight:600">Significance:</label>
+        <select id="boot-level${idSuffix}" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
           <option value="0.01">0.01</option>
           <option value="0.05" selected>0.05</option>
           <option value="0.10">0.10</option>
         </select>
       </div>
       <div style="display:flex;align-items:center;gap:6px">
-        <label style="font-size:12px;color:#777">Method:</label>
-        <select id="boot-method${idSuffix}" style="font-size:12px">
+        <label style="font-size:13px;color:#555;font-weight:600">Method:</label>
+        <select id="boot-method${idSuffix}" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
           <option value="stability" selected>Stability</option>
           <option value="threshold">Threshold</option>
         </select>
       </div>
-      <button id="run-bootstrap${idSuffix}" class="btn-primary" style="font-size:12px;padding:6px 16px">Run Bootstrap</button>
+      <button id="run-bootstrap${idSuffix}" class="btn-primary" style="font-size:13px;padding:6px 16px">Run Bootstrap</button>
     </div>
   `;
   grid.appendChild(controls);
@@ -78,7 +78,7 @@ export function renderBootstrapTab(
   }, 0);
 }
 
-function renderBootstrapResults(
+export function renderBootstrapResults(
   container: HTMLElement,
   result: BootstrapResult,
   networkSettings: NetworkSettings,
