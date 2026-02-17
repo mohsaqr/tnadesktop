@@ -3,7 +3,7 @@
  */
 import type { TNA, GroupTNA, CentralityResult, CommunityResult, CentralityMeasure, CommunityMethod } from 'tnaj';
 import type { NetworkSettings } from '../main';
-import { state, render, saveState, buildModel, getActiveTNA, getGroupNames, isGroupTNA, computeCentralities, computeCommunities, computeSummary, defaultNetworkSettings, AVAILABLE_MEASURES, AVAILABLE_METHODS, prune } from '../main';
+import { state, render, saveState, buildModel, getActiveTNA, getGroupNames, isGroupTNA, computeCentralities, computeCommunities, computeSummary, defaultNetworkSettings, groupNetworkSettings, AVAILABLE_MEASURES, AVAILABLE_METHODS, prune } from '../main';
 import { renderNetwork } from './network';
 import { renderCentralityChart } from './centralities';
 import { renderFrequencies, renderWeightHistogram } from './frequencies';
@@ -30,7 +30,6 @@ interface TabDef { id: Tab; label: string; groupOnly?: boolean }
 const TABS: TabDef[] = [
   { id: 'network', label: 'Network' },
   { id: 'centralities', label: 'Centralities' },
-  { id: 'betweenness', label: 'Edge Betweenness' },
   { id: 'communities', label: 'Communities' },
   { id: 'cliques', label: 'Cliques' },
   { id: 'bootstrap', label: 'Bootstrap' },
@@ -67,19 +66,20 @@ function updateNetworkOnly() {
   const isGroup = cachedFullModel && isGroupTNA(cachedFullModel) && cachedModels.size > 0;
 
   if (isGroup) {
-    // Multi-group: re-render all group network elements
+    // Multi-group: re-render all group network elements with scaled-down settings
+    const gs = groupNetworkSettings(state.networkSettings);
     if (state.activeTab === 'network') {
       let i = 0;
       for (const [, model] of cachedModels) {
         const el = document.getElementById(`viz-network-g${i}`);
-        if (el) renderNetwork(el, model, state.networkSettings);
+        if (el) renderNetwork(el, model, gs);
         i++;
       }
     } else if (state.activeTab === 'communities') {
       let i = 0;
       for (const [groupName, model] of cachedModels) {
         const el = document.getElementById(`viz-community-network-g${i}`);
-        if (el) renderNetwork(el, model, state.networkSettings, cachedComms.get(groupName) ?? undefined);
+        if (el) renderNetwork(el, model, gs, cachedComms.get(groupName) ?? undefined);
         i++;
       }
     }
@@ -156,11 +156,11 @@ export function renderDashboard(container: HTMLElement) {
       <div id="cluster-params" style="display:${state.clusterMode ? 'block' : 'none'}">
         <div class="control-group" style="margin-top:6px">
           <label>Clusters (k)</label>
-          <input type="number" id="cluster-k" value="${state.clusterK}" min="2" max="20" style="width:60px;font-size:12px">
+          <input type="number" id="cluster-k" value="${state.clusterK}" min="2" max="20" style="width:60px;font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
         </div>
         <div class="control-group" style="margin-top:4px">
           <label>Dissimilarity</label>
-          <select id="cluster-dissim" style="font-size:12px">
+          <select id="cluster-dissim" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc"
             <option value="hamming" ${state.clusterDissimilarity === 'hamming' ? 'selected' : ''}>Hamming</option>
             <option value="lv" ${state.clusterDissimilarity === 'lv' ? 'selected' : ''}>Levenshtein</option>
             <option value="osa" ${state.clusterDissimilarity === 'osa' ? 'selected' : ''}>OSA</option>
@@ -242,6 +242,32 @@ export function renderDashboard(container: HTMLElement) {
             </div>
           </div>
           <div class="control-group">
+            <label>Label Offset</label>
+            <div class="slider-row">
+              <input type="range" id="ns-nodeLabelOffset" min="-60" max="60" step="1" value="${s.nodeLabelOffset}">
+              <span class="slider-value" id="ns-nodeLabelOffset-val">${s.nodeLabelOffset}</span>
+            </div>
+          </div>
+          <div class="control-group">
+            <div class="checkbox-row">
+              <input type="checkbox" id="ns-nodeLabelHalo" ${s.nodeLabelHalo ? 'checked' : ''}>
+              <span>Label Halo</span>
+            </div>
+          </div>
+          <div class="control-group">
+            <div class="color-picker-row">
+              <label>Halo Color</label>
+              <input type="color" id="ns-nodeLabelHaloColor" value="${s.nodeLabelHaloColor}">
+            </div>
+          </div>
+          <div class="control-group">
+            <label>Halo Width</label>
+            <div class="slider-row">
+              <input type="range" id="ns-nodeLabelHaloWidth" min="0" max="8" step="0.5" value="${s.nodeLabelHaloWidth}">
+              <span class="slider-value" id="ns-nodeLabelHaloWidth-val">${s.nodeLabelHaloWidth}</span>
+            </div>
+          </div>
+          <div class="control-group">
             <div class="checkbox-row">
               <input type="checkbox" id="ns-showNodeLabels" ${s.showNodeLabels ? 'checked' : ''}>
               <span>Show Labels</span>
@@ -317,6 +343,12 @@ export function renderDashboard(container: HTMLElement) {
             <div class="checkbox-row">
               <input type="checkbox" id="ns-showSelfLoops" ${s.showSelfLoops ? 'checked' : ''}>
               <span>Show Self-Loops</span>
+            </div>
+          </div>
+          <div class="control-group">
+            <div class="checkbox-row">
+              <input type="checkbox" id="ns-edgeDashEnabled" ${s.edgeDashEnabled ? 'checked' : ''}>
+              <span>Dash by Weight</span>
             </div>
           </div>
         </div>
@@ -473,6 +505,8 @@ export function renderDashboard(container: HTMLElement) {
   wireSlider('ns-nodeRadius', 'nodeRadius', parseFloat);
   wireSlider('ns-nodeBorderWidth', 'nodeBorderWidth', parseFloat);
   wireSlider('ns-nodeLabelSize', 'nodeLabelSize', parseFloat);
+  wireSlider('ns-nodeLabelOffset', 'nodeLabelOffset', parseFloat);
+  wireSlider('ns-nodeLabelHaloWidth', 'nodeLabelHaloWidth', parseFloat);
   wireSlider('ns-edgeWidthMin', 'edgeWidthMin', parseFloat);
   wireSlider('ns-edgeWidthMax', 'edgeWidthMax', parseFloat);
   wireSlider('ns-edgeOpacityMin', 'edgeOpacityMin', parseFloat);
@@ -485,14 +519,17 @@ export function renderDashboard(container: HTMLElement) {
 
   wireColor('ns-nodeBorderColor', 'nodeBorderColor');
   wireColor('ns-nodeLabelColor', 'nodeLabelColor');
+  wireColor('ns-nodeLabelHaloColor', 'nodeLabelHaloColor');
   wireColor('ns-edgeColor', 'edgeColor');
   wireColor('ns-arrowColor', 'arrowColor');
   wireColor('ns-edgeLabelColor', 'edgeLabelColor');
   wireColor('ns-pieBorderColor', 'pieBorderColor');
 
   wireCheckbox('ns-showNodeLabels', 'showNodeLabels');
+  wireCheckbox('ns-nodeLabelHalo', 'nodeLabelHalo');
   wireCheckbox('ns-showEdgeLabels', 'showEdgeLabels');
   wireCheckbox('ns-showSelfLoops', 'showSelfLoops');
+  wireCheckbox('ns-edgeDashEnabled', 'edgeDashEnabled');
 
   // Network height slider: update container height + re-render
   const heightSlider = document.getElementById('ns-networkHeight') as HTMLInputElement | null;
@@ -745,8 +782,11 @@ function updateTabContent(model?: any, cent?: any, comm?: any) {
       else renderCentralitiesTab(content, model, cent);
       break;
     case 'betweenness':
-      if (isGroup) renderMultiGroupTab(content, (card, m, suffix) => renderBetweennessTab(card, m, state.networkSettings, suffix));
-      else renderBetweennessTab(content, model, state.networkSettings);
+      // Legacy: redirect to centralities tab
+      state.activeTab = 'centralities';
+      currentCentSubView = 'betweenness';
+      if (isGroup) renderCentralitiesTabMulti(content);
+      else renderCentralitiesTab(content, model, cent);
       break;
     case 'frequencies':
       if (isGroup) renderFrequenciesTabMulti(content);
@@ -799,6 +839,8 @@ function renderNetworkTab(content: HTMLElement, model: any) {
   const h = state.networkSettings.networkHeight;
   const grid = document.createElement('div');
   grid.className = 'panels-grid';
+  grid.style.maxWidth = '900px';
+  grid.style.margin = '0 auto';
   grid.innerHTML = `
     <div class="panel" style="min-height:${h + 40}px">
       <div class="panel-title">Network Graph</div>
@@ -813,108 +855,189 @@ function renderNetworkTab(content: HTMLElement, model: any) {
   });
 }
 
+type CentralitySubView = 'charts' | 'table' | 'betweenness' | 'stability';
+let currentCentSubView: CentralitySubView = 'charts';
+
 function renderCentralitiesTab(content: HTMLElement, model: any, cent: any) {
-  const grid = document.createElement('div');
-  grid.className = 'panels-grid row-2';
-  grid.style.display = 'grid';
-  grid.style.gridTemplateColumns = '1fr 1fr';
-  grid.style.gap = '16px';
-
-  // Panel 1
-  const p1 = document.createElement('div');
-  p1.className = 'panel';
-  p1.style.minHeight = '340px';
-  p1.innerHTML = `
-    <div class="panel-header">
-      <div class="panel-title" style="margin-bottom:0">Centralities</div>
-      <select id="measure-sel-1">
-        ${AVAILABLE_MEASURES.map(m => `<option value="${m}" ${m === state.selectedMeasure1 ? 'selected' : ''}>${m}</option>`).join('')}
+  // Top bar: sub-view selector + controls
+  const topBar = document.createElement('div');
+  topBar.className = 'panel';
+  topBar.style.padding = '10px 16px';
+  topBar.innerHTML = `
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <select id="cent-subview" style="font-size:13px;font-weight:700;padding:6px 12px;border:2px solid #2B4C7E;border-radius:6px;color:#2B4C7E;background:#f0f4fa;cursor:pointer">
+        <option value="charts" ${currentCentSubView === 'charts' ? 'selected' : ''}>Centrality Charts</option>
+        <option value="table" ${currentCentSubView === 'table' ? 'selected' : ''}>Centrality Table</option>
+        <option value="betweenness" ${currentCentSubView === 'betweenness' ? 'selected' : ''}>Betweenness Network</option>
+        <option value="stability" ${currentCentSubView === 'stability' ? 'selected' : ''}>Centrality Stability</option>
       </select>
+      <div id="cent-charts-controls" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:6px">
+          <label style="font-size:13px;color:#555;font-weight:600">Measure 1:</label>
+          <select id="measure-sel-1" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc"
+            ${AVAILABLE_MEASURES.map(m => `<option value="${m}" ${m === state.selectedMeasure1 ? 'selected' : ''}>${m}</option>`).join('')}
+          </select>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <label style="font-size:13px;color:#555;font-weight:600">Measure 2:</label>
+          <select id="measure-sel-2" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc"
+            ${AVAILABLE_MEASURES.map(m => `<option value="${m}" ${m === state.selectedMeasure2 ? 'selected' : ''}>${m}</option>`).join('')}
+          </select>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <label style="font-size:13px;color:#555;font-weight:600">Measure 3:</label>
+          <select id="measure-sel-3" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc"
+            ${AVAILABLE_MEASURES.map(m => `<option value="${m}" ${m === state.selectedMeasure3 ? 'selected' : ''}>${m}</option>`).join('')}
+          </select>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
+          <label style="font-size:13px;color:#555;font-weight:600">Include loops:</label>
+          <input type="checkbox" id="centrality-loops" ${state.centralityLoops ? 'checked' : ''}>
+        </div>
+      </div>
     </div>
-    <div id="viz-cent-1" style="width:100%;height:280px"></div>
   `;
-  grid.appendChild(p1);
+  content.appendChild(topBar);
 
-  // Panel 2
-  const p2 = document.createElement('div');
-  p2.className = 'panel';
-  p2.style.minHeight = '340px';
-  p2.innerHTML = `
-    <div class="panel-header">
-      <div class="panel-title" style="margin-bottom:0">Centralities</div>
-      <select id="measure-sel-2">
-        ${AVAILABLE_MEASURES.map(m => `<option value="${m}" ${m === state.selectedMeasure2 ? 'selected' : ''}>${m}</option>`).join('')}
-      </select>
-    </div>
-    <div id="viz-cent-2" style="width:100%;height:280px"></div>
-  `;
-  grid.appendChild(p2);
+  // Content area
+  const body = document.createElement('div');
+  body.id = 'cent-body';
+  content.appendChild(body);
 
-  content.appendChild(grid);
+  let currentCent = cent;
 
-  requestAnimationFrame(() => {
-    const el1 = document.getElementById('viz-cent-1');
-    const el2 = document.getElementById('viz-cent-2');
-    if (el1) renderCentralityChart(el1, cent, state.selectedMeasure1);
-    if (el2) renderCentralityChart(el2, cent, state.selectedMeasure2);
-  });
+  function renderCharts() {
+    body.innerHTML = '';
+    const grid = document.createElement('div');
+    grid.style.display = 'grid';
+    grid.style.gridTemplateColumns = '1fr 1fr 1fr';
+    grid.style.gap = '12px';
+    for (let i = 1; i <= 3; i++) {
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+      panel.style.minHeight = '320px';
+      panel.innerHTML = `<div id="viz-cent-${i}" style="width:100%;height:300px"></div>`;
+      grid.appendChild(panel);
+    }
+    body.appendChild(grid);
+    requestAnimationFrame(() => {
+      const el1 = document.getElementById('viz-cent-1');
+      const el2 = document.getElementById('viz-cent-2');
+      const el3 = document.getElementById('viz-cent-3');
+      if (el1) renderCentralityChart(el1, currentCent, state.selectedMeasure1);
+      if (el2) renderCentralityChart(el2, currentCent, state.selectedMeasure2);
+      if (el3) renderCentralityChart(el3, currentCent, state.selectedMeasure3);
+    });
+  }
 
-  // Centrality Stability section
-  const stabilityPanel = document.createElement('div');
-  stabilityPanel.className = 'panel';
-  stabilityPanel.style.gridColumn = '1 / -1';
-  stabilityPanel.innerHTML = `
-    <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px">
-      <div class="panel-title" style="margin-bottom:0">Centrality Stability (CS Coefficients)</div>
-      <button id="run-stability" class="btn-primary" style="font-size:11px;padding:4px 12px">Run Stability Analysis</button>
-    </div>
-    <div id="stability-results" style="color:#888;font-size:12px">Click "Run Stability Analysis" to estimate CS coefficients via case-dropping bootstrap.</div>
-  `;
-  grid.appendChild(stabilityPanel);
+  function renderTable() {
+    body.innerHTML = '';
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+    const measures = Object.keys(currentCent.measures);
+    let html = '<table class="preview-table" style="font-size:12px"><thead><tr><th>Node</th>';
+    for (const m of measures) html += `<th>${m}</th>`;
+    html += '</tr></thead><tbody>';
+    for (let i = 0; i < currentCent.labels.length; i++) {
+      html += `<tr><td style="font-weight:600">${currentCent.labels[i]}</td>`;
+      for (const m of measures) {
+        const v = currentCent.measures[m]?.[i] ?? 0;
+        html += `<td>${v.toFixed(4)}</td>`;
+      }
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+    panel.innerHTML = html;
+    body.appendChild(panel);
+  }
 
-  content.appendChild(grid);
+  function renderBetweenness() {
+    body.innerHTML = '';
+    renderBetweennessTab(body, model, state.networkSettings);
+  }
+
+  function renderStability() {
+    body.innerHTML = '';
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+    panel.style.maxWidth = '800px';
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
+        <div class="panel-title" style="margin-bottom:0">Centrality Stability (CS Coefficients)</div>
+        <button id="run-stability" class="btn-primary" style="font-size:11px;padding:4px 12px">Run Stability Analysis</button>
+      </div>
+      <div id="stability-results" style="color:#888;font-size:12px">Click "Run Stability Analysis" to estimate CS coefficients via case-dropping bootstrap.</div>
+    `;
+    body.appendChild(panel);
+    setTimeout(() => {
+      document.getElementById('run-stability')?.addEventListener('click', () => {
+        const resultsEl = document.getElementById('stability-results')!;
+        resultsEl.innerHTML = '<div style="display:flex;align-items:center;gap:8px"><div class="spinner" style="width:16px;height:16px;border-width:2px"></div><span>Running stability analysis...</span></div>';
+        setTimeout(() => {
+          try {
+            const result = estimateCS(model, { iter: 500, seed: 42 });
+            let html = '<table class="preview-table" style="font-size:12px;margin-bottom:12px"><thead><tr><th>Measure</th><th>CS Coefficient</th><th>Interpretation</th></tr></thead><tbody>';
+            for (const [measure, cs] of Object.entries(result.csCoefficients)) {
+              const interp = cs >= 0.5 ? 'Good' : cs >= 0.25 ? 'Moderate' : 'Unstable';
+              const color2 = cs >= 0.5 ? '#28a745' : cs >= 0.25 ? '#ffc107' : '#dc3545';
+              html += `<tr><td>${measure}</td><td>${cs.toFixed(2)}</td><td style="color:${color2};font-weight:600">${interp}</td></tr>`;
+            }
+            html += '</tbody></table>';
+            html += '<div id="viz-cs-chart" style="width:100%;height:220px"></div>';
+            resultsEl.innerHTML = html;
+            requestAnimationFrame(() => {
+              const chartEl = document.getElementById('viz-cs-chart');
+              if (chartEl) renderCSChart(chartEl, result);
+            });
+          } catch (err) {
+            resultsEl.innerHTML = `<span style="color:#dc3545">Error: ${(err as Error).message}</span>`;
+          }
+        }, 50);
+      });
+    }, 0);
+  }
+
+  function showSubView(view: CentralitySubView) {
+    currentCentSubView = view;
+    const chartsControls = document.getElementById('cent-charts-controls');
+    if (chartsControls) chartsControls.style.display = view === 'charts' ? 'flex' : 'none';
+    switch (view) {
+      case 'charts': renderCharts(); break;
+      case 'table': renderTable(); break;
+      case 'betweenness': renderBetweenness(); break;
+      case 'stability': renderStability(); break;
+    }
+  }
+
+  // Initial render
+  requestAnimationFrame(() => showSubView(currentCentSubView));
 
   // Events
   setTimeout(() => {
+    document.getElementById('cent-subview')?.addEventListener('change', (e) => {
+      showSubView((e.target as HTMLSelectElement).value as CentralitySubView);
+    });
     document.getElementById('measure-sel-1')?.addEventListener('change', (e) => {
       state.selectedMeasure1 = (e.target as HTMLSelectElement).value as CentralityMeasure;
       const el = document.getElementById('viz-cent-1');
-      if (el) renderCentralityChart(el, cent, state.selectedMeasure1);
+      if (el) renderCentralityChart(el, currentCent, state.selectedMeasure1);
     });
     document.getElementById('measure-sel-2')?.addEventListener('change', (e) => {
       state.selectedMeasure2 = (e.target as HTMLSelectElement).value as CentralityMeasure;
       const el = document.getElementById('viz-cent-2');
-      if (el) renderCentralityChart(el, cent, state.selectedMeasure2);
+      if (el) renderCentralityChart(el, currentCent, state.selectedMeasure2);
     });
-
-    document.getElementById('run-stability')?.addEventListener('click', () => {
-      const resultsEl = document.getElementById('stability-results')!;
-      resultsEl.innerHTML = '<div style="display:flex;align-items:center;gap:8px"><div class="spinner" style="width:16px;height:16px;border-width:2px"></div><span>Running stability analysis...</span></div>';
-
-      setTimeout(() => {
-        try {
-          const result = estimateCS(model, { iter: 500, seed: 42 });
-
-          let html = '<table class="preview-table" style="font-size:12px;margin-bottom:12px"><thead><tr><th>Measure</th><th>CS Coefficient</th><th>Interpretation</th></tr></thead><tbody>';
-          for (const [measure, cs] of Object.entries(result.csCoefficients)) {
-            const interp = cs >= 0.5 ? 'Good' : cs >= 0.25 ? 'Moderate' : 'Unstable';
-            const color = cs >= 0.5 ? '#28a745' : cs >= 0.25 ? '#ffc107' : '#dc3545';
-            html += `<tr><td>${measure}</td><td>${cs.toFixed(2)}</td><td style="color:${color};font-weight:600">${interp}</td></tr>`;
-          }
-          html += '</tbody></table>';
-
-          // Add line chart of mean correlation vs drop proportion
-          html += '<div id="viz-cs-chart" style="width:100%;height:220px"></div>';
-          resultsEl.innerHTML = html;
-
-          requestAnimationFrame(() => {
-            const chartEl = document.getElementById('viz-cs-chart');
-            if (chartEl) renderCSChart(chartEl, result);
-          });
-        } catch (err) {
-          resultsEl.innerHTML = `<span style="color:#dc3545">Error: ${(err as Error).message}</span>`;
-        }
-      }, 50);
+    document.getElementById('measure-sel-3')?.addEventListener('change', (e) => {
+      state.selectedMeasure3 = (e.target as HTMLSelectElement).value as CentralityMeasure;
+      const el = document.getElementById('viz-cent-3');
+      if (el) renderCentralityChart(el, currentCent, state.selectedMeasure3);
+    });
+    document.getElementById('centrality-loops')?.addEventListener('change', (e) => {
+      state.centralityLoops = (e.target as HTMLInputElement).checked;
+      saveState();
+      currentCent = computeCentralities(model);
+      if (currentCentSubView === 'charts') renderCharts();
+      else if (currentCentSubView === 'table') renderTable();
     });
   }, 0);
 }
@@ -931,11 +1054,6 @@ function renderFrequenciesTab(content: HTMLElement, model: any) {
   p1.innerHTML = `<div class="panel-title">State Frequencies</div><div id="viz-freq" style="width:100%"></div>`;
   grid.appendChild(p1);
 
-  const p2 = document.createElement('div');
-  p2.className = 'panel';
-  p2.innerHTML = `<div class="panel-title">State Associations (Mosaic)</div><div id="viz-mosaic" style="width:100%"></div>`;
-  grid.appendChild(p2);
-
   // Weight histogram (full-width row below)
   const p3 = document.createElement('div');
   p3.className = 'panel';
@@ -947,10 +1065,8 @@ function renderFrequenciesTab(content: HTMLElement, model: any) {
 
   requestAnimationFrame(() => {
     const freqEl = document.getElementById('viz-freq');
-    const mosaicEl = document.getElementById('viz-mosaic');
     const histEl = document.getElementById('viz-histogram');
     if (freqEl) renderFrequencies(freqEl, model);
-    if (mosaicEl) renderMosaic(mosaicEl, model);
     if (histEl) renderWeightHistogram(histEl, model);
   });
 }
@@ -981,8 +1097,9 @@ function renderSequencesTab(content: HTMLElement, _model: any) {
 }
 
 function renderCommunitiesTab(content: HTMLElement, model: any, _comm: any) {
-  const grid = document.createElement('div');
-  grid.className = 'panels-grid';
+  const wrapper = document.createElement('div');
+  wrapper.style.maxWidth = '1100px';
+  wrapper.style.margin = '0 auto';
 
   // Controls bar
   const controls = document.createElement('div');
@@ -991,35 +1108,41 @@ function renderCommunitiesTab(content: HTMLElement, model: any, _comm: any) {
   controls.innerHTML = `
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:6px">
-        <label style="font-size:12px;color:#777">Method:</label>
-        <select id="community-method" style="font-size:12px">
+        <label style="font-size:13px;color:#555;font-weight:600">Method:</label>
+        <select id="community-method" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
           ${AVAILABLE_METHODS.map(m =>
             `<option value="${m}" ${m === state.communityMethod ? 'selected' : ''}>${m.replace(/_/g, ' ')}</option>`
           ).join('')}
         </select>
       </div>
-      <button id="run-communities" class="btn-primary" style="font-size:12px;padding:6px 16px">Detect Communities</button>
+      <button id="run-communities" class="btn-primary" style="font-size:13px;padding:6px 16px">Detect Communities</button>
     </div>
   `;
-  grid.appendChild(controls);
+  wrapper.appendChild(controls);
 
-  // Network with communities
+  // Side-by-side: network (left) + results table (right)
   const h = state.networkSettings.networkHeight;
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:16px;align-items:flex-start';
+
   const netPanel = document.createElement('div');
   netPanel.className = 'panel';
+  netPanel.style.flex = '1 1 55%';
   netPanel.style.minHeight = `${h + 40}px`;
   netPanel.innerHTML = `
     <div class="panel-title">Network with Communities</div>
     <div id="viz-community-network" style="width:100%;height:${h}px"></div>
   `;
-  grid.appendChild(netPanel);
+  row.appendChild(netPanel);
 
-  // Results area (membership table appears here after detection)
   const resultsDiv = document.createElement('div');
   resultsDiv.id = 'community-results';
-  grid.appendChild(resultsDiv);
+  resultsDiv.style.flex = '1 1 40%';
+  resultsDiv.innerHTML = '<div class="panel" style="text-align:center;padding:30px;color:#888;font-size:13px">Click "Detect Communities" to analyze.</div>';
+  row.appendChild(resultsDiv);
 
-  content.appendChild(grid);
+  wrapper.appendChild(row);
+  content.appendChild(wrapper);
 
   // Render plain network initially
   requestAnimationFrame(() => {
@@ -1032,31 +1155,27 @@ function renderCommunitiesTab(content: HTMLElement, model: any, _comm: any) {
     state.communityMethod = (document.getElementById('community-method') as HTMLSelectElement).value as CommunityMethod;
     state.showCommunities = true;
 
-    // Show loading state
     const resultsEl = document.getElementById('community-results')!;
     resultsEl.innerHTML = '<div class="panel" style="text-align:center;padding:30px;color:#888"><div class="spinner" style="margin:0 auto 12px"></div>Running community detection...</div>';
 
-    // Run asynchronously so the UI updates
     setTimeout(() => {
       try {
         const comm = computeCommunities(model, state.communityMethod);
         cachedComm = comm;
 
-        // Re-render network with communities
         const el = document.getElementById('viz-community-network');
         if (el && comm) renderNetwork(el, model, state.networkSettings, comm);
 
-        // Render membership table
         if (comm?.assignments) {
           const methodKey = Object.keys(comm.assignments)[0];
           const assign: number[] | undefined = methodKey ? comm.assignments[methodKey] : undefined;
           if (assign && assign.length > 0) {
             const nComms = Math.max(...assign) + 1;
-            let html = `<div class="panel"><div class="panel-title">Community Membership (${methodKey}) — ${nComms} communities</div>`;
-            html += '<table class="preview-table" style="font-size:12px"><thead><tr><th>Community</th><th>Members</th><th>Count</th></tr></thead><tbody>';
-            for (let c = 0; c < nComms; c++) {
-              const members = model.labels.filter((_: string, i: number) => assign[i] === c);
-              html += `<tr><td style="font-weight:600">C${c + 1}</td><td>${members.join(', ')}</td><td>${members.length}</td></tr>`;
+            let html = `<div class="panel"><div class="panel-title">Membership (${methodKey}) — ${nComms} communities</div>`;
+            html += '<table class="preview-table" style="font-size:13px"><thead><tr><th>State</th><th>Community</th></tr></thead><tbody>';
+            for (let s = 0; s < model.labels.length; s++) {
+              const c = assign[s]!;
+              html += `<tr><td>${model.labels[s]}</td><td style="font-weight:600">C${c + 1}</td></tr>`;
             }
             html += '</tbody></table></div>';
             resultsEl.innerHTML = html;
@@ -1147,10 +1266,11 @@ function renderNetworkTabMulti(content: HTMLElement) {
     i++;
   }
   requestAnimationFrame(() => {
+    const gs = groupNetworkSettings(state.networkSettings);
     let j = 0;
     for (const [, model] of cachedModels) {
       const el = document.getElementById(`viz-network-g${j}`);
-      if (el) renderNetwork(el, model, state.networkSettings);
+      if (el) renderNetwork(el, model, gs);
       j++;
     }
   });
@@ -1161,78 +1281,106 @@ function renderCentralitiesTabMulti(content: HTMLElement) {
   // Shared controls at the top
   const controls = document.createElement('div');
   controls.className = 'panel multi-group-controls';
-  controls.style.padding = '12px 16px';
+  controls.style.padding = '10px 16px';
   controls.innerHTML = `
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:6px">
-        <label style="font-size:12px;color:#777">Measure 1:</label>
-        <select id="measure-sel-1" style="font-size:12px">
+        <label style="font-size:13px;color:#555;font-weight:600">Measure 1:</label>
+        <select id="measure-sel-1" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
           ${AVAILABLE_MEASURES.map(m => `<option value="${m}" ${m === state.selectedMeasure1 ? 'selected' : ''}>${m}</option>`).join('')}
         </select>
       </div>
       <div style="display:flex;align-items:center;gap:6px">
-        <label style="font-size:12px;color:#777">Measure 2:</label>
-        <select id="measure-sel-2" style="font-size:12px">
+        <label style="font-size:13px;color:#555;font-weight:600">Measure 2:</label>
+        <select id="measure-sel-2" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
           ${AVAILABLE_MEASURES.map(m => `<option value="${m}" ${m === state.selectedMeasure2 ? 'selected' : ''}>${m}</option>`).join('')}
         </select>
       </div>
-      <button id="run-stability" class="btn-primary" style="font-size:11px;padding:4px 12px">Run Stability Analysis</button>
+      <div style="display:flex;align-items:center;gap:6px">
+        <label style="font-size:13px;color:#555;font-weight:600">Measure 3:</label>
+        <select id="measure-sel-3" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
+          ${AVAILABLE_MEASURES.map(m => `<option value="${m}" ${m === state.selectedMeasure3 ? 'selected' : ''}>${m}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <label style="font-size:13px;color:#555;font-weight:600">Include loops:</label>
+        <input type="checkbox" id="centrality-loops" ${state.centralityLoops ? 'checked' : ''}>
+      </div>
+      <button id="run-stability" class="btn-primary" style="font-size:13px;padding:4px 12px;margin-left:auto">Run Stability Analysis</button>
     </div>
   `;
   content.appendChild(controls);
 
-  const grid = createMultiGroupGrid(content);
-  let i = 0;
-  for (const [groupName] of cachedModels) {
-    const card = createGroupCard(grid, groupName, i);
-    const cent = cachedCents.get(groupName)!;
-    card.innerHTML = `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div style="min-height:280px">
-          <div id="viz-cent-1-g${i}" style="width:100%;height:280px"></div>
-        </div>
-        <div style="min-height:280px">
-          <div id="viz-cent-2-g${i}" style="width:100%;height:280px"></div>
-        </div>
-      </div>
-      <div id="stability-results-g${i}" style="color:#888;font-size:12px;margin-top:8px"></div>
-    `;
-    i++;
-  }
-
-  requestAnimationFrame(() => {
+  function renderAllGroupCharts() {
     let j = 0;
     for (const [groupName] of cachedModels) {
       const cent = cachedCents.get(groupName)!;
-      const el1 = document.getElementById(`viz-cent-1-g${j}`);
-      const el2 = document.getElementById(`viz-cent-2-g${j}`);
-      if (el1) renderCentralityChart(el1, cent, state.selectedMeasure1);
-      if (el2) renderCentralityChart(el2, cent, state.selectedMeasure2);
+      for (let m = 1; m <= 3; m++) {
+        const el = document.getElementById(`viz-cent-${m}-g${j}`);
+        const measure = m === 1 ? state.selectedMeasure1 : m === 2 ? state.selectedMeasure2 : state.selectedMeasure3;
+        if (el) renderCentralityChart(el, cent, measure);
+      }
       j++;
     }
-  });
+  }
+
+  // Each group as a full-width row
+  const rows = document.createElement('div');
+  rows.style.display = 'flex';
+  rows.style.flexDirection = 'column';
+  rows.style.gap = '12px';
+  content.appendChild(rows);
+
+  let i = 0;
+  for (const [groupName] of cachedModels) {
+    const card = document.createElement('div');
+    card.className = 'group-card';
+    const color = GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]!;
+    card.innerHTML = `
+      <div class="group-card-header">
+        <span class="group-color-dot" style="background:${color}"></span>
+        ${groupName}
+      </div>
+      <div class="group-card-content" style="padding:8px">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <div id="viz-cent-1-g${i}" style="width:100%;height:240px"></div>
+          <div id="viz-cent-2-g${i}" style="width:100%;height:240px"></div>
+          <div id="viz-cent-3-g${i}" style="width:100%;height:240px"></div>
+        </div>
+        <div id="stability-results-g${i}" style="color:#888;font-size:12px;margin-top:4px"></div>
+      </div>
+    `;
+    rows.appendChild(card);
+    i++;
+  }
+
+  requestAnimationFrame(() => renderAllGroupCharts());
 
   // Wire shared measure selectors
   setTimeout(() => {
-    document.getElementById('measure-sel-1')?.addEventListener('change', (e) => {
-      state.selectedMeasure1 = (e.target as HTMLSelectElement).value as CentralityMeasure;
-      let j = 0;
-      for (const [groupName] of cachedModels) {
-        const cent = cachedCents.get(groupName)!;
-        const el = document.getElementById(`viz-cent-1-g${j}`);
-        if (el) renderCentralityChart(el, cent, state.selectedMeasure1);
-        j++;
+    for (let m = 1; m <= 3; m++) {
+      document.getElementById(`measure-sel-${m}`)?.addEventListener('change', (e) => {
+        const val = (e.target as HTMLSelectElement).value as CentralityMeasure;
+        if (m === 1) state.selectedMeasure1 = val;
+        else if (m === 2) state.selectedMeasure2 = val;
+        else state.selectedMeasure3 = val;
+        let j = 0;
+        for (const [groupName] of cachedModels) {
+          const cent = cachedCents.get(groupName)!;
+          const el = document.getElementById(`viz-cent-${m}-g${j}`);
+          if (el) renderCentralityChart(el, cent, val);
+          j++;
+        }
+      });
+    }
+    document.getElementById('centrality-loops')?.addEventListener('change', (e) => {
+      state.centralityLoops = (e.target as HTMLInputElement).checked;
+      saveState();
+      // Recompute centralities for all groups
+      for (const [groupName, model] of cachedModels) {
+        cachedCents.set(groupName, computeCentralities(model));
       }
-    });
-    document.getElementById('measure-sel-2')?.addEventListener('change', (e) => {
-      state.selectedMeasure2 = (e.target as HTMLSelectElement).value as CentralityMeasure;
-      let j = 0;
-      for (const [groupName] of cachedModels) {
-        const cent = cachedCents.get(groupName)!;
-        const el = document.getElementById(`viz-cent-2-g${j}`);
-        if (el) renderCentralityChart(el, cent, state.selectedMeasure2);
-        j++;
-      }
+      renderAllGroupCharts();
     });
 
     document.getElementById('run-stability')?.addEventListener('click', () => {
@@ -1335,29 +1483,38 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
   controls.innerHTML = `
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:6px">
-        <label style="font-size:12px;color:#777">Method:</label>
-        <select id="community-method" style="font-size:12px">
+        <label style="font-size:13px;color:#555;font-weight:600">Method:</label>
+        <select id="community-method" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
           ${AVAILABLE_METHODS.map(m =>
             `<option value="${m}" ${m === state.communityMethod ? 'selected' : ''}>${m.replace(/_/g, ' ')}</option>`
           ).join('')}
         </select>
       </div>
-      <button id="run-communities" class="btn-primary" style="font-size:12px;padding:6px 16px">Detect All</button>
+      <button id="run-communities" class="btn-primary" style="font-size:13px;padding:6px 16px">Detect All</button>
     </div>
   `;
   content.appendChild(controls);
 
-  const grid = createMultiGroupGrid(content);
+  // Each group as a full-width row with network + table side by side
   const h = groupNetworkHeight();
+  const gs = groupNetworkSettings(state.networkSettings);
   let i = 0;
   for (const [groupName, model] of cachedModels) {
-    const card = createGroupCard(grid, groupName, i);
-    card.innerHTML = `
-      <div style="min-height:${h + 40}px;padding:8px">
-        <div id="viz-community-network-g${i}" style="width:100%;height:${h}px"></div>
+    const groupRow = document.createElement('div');
+    groupRow.className = 'panel';
+    groupRow.style.cssText = 'margin-top:12px;padding:12px';
+    groupRow.innerHTML = `
+      <div class="panel-title" style="margin-bottom:8px;font-size:14px;color:${GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]}">${groupName}</div>
+      <div style="display:flex;gap:12px;align-items:flex-start">
+        <div style="flex:1 1 55%;min-height:${h}px">
+          <div id="viz-community-network-g${i}" style="width:100%;height:${h}px"></div>
+        </div>
+        <div id="community-results-g${i}" style="flex:1 1 40%;font-size:13px;color:#888;padding-top:8px">
+          Click "Detect All" to analyze.
+        </div>
       </div>
-      <div id="community-results-g${i}"></div>
     `;
+    content.appendChild(groupRow);
     i++;
   }
 
@@ -1366,7 +1523,7 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
     let j = 0;
     for (const [, model] of cachedModels) {
       const el = document.getElementById(`viz-community-network-g${j}`);
-      if (el) renderNetwork(el, model, state.networkSettings);
+      if (el) renderNetwork(el, model, gs);
       j++;
     }
   });
@@ -1386,7 +1543,7 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
       let idx = 0;
       for (const [groupName] of cachedModels) {
         const resultsEl = document.getElementById(`community-results-g${idx}`);
-        if (resultsEl) resultsEl.innerHTML = '<div style="text-align:center;padding:12px;color:#888;font-size:12px"><div class="spinner" style="width:16px;height:16px;border-width:2px;margin:0 auto 8px"></div>Detecting...</div>';
+        if (resultsEl) resultsEl.innerHTML = '<div style="text-align:center;padding:12px;color:#888;font-size:13px"><div class="spinner" style="width:16px;height:16px;border-width:2px;margin:0 auto 8px"></div>Detecting...</div>';
         idx++;
       }
 
@@ -1398,7 +1555,7 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
             cachedComms.set(groupName, comm);
 
             const el = document.getElementById(`viz-community-network-g${k}`);
-            if (el && comm) renderNetwork(el, model, state.networkSettings, comm);
+            if (el && comm) renderNetwork(el, model, gs, comm);
 
             const resultsEl = document.getElementById(`community-results-g${k}`);
             if (resultsEl && comm?.assignments) {
@@ -1406,20 +1563,21 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
               const assign: number[] | undefined = methodKey ? comm.assignments[methodKey] : undefined;
               if (assign && assign.length > 0) {
                 const nComms = Math.max(...assign) + 1;
-                let html = `<div style="font-size:11px;margin-top:8px"><strong>${nComms} communities</strong>: `;
-                for (let c = 0; c < nComms; c++) {
-                  const members = model.labels.filter((_: string, idx: number) => assign[idx] === c);
-                  html += `<span style="color:${GROUP_CARD_COLORS[c % GROUP_CARD_COLORS.length]}">C${c + 1}</span> (${members.join(', ')})${c < nComms - 1 ? ' | ' : ''}`;
+                let html = `<div><strong style="font-size:13px">${nComms} communities</strong></div>`;
+                html += '<table class="preview-table" style="font-size:12px;margin-top:6px"><thead><tr><th>State</th><th>Community</th></tr></thead><tbody>';
+                for (let s = 0; s < model.labels.length; s++) {
+                  const c = assign[s]!;
+                  html += `<tr><td>${model.labels[s]}</td><td style="font-weight:600;color:${GROUP_CARD_COLORS[c % GROUP_CARD_COLORS.length]}">C${c + 1}</td></tr>`;
                 }
-                html += '</div>';
+                html += '</tbody></table>';
                 resultsEl.innerHTML = html;
               } else {
-                resultsEl.innerHTML = '<div style="font-size:11px;color:#888;margin-top:8px">No communities detected.</div>';
+                resultsEl.innerHTML = '<div style="font-size:12px;color:#888">No communities detected.</div>';
               }
             }
           } catch (err) {
             const resultsEl = document.getElementById(`community-results-g${k}`);
-            if (resultsEl) resultsEl.innerHTML = `<span style="color:#dc3545;font-size:11px">Error: ${(err as Error).message}</span>`;
+            if (resultsEl) resultsEl.innerHTML = `<span style="color:#dc3545;font-size:12px">Error: ${(err as Error).message}</span>`;
           }
           k++;
         }

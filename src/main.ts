@@ -19,6 +19,10 @@ export interface NetworkSettings {
   nodeBorderColor: string;
   nodeLabelSize: number;
   nodeLabelColor: string;
+  nodeLabelOffset: number;       // vertical offset of label below node center (0 = centered)
+  nodeLabelHalo: boolean;        // draw a halo (stroke) behind label text
+  nodeLabelHaloColor: string;    // halo color
+  nodeLabelHaloWidth: number;    // halo stroke width
   showNodeLabels: boolean;
   nodeColors: Record<string, string>;
 
@@ -42,6 +46,11 @@ export interface NetworkSettings {
   arrowSize: number;
   arrowColor: string;
 
+  // Edge dash
+  edgeDashEnabled: boolean;
+  edgeDashDotted: string;
+  edgeDashDashed: string;
+
   // Self-loops
   showSelfLoops: boolean;
 
@@ -51,38 +60,61 @@ export interface NetworkSettings {
   networkHeight: number;
 }
 
+// Bump this whenever defaults change to force a localStorage reset
+export const SETTINGS_VERSION = 8;
+
 export function defaultNetworkSettings(): NetworkSettings {
   return {
-    nodeRadius: 35,
-    nodeBorderWidth: 2.5,
-    nodeBorderColor: '#ffffff',
+    nodeRadius: 22,
+    nodeBorderWidth: 2,
+    nodeBorderColor: '#999999',
     nodeLabelSize: 9,
-    nodeLabelColor: '#ffffff',
+    nodeLabelColor: '#000000',
+    nodeLabelOffset: 0,
+    nodeLabelHalo: true,
+    nodeLabelHaloColor: '#ffffff',
+    nodeLabelHaloWidth: 3,
     showNodeLabels: true,
     nodeColors: {},
 
-    pieBorderWidth: 0,
+    pieBorderWidth: 1,
     pieBorderColor: '#666666',
 
-    edgeWidthMin: 0.6,
-    edgeWidthMax: 2.8,
-    edgeOpacityMin: 0.2,
-    edgeOpacityMax: 0.55,
-    edgeColor: '#4a7fba',
-    edgeLabelSize: 7,
-    edgeLabelColor: '#555566',
+    edgeWidthMin: 0.3,
+    edgeWidthMax: 4,
+    edgeOpacityMin: 0.7,
+    edgeOpacityMax: 1.0,
+    edgeColor: '#2B4C7E',
+    edgeLabelSize: 9,
+    edgeLabelColor: '#2B4C7E',
     showEdgeLabels: true,
     edgeCurvature: 22,
     edgeThreshold: 0.05,
 
-    arrowSize: 10,
-    arrowColor: '#3a6a9f',
+    edgeDashEnabled: false,
+    edgeDashDotted: '2,3',
+    edgeDashDashed: '5,3',
 
-    showSelfLoops: false,
+    arrowSize: 8,
+    arrowColor: '#2B4C7E',
+
+    showSelfLoops: true,
 
     layout: 'circular',
-    graphPadding: 0,
+    graphPadding: 25,
     networkHeight: 580,
+  };
+}
+
+/** Scale settings down for group-mode (smaller containers). */
+export function groupNetworkSettings(base: NetworkSettings): NetworkSettings {
+  return {
+    ...base,
+    nodeRadius: Math.round(base.nodeRadius * 0.65),
+    nodeLabelSize: Math.round(base.nodeLabelSize * 0.85),
+    edgeLabelSize: Math.round(base.edgeLabelSize * 0.85),
+    arrowSize: Math.round(base.arrowSize * 0.75),
+    graphPadding: 5,
   };
 }
 
@@ -108,6 +140,8 @@ export interface AppState {
   communityMethod: CommunityMethod;
   selectedMeasure1: CentralityMeasure;
   selectedMeasure2: CentralityMeasure;
+  selectedMeasure3: CentralityMeasure;
+  centralityLoops: boolean;
   clusterMode: boolean;
   clusterK: number;
   clusterDissimilarity: 'hamming' | 'lv' | 'osa' | 'lcs';
@@ -136,8 +170,10 @@ export const state: AppState = {
   clusterDissimilarity: 'hamming',
   showCommunities: false,
   communityMethod: 'edge_betweenness',
-  selectedMeasure1: 'OutStrength',
-  selectedMeasure2: 'Betweenness',
+  selectedMeasure1: 'InStrength',
+  selectedMeasure2: 'BetweennessRSP',
+  selectedMeasure3: 'OutStrength',
+  centralityLoops: false,
   activeTab: 'network',
   error: null,
   networkSettings: defaultNetworkSettings(),
@@ -195,7 +231,7 @@ export function getGroupNames(model: TNA | GroupTNA): string[] {
 export { isGroupTNA };
 
 export function computeCentralities(model: TNA): CentralityResult {
-  return centralities(model);
+  return centralities(model, { loops: state.centralityLoops });
 }
 
 export function computeCommunities(model: TNA, method?: CommunityMethod): CommunityResult | undefined {
@@ -218,6 +254,7 @@ export { AVAILABLE_MEASURES, AVAILABLE_METHODS, clusterSequences, prune };
 //  State persistence
 // ═══════════════════════════════════════════════════════════
 const STORAGE_KEY = 'tna-desktop-state';
+const VERSION_KEY = 'tna-desktop-settings-version';
 
 export function saveState() {
   try {
@@ -228,6 +265,7 @@ export function saveState() {
       toSave[key] = val;
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+    localStorage.setItem(VERSION_KEY, String(SETTINGS_VERSION));
   } catch { /* quota exceeded or private browsing — ignore */ }
 }
 
@@ -236,6 +274,11 @@ function loadState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return;
     const saved = JSON.parse(raw) as Partial<AppState>;
+
+    // Check settings version — if stale, discard saved networkSettings
+    const savedVersion = parseInt(localStorage.getItem(VERSION_KEY) ?? '0', 10);
+    const settingsStale = savedVersion < SETTINGS_VERSION;
+
     // Data is no longer persisted — always start at welcome
     // Only restore settings/preferences
     state.format = saved.format ?? 'wide';
@@ -250,10 +293,17 @@ function loadState() {
     state.clusterDissimilarity = saved.clusterDissimilarity ?? 'hamming';
     state.showCommunities = saved.showCommunities ?? false;
     state.communityMethod = saved.communityMethod ?? 'louvain';
-    state.selectedMeasure1 = saved.selectedMeasure1 ?? 'OutStrength';
-    state.selectedMeasure2 = saved.selectedMeasure2 ?? 'Betweenness';
+    state.selectedMeasure1 = saved.selectedMeasure1 ?? 'InStrength';
+    state.selectedMeasure2 = saved.selectedMeasure2 ?? 'BetweennessRSP';
+    state.selectedMeasure3 = saved.selectedMeasure3 ?? 'OutStrength';
+    state.centralityLoops = saved.centralityLoops ?? false;
     state.activeTab = saved.activeTab ?? 'network';
-    state.networkSettings = { ...defaultNetworkSettings(), ...(saved.networkSettings ?? {}) };
+    // Reset network settings to fresh defaults when version bumps
+    if (settingsStale) {
+      state.networkSettings = defaultNetworkSettings();
+    } else {
+      state.networkSettings = { ...defaultNetworkSettings(), ...(saved.networkSettings ?? {}) };
+    }
   } catch { /* corrupt data — start fresh */ }
 }
 

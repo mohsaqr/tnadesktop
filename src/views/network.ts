@@ -254,7 +254,7 @@ function spectralLayout(
 
 function computeEdgePath(
   sx: number, sy: number, tx: number, ty: number,
-  curvature: number, nodeRadius: number,
+  curvature: number, outerRadius: number, arrowSize: number,
 ) {
   const dx = tx - sx;
   const dy = ty - sy;
@@ -272,8 +272,8 @@ function computeEdgePath(
   const sdx = mx - sx;
   const sdy = my - sy;
   const slen = Math.sqrt(sdx * sdx + sdy * sdy);
-  const startX = sx + (sdx / slen) * nodeRadius;
-  const startY = sy + (sdy / slen) * nodeRadius;
+  const startX = sx + (sdx / slen) * outerRadius;
+  const startY = sy + (sdy / slen) * outerRadius;
 
   const edx = tx - mx;
   const edy = ty - my;
@@ -281,10 +281,11 @@ function computeEdgePath(
   const eux = edx / elen;
   const euy = edy / elen;
 
-  const tipX = tx - eux * nodeRadius;
-  const tipY = ty - euy * nodeRadius;
-  const endX = tx - eux * (nodeRadius + 8);
-  const endY = ty - euy * (nodeRadius + 8);
+  // Arrow tip sits at the outer radius; edge path ends at the arrow base
+  const tipX = tx - eux * outerRadius;
+  const tipY = ty - euy * outerRadius;
+  const endX = tx - eux * (outerRadius + arrowSize);
+  const endY = ty - euy * (outerRadius + arrowSize);
 
   const t = 0.55;
   const labelX = (1 - t) * (1 - t) * startX + 2 * (1 - t) * t * mx + t * t * endX;
@@ -323,9 +324,11 @@ function renderSelfLoop(
   widthScale: d3.ScaleLinear<number, number>,
   opacityScale: d3.ScaleLinear<number, number>,
   cx: number, cy: number,
+  outerRadius: number,
+  getDashArray?: (weight: number) => string | null,
 ) {
-  const r = settings.nodeRadius;
-  const loopR = r * 0.55;
+  const loopR = settings.nodeRadius * 0.7; // visible loop
+  const margin = 3; // clear gap between donut ring and arc
 
   // Direction outward from graph center
   let dirX = node.x - cx;
@@ -334,14 +337,13 @@ function renderSelfLoop(
   dirX /= dirLen;
   dirY /= dirLen;
 
-  // Place loop center outward from node (fully outside)
-  const loopCX = node.x + dirX * (r + loopR);
-  const loopCY = node.y + dirY * (r + loopR);
+  // Place loop center outward, with margin so inner edge doesn't touch donut ring
+  const loopCX = node.x + dirX * (outerRadius + margin + loopR);
+  const loopCY = node.y + dirY * (outerRadius + margin + loopR);
 
-  // Gap faces the node (toward center). Compute angle of the "toward node" direction
-  // relative to the loop circle center
+  // Gap faces the node — the two endpoints of the arc sit near the outer border
   const toNodeAngle = Math.atan2(node.y - loopCY, node.x - loopCX);
-  const gapHalf = 0.4;
+  const gapHalf = 0.5; // slightly wider gap for cleaner look
   const startAngle = toNodeAngle + gapHalf;
   const endAngle = toNodeAngle - gapHalf + 2 * Math.PI;
 
@@ -350,23 +352,47 @@ function renderSelfLoop(
   const ex = loopCX + loopR * Math.cos(endAngle);
   const ey = loopCY + loopR * Math.sin(endAngle);
 
-  const op = Math.min(opacityScale(weight) + 0.15, 1); // boost self-loop visibility
-  const sw = Math.max(widthScale(weight), 1.2); // minimum visible thickness
+  const op = Math.min(opacityScale(weight) + 0.15, 1);
+  // Cap self-loop stroke width to avoid blobby arcs
+  const sw = Math.min(Math.max(widthScale(weight), 1.0), 4);
 
-  edgeGroup.append('path')
-    .attr('d', `M${sx},${sy} A${loopR},${loopR} 0 1,0 ${ex},${ey}`)
+  // Determine correct sweep flag: the arc should bulge OUTWARD (away from node).
+  // Compute the midpoint of the large arc for sweep=0 vs sweep=1 and pick the
+  // one whose midpoint is further from the node.
+  const midAngle0 = startAngle + (2 * Math.PI - gapHalf * 2) / 2; // going CCW (sweep=0 candidate)
+  const midAngle1 = startAngle - (gapHalf * 2) / 2;               // going CW (sweep=1 candidate)
+  const mid0x = loopCX + loopR * Math.cos(midAngle0);
+  const mid0y = loopCY + loopR * Math.sin(midAngle0);
+  const mid1x = loopCX + loopR * Math.cos(midAngle1);
+  const mid1y = loopCY + loopR * Math.sin(midAngle1);
+  const dist0 = (mid0x - node.x) ** 2 + (mid0y - node.y) ** 2;
+  const dist1 = (mid1x - node.x) ** 2 + (mid1y - node.y) ** 2;
+  const sweep = dist0 >= dist1 ? 1 : 0;
+
+  const selfLoopPath = edgeGroup.append('path')
+    .attr('d', `M${sx},${sy} A${loopR},${loopR} 0 1,${sweep} ${ex},${ey}`)
     .attr('fill', 'none')
     .attr('stroke', settings.edgeColor)
     .attr('stroke-width', sw)
     .attr('stroke-opacity', op)
     .attr('stroke-linecap', 'round');
+  const selfDash = getDashArray ? getDashArray(weight) : null;
+  if (selfDash) selfLoopPath.attr('stroke-dasharray', selfDash);
 
-  // Arrow at end pointing back toward node
-  const adx = node.x - ex;
-  const ady = node.y - ey;
+  // Arrow at end — use the actual SVG path to get the tangent direction
+  const pathEl = selfLoopPath.node()!;
+  const totalLen = pathEl.getTotalLength();
+  const nearEnd = pathEl.getPointAtLength(totalLen - 2);
+  const atEnd = pathEl.getPointAtLength(totalLen);
+  const adx = atEnd.x - nearEnd.x;
+  const ady = atEnd.y - nearEnd.y;
   const al = Math.sqrt(adx * adx + ady * ady) || 1;
+  const selfArrowSize = settings.arrowSize;
+  const tipOffset = 4; // push arrow tip a few px ahead into the gap
+  const tipX = atEnd.x + (adx / al) * tipOffset;
+  const tipY = atEnd.y + (ady / al) * tipOffset;
   arrowGroup.append('polygon')
-    .attr('points', arrowPoly(ex, ey, adx / al, ady / al, settings.arrowSize))
+    .attr('points', arrowPoly(tipX, tipY, adx / al, ady / al, selfArrowSize))
     .attr('fill', settings.arrowColor)
     .attr('opacity', op);
 
@@ -382,6 +408,10 @@ function renderSelfLoop(
       .attr('font-size', `${settings.edgeLabelSize}px`)
       .attr('fill', settings.edgeLabelColor)
       .attr('pointer-events', 'none')
+      .style('paint-order', 'stroke')
+      .style('stroke', '#ffffff')
+      .style('stroke-width', '3px')
+      .style('stroke-linejoin', 'round')
       .text(weight.toFixed(2).replace(/^0\./, '.'));
   }
 }
@@ -399,7 +429,9 @@ export function renderNetwork(
   const n = model.labels.length;
   const weights = model.weights;
   const nodeRadius = settings.nodeRadius;
-  const padding = nodeRadius + settings.graphPadding;
+  // Padding: just enough for nodes + self-loops to not clip
+  const selfLoopExtent = settings.showSelfLoops ? (nodeRadius * 0.7 * 2 + 6) : 0;
+  const padding = nodeRadius + Math.max(settings.graphPadding, selfLoopExtent);
 
   // ─── Layout ───
   let positions: { x: number; y: number }[];
@@ -448,7 +480,7 @@ export function renderNetwork(
     for (let j = 0; j < n; j++) {
       if (i === j) continue;
       const w = weights.get(i, j);
-      if (w >= settings.edgeThreshold) edges.push({ fromIdx: i, toIdx: j, weight: w });
+      if (w > 0 && w >= settings.edgeThreshold) edges.push({ fromIdx: i, toIdx: j, weight: w });
     }
   }
 
@@ -459,9 +491,40 @@ export function renderNetwork(
     }
   }
 
+  // ─── Compute effective outer radius (includes donut ring + border) ───
+  const rimWidth = nodeRadius * 0.18;
+  const rimRadius = nodeRadius + rimWidth * 0.7;
+  const outerRadius = rimRadius + rimWidth / 2 + Math.max(settings.pieBorderWidth, 0) / 2 + 1;
+
   const maxW = Math.max(...edges.map(e => e.weight), 1e-6);
   const widthScale = d3.scaleLinear().domain([0, maxW]).range([settings.edgeWidthMin, settings.edgeWidthMax]);
   const opacityScale = d3.scaleLinear().domain([0, maxW]).range([settings.edgeOpacityMin, settings.edgeOpacityMax]);
+
+  // ─── Edge dash thresholds ───
+  const { edgeDashEnabled, edgeDashDotted, edgeDashDashed } = settings;
+  let dashThreshLow = 0, dashThreshHigh = 0;
+  if (edgeDashEnabled) {
+    // Collect all edge weights (including self-loops if shown)
+    const allWeights: number[] = edges.map(e => e.weight);
+    if (settings.showSelfLoops) {
+      for (let i = 0; i < n; i++) {
+        const w = weights.get(i, i);
+        if (w >= settings.edgeThreshold) allWeights.push(w);
+      }
+    }
+    const sortedWeights = allWeights.slice().sort((a, b) => a - b);
+    const nw = sortedWeights.length;
+    // Bottom 25% dotted, 25-50% dashed, top 50% solid
+    dashThreshLow = sortedWeights[Math.floor(nw * 0.25)] ?? 0;
+    dashThreshHigh = sortedWeights[Math.floor(nw * 0.50)] ?? 0;
+  }
+
+  function getDashArray(weight: number): string | null {
+    if (!edgeDashEnabled) return null;
+    if (weight <= dashThreshLow) return edgeDashDotted;
+    if (weight <= dashThreshHigh) return edgeDashDashed;
+    return null;
+  }
 
   // ─── SVG ───
   container.innerHTML = '';
@@ -476,6 +539,10 @@ export function renderNetwork(
   const arrowGroup = svg.append('g');
   const edgeLabelGroup = svg.append('g');
   const nodeGroup = svg.append('g');
+  // Self-loop layer ABOVE nodes so donut ring doesn't cover them
+  const selfLoopGroup = svg.append('g');
+  const selfLoopArrowGroup = svg.append('g');
+  const selfLoopLabelGroup = svg.append('g');
 
   // ─── Self-loops ───
   if (settings.showSelfLoops) {
@@ -484,8 +551,8 @@ export function renderNetwork(
     const centY = nodes.reduce((s, nd) => s + nd.y, 0) / nodes.length;
     for (let i = 0; i < n; i++) {
       const w = weights.get(i, i);
-      if (w >= settings.edgeThreshold) {
-        renderSelfLoop(edgeGroup, arrowGroup, edgeLabelGroup, nodes[i]!, w, settings, widthScale, opacityScale, centX, centY);
+      if (w > 0 && w >= settings.edgeThreshold) {
+        renderSelfLoop(selfLoopGroup, selfLoopArrowGroup, selfLoopLabelGroup, nodes[i]!, w, settings, widthScale, opacityScale, centX, centY, outerRadius, getDashArray);
       }
     }
   }
@@ -497,19 +564,22 @@ export function renderNetwork(
     const isBidir = bidir.has(`${e.fromIdx}-${e.toIdx}`);
     const curvature = isBidir ? settings.edgeCurvature : 0;
     const { path, tipX, tipY, tipDx, tipDy, labelX, labelY } = computeEdgePath(
-      src.x, src.y, tgt.x, tgt.y, curvature, nodeRadius,
+      src.x, src.y, tgt.x, tgt.y, curvature, outerRadius, settings.arrowSize,
     );
     if (!path) continue;
 
     const op = opacityScale(e.weight);
 
-    edgeGroup.append('path')
+    const edgePath = edgeGroup.append('path')
       .attr('d', path)
       .attr('fill', 'none')
       .attr('stroke', settings.edgeColor)
       .attr('stroke-width', widthScale(e.weight))
       .attr('stroke-opacity', op)
-      .attr('stroke-linecap', 'round')
+      .attr('stroke-linecap', 'round');
+    const dash = getDashArray(e.weight);
+    if (dash) edgePath.attr('stroke-dasharray', dash);
+    edgePath
       .on('mouseover', function (event: MouseEvent) {
         d3.select(this).attr('stroke', '#e15759').attr('stroke-opacity', 0.85);
         showTooltip(event, `<b>${src.id} → ${tgt.id}</b><br>Weight: ${e.weight.toFixed(4)}`);
@@ -538,14 +608,15 @@ export function renderNetwork(
         .attr('font-size', `${settings.edgeLabelSize}px`)
         .attr('fill', settings.edgeLabelColor)
         .attr('pointer-events', 'none')
+        .style('paint-order', 'stroke')
+        .style('stroke', '#ffffff')
+        .style('stroke-width', '3px')
+        .style('stroke-linejoin', 'round')
         .text(e.weight.toFixed(2).replace(/^0\./, '.'));
     }
   }
 
   // ─── Nodes ───
-  const rimWidth = nodeRadius * 0.18; // donut ring thickness
-  const rimRadius = nodeRadius + rimWidth * 0.7; // center of the donut ring
-
   const nodeEnter = nodeGroup.selectAll('g.node')
     .data(nodes)
     .enter()
@@ -613,12 +684,21 @@ export function renderNetwork(
     .attr('stroke', settings.nodeBorderColor)
     .attr('stroke-width', settings.nodeBorderWidth);
 
+  // Node labels with optional offset and halo
   if (settings.showNodeLabels) {
+    const labelY = settings.nodeLabelOffset;
     nodeEnter.append('text')
       .attr('class', 'node-label')
+      .attr('y', labelY)
       .attr('dy', '0.35em')
       .style('font-size', `${settings.nodeLabelSize}px`)
       .style('fill', settings.nodeLabelColor)
+      .style('text-anchor', 'middle')
+      .style('pointer-events', 'none')
+      .style('paint-order', settings.nodeLabelHalo ? 'stroke' : 'normal')
+      .style('stroke', settings.nodeLabelHalo ? settings.nodeLabelHaloColor : 'none')
+      .style('stroke-width', settings.nodeLabelHalo ? `${settings.nodeLabelHaloWidth}px` : '0')
+      .style('stroke-linejoin', 'round')
       .text(d => d.id);
   }
 

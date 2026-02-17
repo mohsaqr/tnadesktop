@@ -25,7 +25,7 @@ export function renderCentralityChart(
   const rect = container.getBoundingClientRect();
   const width = Math.max(rect.width, 300);
   const height = Math.max(rect.height, 280);
-  const margin = { top: 10, right: 50, bottom: 10, left: 85 };
+  const margin = { top: 10, right: 50, bottom: 28, left: 85 };
   const innerW = width - margin.left - margin.right;
   const innerH = height - margin.top - margin.bottom;
 
@@ -85,4 +85,14 @@ export function renderCentralityChart(
   g.append('g')
     .attr('class', 'axis')
     .call(d3.axisLeft(y).tickSize(0).tickPadding(8));
+
+  // Measure name label below chart
+  svg.append('text')
+    .attr('x', width / 2)
+    .attr('y', height - 4)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '12px')
+    .attr('font-weight', '600')
+    .attr('fill', '#444')
+    .text(measure);
 }
