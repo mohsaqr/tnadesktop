@@ -6,20 +6,61 @@ Built with [Tauri v2](https://v2.tauri.app/), [Vite](https://vite.dev/), TypeScr
 
 ## Features
 
-- Import CSV / Excel sequence data
-- Build transition networks (TNA, fTNA, cTNA, aTNA)
-- Interactive network visualization with drag, zoom, and tooltips
-- Centrality analysis with bar chart comparisons
-- State frequency distributions and histograms
-- Sequence mosaic plots
-- Export results as PDF or PNG
-- Cross-platform: macOS, Windows, Linux
+### Data Import
+- Import **CSV** and **Excel** (.xlsx, .xls) files
+- **Wide format** (rows = sequences, columns = time steps) and **long format** (ID, time, state columns)
+- Auto-detection of data format (wide vs long)
+- Smart column guessing for long format — auto-detects ID, time, and state columns by header name patterns
+- Robust timestamp parsing: ISO 8601, US/EU date formats, Unix timestamps, and more
+- Optional time column (use row order instead)
+- Data preview with table display before analysis
+
+### Network Models
+- **TNA** — Relative transition probabilities
+- **fTNA** — Frequency-based transitions
+- **cTNA** — Co-occurrence transitions
+- **aTNA** — Attention-weighted transitions
+- Adjustable **prune threshold** to filter weak edges
+
+### Network Visualization
+- Interactive D3-based network graph with tooltips
+- **4 layout algorithms:** Circular, Spring (force-directed), Kamada-Kawai, Spectral
+- **Donut rings** on nodes showing initial state probabilities (with optional pie borders)
+- Configurable self-loops that render outward from graph center
+- Full control over every visual parameter via sidebar controls:
+
+| Category | Controls |
+|----------|----------|
+| **Layout** | Algorithm, padding, drawing height |
+| **Nodes** | Radius, border width/color, label size/color, show/hide labels, pie border width/color |
+| **Edges** | Width min/max, opacity min/max, color, curvature, display threshold, self-loops toggle |
+| **Arrows** | Size, color |
+| **Edge Labels** | Size, color, show/hide |
+| **Node Colors** | Per-state color pickers with reset button |
+
+### Analysis Tabs
+- **Network** — Interactive network graph
+- **Centralities** — Dual bar charts with selectable centrality measures (OutStrength, InStrength, Betweenness, Closeness, etc.)
+- **Frequencies** — State frequency bar chart + mosaic plot showing state associations with standardized residuals
+- **Sequences** — State distribution over time (stacked bar) + compact sequence index plot
+- **Communities** — Community detection with toggle, method selection (Louvain, etc.), network with community coloring, and membership table
+
+### Other
+- **State persistence** — page refresh preserves your entire analysis (data, settings, active tab)
+- Export results as **PDF** or **PNG**
+- Cross-platform: **macOS**, **Windows**, **Linux**
 
 ## Prerequisites
 
 ### Node.js
 
-Node.js **>= 18** is required. Install from [nodejs.org](https://nodejs.org/) or via a version manager like [nvm](https://github.com/nvm-sh/nvm).
+Node.js **>= 18** is required. Install from [nodejs.org](https://nodejs.org/) or via a version manager like [nvm](https://github.com/nvm-sh/nvm):
+
+```bash
+# Using nvm
+nvm install 18
+nvm use 18
+```
 
 ### Rust
 
@@ -29,10 +70,19 @@ Install Rust via [rustup](https://rustup.rs/):
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
+After installation, restart your terminal and verify:
+
+```bash
+rustc --version
+cargo --version
+```
+
 ### Tauri v2 System Dependencies
 
 **macOS:**
-- Xcode Command Line Tools: `xcode-select --install`
+```bash
+xcode-select --install
+```
 
 **Linux (Debian/Ubuntu):**
 ```bash
@@ -41,25 +91,42 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
   libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 ```
 
+**Linux (Fedora):**
+```bash
+sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file \
+  libxdo-devel libappindicator-gtk3-devel librsvg2-devel
+```
+
 **Windows:**
 - [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (install "Desktop development with C++")
 - [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (pre-installed on Windows 10/11)
 
 See the [Tauri v2 prerequisites guide](https://v2.tauri.app/start/prerequisites/) for full details.
 
-## Getting Started
+## Installation & Getting Started
 
 ```bash
-# Clone the repository
+# 1. Clone the repository
 git clone https://github.com/mohsaqr/tnadesktop.git
 cd tnadesktop
 
-# Install npm dependencies
+# 2. Install npm dependencies
 npm install
 
-# Run in development mode (hot-reload)
+# 3. Run in development mode (opens the app with hot-reload)
 npm run tauri dev
 ```
+
+### Web-only Development (no Rust/Tauri needed)
+
+To work on the frontend without installing Rust:
+
+```bash
+npm install
+npm run dev
+```
+
+This starts a Vite dev server at `http://localhost:5173`. File import uses the browser file picker instead of native dialogs.
 
 ## Production Build
 
@@ -67,38 +134,63 @@ npm run tauri dev
 npm run tauri build
 ```
 
-This produces platform-specific binaries:
-- **macOS:** `.app` bundle and `.dmg` in `src-tauri/target/release/bundle/`
-- **Windows:** `.msi` installer in `src-tauri/target/release/bundle/`
-- **Linux:** `.deb` and `.AppImage` in `src-tauri/target/release/bundle/`
+This produces platform-specific installers:
+
+| Platform | Output | Location |
+|----------|--------|----------|
+| **macOS** | `.app` bundle, `.dmg` | `src-tauri/target/release/bundle/macos/` |
+| **Windows** | `.msi` installer | `src-tauri/target/release/bundle/msi/` |
+| **Linux** | `.deb`, `.AppImage` | `src-tauri/target/release/bundle/deb/`, `appimage/` |
 
 ## Project Structure
 
 ```
-index.html              # App entry point
+index.html                # App entry point
 src/
-  main.ts               # App bootstrap and routing
-  data.ts               # Data loading and management
-  styles.css            # Global styles
+  main.ts                 # App state, routing, model building, state persistence
+  data.ts                 # CSV/Excel parsing, format detection, timestamp parsing
+  styles.css              # Global styles (sidebar, collapsibles, controls)
   views/
-    welcome.ts          # Landing page
-    preview.ts          # Data preview after import
-    dashboard.ts        # Main analysis dashboard
-    network.ts          # Network visualization (D3)
-    centralities.ts     # Centrality bar charts
-    frequencies.ts      # State frequency charts
-    sequences.ts        # Sequence visualization
-    mosaic.ts           # Mosaic plot
-    colors.ts           # Color palette management
-    export.ts           # PDF/PNG export
+    welcome.ts            # Landing page with file upload
+    preview.ts            # Data preview with format/column selection
+    dashboard.ts          # Main dashboard: sidebar controls + tabbed panels
+    network.ts            # Network graph (4 layouts, self-loops, donut rings)
+    centralities.ts       # Centrality bar charts
+    frequencies.ts        # State frequency bar charts
+    sequences.ts          # Sequence index plot + state distribution
+    mosaic.ts             # Mosaic plot with standardized residuals
+    colors.ts             # Color palette (nodes + communities)
+    export.ts             # PDF/PNG export dialog
 src-tauri/
-  src/main.rs           # Tauri backend
-  Cargo.toml            # Rust dependencies
-  tauri.conf.json       # Tauri configuration
-  capabilities/         # Permission capabilities
-vite.config.ts          # Vite configuration
-tsconfig.json           # TypeScript configuration
+  src/main.rs             # Tauri backend
+  Cargo.toml              # Rust dependencies
+  tauri.conf.json         # Tauri configuration
+  capabilities/           # Permission capabilities
+vite.config.ts            # Vite configuration
+tsconfig.json             # TypeScript configuration
+package.json              # Node dependencies
 ```
+
+## Usage
+
+1. **Open a file** — Click "Open File" or drag-and-drop a CSV/Excel file
+2. **Preview data** — Check the data table, select format (wide/long), adjust column mappings if needed
+3. **Analyze** — Click "Analyze" to build the transition network
+4. **Explore tabs** — Switch between Network, Centralities, Frequencies, Sequences, and Communities
+5. **Customize** — Expand "Network Appearance" in the sidebar to adjust every visual parameter
+6. **Export** — Click "Export" to save as PDF or PNG
+
+## Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| [tnaj](https://github.com/mohsaqr/tna-js) | TNA computations (models, centralities, communities, pruning) |
+| [D3.js](https://d3js.org/) | Network visualization and charts |
+| [PapaParse](https://www.papaparse.com/) | CSV parsing |
+| [SheetJS](https://sheetjs.com/) | Excel file reading |
+| [jsPDF](https://github.com/parallax/jsPDF) | PDF export |
+| [html2canvas](https://html2canvas.hertzen.com/) | PNG export |
+| [Tauri v2](https://v2.tauri.app/) | Native desktop shell |
 
 ## License
 
