@@ -2,6 +2,7 @@
  * Analysis dashboard: sidebar controls + tabbed visualization panels.
  */
 import type { TNA, GroupTNA, CentralityResult, CommunityResult, CentralityMeasure, CommunityMethod } from 'tnaj';
+import { betweennessNetwork } from 'tnaj';
 import type { NetworkSettings } from '../main';
 import { state, render, saveState, buildModel, buildGroupModel, computeCentralities, computeCommunities, computeSummary, groupNetworkSettings, AVAILABLE_MEASURES, AVAILABLE_METHODS, prune } from '../main';
 import { renderNetwork, renderNetworkIntoGroup } from './network';
@@ -116,6 +117,10 @@ let cachedComm: CommunityResult | undefined = undefined;
 let cachedModels: Map<string, TNA> = new Map();
 let cachedCents: Map<string, CentralityResult> = new Map();
 let cachedComms: Map<string, CommunityResult | undefined> = new Map();
+
+// ─── Bootstrap model caches (populated when bootstrap runs, for live network updates) ───
+let cachedBootModel: TNA | null = null;
+let cachedBootModels: Map<string, TNA> = new Map();
 
 // ─── Group-analysis caches (populated by clustering or column-group activation) ───
 let activeGroupModels: Map<string, TNA> = new Map();
@@ -238,23 +243,100 @@ function updateNetworkOnly() {
   if (!cachedModel) return;
   const mode = state.activeMode;
   const sub = state.activeSubTab;
+  const secId = state.activeSecondaryTab;
+  const isMulti = mode !== 'single' && mode !== 'onehot';
+  const s = state.networkSettings;
 
-  if ((mode === 'single' || mode === 'onehot') && sub === 'network') {
+  // ── Single / One-hot Network tab ──
+  if (!isMulti && sub === 'network') {
     const el = document.getElementById('viz-network');
-    if (el) renderNetwork(el, cachedModel, state.networkSettings);
-  } else if (sub === 'communities') {
-    if (mode !== 'single' && mode !== 'onehot' && isGroupAnalysisActive() && cachedModels.size > 0) {
-      const gs = groupNetworkSettings(state.networkSettings);
+    if (el) renderNetwork(el, cachedModel, s);
+    return;
+  }
+
+  // ── Group Network tab (card view or combined canvas) ──
+  if (isMulti && sub === 'network' && isGroupAnalysisActive() && cachedModels.size > 0) {
+    const gs = groupNetworkSettings(s);
+    const vc = document.getElementById('group-view-container');
+    if (vc) {
+      // Check if combined view is active
+      const combinedBtn = document.getElementById('toggle-combined');
+      if (combinedBtn && combinedBtn.classList.contains('active')) {
+        vc.innerHTML = '';
+        renderCombinedCanvas(vc, cachedModels, s);
+      } else {
+        // Card view: re-render individual network canvases
+        let i = 0;
+        for (const [, model] of cachedModels) {
+          const el = document.getElementById(`ga-network-${i}`);
+          if (el) renderNetwork(el, model, gs);
+          i++;
+        }
+      }
+    }
+    return;
+  }
+
+  // ── Communities tab ──
+  if (sub === 'communities') {
+    if (isMulti && isGroupAnalysisActive() && cachedModels.size > 0) {
+      const gs = groupNetworkSettings(s);
       let i = 0;
       for (const [groupName, model] of cachedModels) {
         const el = document.getElementById(`viz-community-network-g${i}`);
         if (el) renderNetwork(el, model, gs, cachedComms.get(groupName) ?? undefined);
         i++;
       }
-    } else if (mode === 'single' || mode === 'onehot') {
+    } else if (!isMulti) {
       const el = document.getElementById('viz-community-network');
-      if (el) renderNetwork(el, cachedModel, state.networkSettings, cachedComm ?? undefined);
+      if (el) renderNetwork(el, cachedModel, s, cachedComm ?? undefined);
     }
+    return;
+  }
+
+  // ── Bootstrap tab ──
+  if (sub === 'bootstrap') {
+    const bootSettings = { ...s, edgeThreshold: 0 };
+    if (!isMulti && cachedBootModel) {
+      const el = document.getElementById('viz-boot-network');
+      if (el) renderNetwork(el, cachedBootModel, bootSettings);
+    } else if (isMulti && cachedBootModels.size > 0) {
+      const gs = { ...groupNetworkSettings(s), edgeThreshold: 0 };
+      let k = 0;
+      for (const [groupName] of cachedModels) {
+        const bm = cachedBootModels.get(groupName);
+        if (bm) {
+          const el = document.getElementById(`viz-boot-network-g${k}`);
+          if (el) renderNetwork(el, bm, gs);
+        }
+        k++;
+      }
+    }
+    return;
+  }
+
+  // ── Centralities → Betweenness secondary tab ──
+  if (sub === 'centralities' && secId === 'betweenness') {
+    const bSettings = { ...s, edgeThreshold: 0 };
+    if (!isMulti) {
+      const el = document.getElementById('viz-betweenness-network');
+      if (el) {
+        const bModel = betweennessNetwork(cachedModel) as TNA;
+        renderNetwork(el, bModel, bSettings);
+      }
+    } else if (isMulti && cachedModels.size > 0) {
+      const gs = { ...groupNetworkSettings(s), edgeThreshold: 0 };
+      let i = 0;
+      for (const [, model] of cachedModels) {
+        const el = document.getElementById(`viz-betweenness-network-g${i}`);
+        if (el) {
+          const bModel = betweennessNetwork(model) as TNA;
+          renderNetwork(el, bModel, gs);
+        }
+        i++;
+      }
+    }
+    return;
   }
 }
 
@@ -1017,6 +1099,10 @@ function updateAll() {
     cachedCents.clear();
     cachedComms.clear();
 
+    // Clear bootstrap model caches (will be repopulated when bootstrap is re-run)
+    cachedBootModel = null;
+    cachedBootModels.clear();
+
     // If group analysis is active, rebuild group models with current settings
     if (isGroupAnalysisActive() && activeGroupLabels) {
       const groupModel = buildGroupModel(activeGroupLabels);
@@ -1138,7 +1224,9 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
         renderCliquesTab(tabWrapper, model, state.networkSettings);
         break;
       case 'bootstrap':
-        renderBootstrapTab(tabWrapper, model, state.networkSettings);
+        renderBootstrapTab(tabWrapper, model, state.networkSettings, '', (result) => {
+          cachedBootModel = result.model;
+        });
         break;
       case 'patterns':
         renderPatternsTab(tabWrapper, model);
@@ -3237,6 +3325,7 @@ function renderBootstrapTabMulti(content: HTMLElement) {
       }
 
       setTimeout(() => {
+        cachedBootModels.clear();
         let k = 0;
         for (const [groupName, model] of cachedModels) {
           const resultsEl = document.getElementById(`boot-results-g${k}`);
@@ -3244,6 +3333,7 @@ function renderBootstrapTabMulti(content: HTMLElement) {
             try {
               const result = bootstrapTna(model, { iter, level, method, seed: 42 });
               renderBootstrapResults(resultsEl, result, gs, `-g${k}`);
+              cachedBootModels.set(groupName, result.model);
             } catch (err) {
               resultsEl.innerHTML = `<div class="panel error-banner">Error: ${(err as Error).message}</div>`;
             }

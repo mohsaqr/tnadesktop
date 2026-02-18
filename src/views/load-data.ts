@@ -64,8 +64,8 @@ export function renderLoadPanel(container: HTMLElement) {
     renderFileInfo(panel);
     renderFormatTabs(panel);
     renderFormatOptions(panel);
-    renderPreviewTable(panel);
     renderAnalyzeButton(panel);
+    renderPreviewTable(panel);
   }
 }
 
@@ -281,8 +281,8 @@ function rerenderPanel() {
       renderFileInfo(existing as HTMLElement);
       renderFormatTabs(existing as HTMLElement);
       renderFormatOptions(existing as HTMLElement);
-      renderPreviewTable(existing as HTMLElement);
       renderAnalyzeButton(existing as HTMLElement);
+      renderPreviewTable(existing as HTMLElement);
     }
   }
 }
@@ -303,10 +303,10 @@ function renderFormatTabs(panel: HTMLElement) {
   tabs.id = 'format-tabs';
 
   const formats: { id: string; label: string }[] = [
-    { id: 'wide', label: 'Wide' },
     { id: 'long', label: 'Long' },
     { id: 'onehot', label: 'One-Hot' },
     { id: 'group_onehot', label: 'Group One-Hot' },
+    { id: 'wide', label: 'Wide' },
   ];
 
   for (const fmt of formats) {

@@ -630,6 +630,9 @@ body {
   display: flex;
   justify-content: flex-end;
 }
+.load-actions .btn-primary {
+  padding: 10px 48px;
+}
 
 .btn-primary {
   background: var(--blue);

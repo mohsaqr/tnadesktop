@@ -15,6 +15,7 @@ export function renderBootstrapTab(
   model: TNA,
   networkSettings: NetworkSettings,
   idSuffix = '',
+  onResult?: (result: BootstrapResult) => void,
 ) {
   const grid = document.createElement('div');
   grid.className = 'panels-grid';
@@ -72,6 +73,7 @@ export function renderBootstrapTab(
         try {
           const result = bootstrapTna(model, { iter, level, method, seed: 42 });
           renderBootstrapResults(resultsEl, result, networkSettings, idSuffix);
+          if (onResult) onResult(result);
         } catch (err) {
           resultsEl.innerHTML = `<div class="panel error-banner">Error: ${(err as Error).message}</div>`;
         }
