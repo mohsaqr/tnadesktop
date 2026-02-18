@@ -12,6 +12,7 @@ import { state } from '../main';
 import { addPanelDownloadButtons, downloadSvgFromElement, downloadPngFromElement } from './export';
 import { circularLayout, computeEdgePath, arrowPoly, fmtWeight } from './network';
 import { NODE_COLORS } from './colors';
+import { createViewToggle } from './dashboard';
 
 interface GroupMetrics {
   group: string;
@@ -65,40 +66,6 @@ export function renderCompareNetworksTab(
 
   const metrics = groupNames.map(g => computeMetrics(fullModel.models[g]!, g));
 
-  const grid = document.createElement('div');
-  grid.className = 'panels-grid';
-
-  // Summary table
-  const tablePanel = document.createElement('div');
-  tablePanel.className = 'panel';
-  tablePanel.innerHTML = `<div class="panel-title">Network Properties by Group</div>`;
-
-  let tableHtml = '<table class="preview-table" style="font-size:12px"><thead><tr>';
-  tableHtml += '<th>Group</th><th>States</th><th>Edges</th><th>Density</th><th>Mean Weight</th><th>Max Weight</th><th>Reciprocity</th><th>Self-loops</th>';
-  tableHtml += '</tr></thead><tbody>';
-  for (const m of metrics) {
-    tableHtml += '<tr>';
-    tableHtml += `<td style="font-weight:600">${m.group}</td>`;
-    tableHtml += `<td>${m.nStates}</td>`;
-    tableHtml += `<td>${m.nEdges}</td>`;
-    tableHtml += `<td>${m.density.toFixed(3)}</td>`;
-    tableHtml += `<td>${m.meanWeight.toFixed(4)}</td>`;
-    tableHtml += `<td>${m.maxWeight.toFixed(4)}</td>`;
-    tableHtml += `<td>${m.reciprocity.toFixed(3)}</td>`;
-    tableHtml += `<td>${m.hasSelfLoops ? 'Yes' : 'No'}</td>`;
-    tableHtml += '</tr>';
-  }
-  tableHtml += '</tbody></table>';
-  tablePanel.innerHTML += tableHtml;
-  addPanelDownloadButtons(tablePanel, { csv: true, filename: 'compare-networks-table' });
-  grid.appendChild(tablePanel);
-
-  // Bar chart comparing key metrics across groups
-  const chartGrid = document.createElement('div');
-  chartGrid.style.display = 'grid';
-  chartGrid.style.gridTemplateColumns = '1fr 1fr';
-  chartGrid.style.gap = '16px';
-
   const metricDefs = [
     { key: 'density', label: 'Density', fmt: (v: number) => v.toFixed(3) },
     { key: 'meanWeight', label: 'Mean Weight', fmt: (v: number) => v.toFixed(4) },
@@ -106,96 +73,121 @@ export function renderCompareNetworksTab(
     { key: 'reciprocity', label: 'Reciprocity', fmt: (v: number) => v.toFixed(3) },
   ];
 
-  for (const def of metricDefs) {
-    const panel = document.createElement('div');
-    panel.className = 'panel';
-    panel.innerHTML = `<div class="panel-title">${def.label}</div><div id="viz-cmp-${def.key}" style="width:100%"></div>`;
-    addPanelDownloadButtons(panel, { image: true, filename: `compare-${def.key}` });
-    chartGrid.appendChild(panel);
-  }
+  createViewToggle(container,
+    (fig) => {
+      // Bar charts
+      const chartGrid = document.createElement('div');
+      chartGrid.style.display = 'grid';
+      chartGrid.style.gridTemplateColumns = '1fr 1fr';
+      chartGrid.style.gap = '16px';
 
-  grid.appendChild(chartGrid);
+      for (const def of metricDefs) {
+        const panel = document.createElement('div');
+        panel.className = 'panel';
+        panel.innerHTML = `<div class="panel-title">${def.label}</div><div id="viz-cmp-${def.key}" style="width:100%"></div>`;
+        addPanelDownloadButtons(panel, { image: true, filename: `compare-${def.key}` });
+        chartGrid.appendChild(panel);
+      }
+      fig.appendChild(chartGrid);
 
-  // Shared group pair selector (used by heatmap and diff network)
-  const pairPanel = document.createElement('div');
-  pairPanel.className = 'panel';
-  pairPanel.style.padding = '10px 16px';
-  pairPanel.innerHTML = `
-    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <span style="font-size:13px;font-weight:600;color:#333">Compare:</span>
-      <select id="cmp-heat-g1" style="font-size:12px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
-        ${groupNames.map((g, i) => `<option value="${g}" ${i === 0 ? 'selected' : ''}>${g}</option>`).join('')}
-      </select>
-      <span style="color:#888">vs</span>
-      <select id="cmp-heat-g2" style="font-size:12px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
-        ${groupNames.map((g, i) => `<option value="${g}" ${i === 1 ? 'selected' : ''}>${g}</option>`).join('')}
-      </select>
-    </div>
-  `;
-  grid.appendChild(pairPanel);
+      // Group pair selector
+      const pairPanel = document.createElement('div');
+      pairPanel.className = 'panel';
+      pairPanel.style.padding = '10px 16px';
+      pairPanel.style.marginTop = '16px';
+      pairPanel.innerHTML = `
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <span style="font-size:13px;font-weight:600;color:#333">Compare:</span>
+          <select id="cmp-heat-g1" style="font-size:12px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
+            ${groupNames.map((g, i) => `<option value="${g}" ${i === 0 ? 'selected' : ''}>${g}</option>`).join('')}
+          </select>
+          <span style="color:#888">vs</span>
+          <select id="cmp-heat-g2" style="font-size:12px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
+            ${groupNames.map((g, i) => `<option value="${g}" ${i === 1 ? 'selected' : ''}>${g}</option>`).join('')}
+          </select>
+        </div>
+      `;
+      fig.appendChild(pairPanel);
 
-  // Side-by-side: heatmap and diff network
-  const diffRow = document.createElement('div');
-  diffRow.style.display = 'grid';
-  diffRow.style.gridTemplateColumns = '1fr 1fr';
-  diffRow.style.gap = '16px';
+      // Heatmap + diff network
+      const diffRow = document.createElement('div');
+      diffRow.style.display = 'grid';
+      diffRow.style.gridTemplateColumns = '1fr 1fr';
+      diffRow.style.gap = '16px';
+      diffRow.style.marginTop = '16px';
 
-  // Difference heatmap
-  const heatPanel = document.createElement('div');
-  heatPanel.className = 'panel';
-  heatPanel.innerHTML = `
-    <div class="panel-title">Weight Difference Heatmap</div>
-    <div id="viz-cmp-heatmap" style="width:100%"></div>
-  `;
-  addPanelDownloadButtons(heatPanel, { image: true, filename: 'compare-heatmap' });
-  diffRow.appendChild(heatPanel);
+      const heatPanel = document.createElement('div');
+      heatPanel.className = 'panel';
+      heatPanel.innerHTML = `<div class="panel-title">Weight Difference Heatmap</div><div id="viz-cmp-heatmap" style="width:100%"></div>`;
+      addPanelDownloadButtons(heatPanel, { image: true, filename: 'compare-heatmap' });
+      diffRow.appendChild(heatPanel);
 
-  // Difference network
-  const netPanel = document.createElement('div');
-  netPanel.className = 'panel';
-  netPanel.innerHTML = `
-    <div class="panel-title">Difference Network</div>
-    <div id="viz-cmp-diffnet" style="width:100%"></div>
-  `;
-  addPanelDownloadButtons(netPanel, { image: true, filename: 'compare-diff-network' });
-  diffRow.appendChild(netPanel);
+      const netPanel = document.createElement('div');
+      netPanel.className = 'panel';
+      netPanel.innerHTML = `<div class="panel-title">Difference Network</div><div id="viz-cmp-diffnet" style="width:100%"></div>`;
+      addPanelDownloadButtons(netPanel, { image: true, filename: 'compare-diff-network' });
+      diffRow.appendChild(netPanel);
 
-  grid.appendChild(diffRow);
+      fig.appendChild(diffRow);
 
-  container.appendChild(grid);
+      requestAnimationFrame(() => {
+        for (const def of metricDefs) {
+          const el = document.getElementById(`viz-cmp-${def.key}`);
+          if (el) renderGroupBarChart(el, metrics, def.key as keyof GroupMetrics, def.label, def.fmt);
+        }
+        renderDiffHeatmap(
+          document.getElementById('viz-cmp-heatmap')!,
+          fullModel.models[groupNames[0]!]!,
+          fullModel.models[groupNames[1]!]!,
+        );
+        renderDiffNetwork(
+          document.getElementById('viz-cmp-diffnet')!,
+          fullModel.models[groupNames[0]!]!,
+          fullModel.models[groupNames[1]!]!,
+        );
+      });
 
-  // Render charts
-  requestAnimationFrame(() => {
-    for (const def of metricDefs) {
-      const el = document.getElementById(`viz-cmp-${def.key}`);
-      if (el) renderGroupBarChart(el, metrics, def.key as keyof GroupMetrics, def.label, def.fmt);
-    }
-    renderDiffHeatmap(
-      document.getElementById('viz-cmp-heatmap')!,
-      fullModel.models[groupNames[0]!]!,
-      fullModel.models[groupNames[1]!]!,
-    );
-    renderDiffNetwork(
-      document.getElementById('viz-cmp-diffnet')!,
-      fullModel.models[groupNames[0]!]!,
-      fullModel.models[groupNames[1]!]!,
-    );
-  });
+      setTimeout(() => {
+        const wireUpdate = () => {
+          const g1 = (document.getElementById('cmp-heat-g1') as HTMLSelectElement).value;
+          const g2 = (document.getElementById('cmp-heat-g2') as HTMLSelectElement).value;
+          if (g1 === g2) return;
+          const heatEl = document.getElementById('viz-cmp-heatmap');
+          const netEl = document.getElementById('viz-cmp-diffnet');
+          if (heatEl) renderDiffHeatmap(heatEl, fullModel.models[g1]!, fullModel.models[g2]!);
+          if (netEl) renderDiffNetwork(netEl, fullModel.models[g1]!, fullModel.models[g2]!);
+        };
+        document.getElementById('cmp-heat-g1')?.addEventListener('change', wireUpdate);
+        document.getElementById('cmp-heat-g2')?.addEventListener('change', wireUpdate);
+      }, 0);
+    },
+    (tbl) => {
+      const tablePanel = document.createElement('div');
+      tablePanel.className = 'panel';
+      tablePanel.innerHTML = `<div class="panel-title">Network Properties by Group</div>`;
 
-  // Wire pair selectors
-  setTimeout(() => {
-    const wireUpdate = () => {
-      const g1 = (document.getElementById('cmp-heat-g1') as HTMLSelectElement).value;
-      const g2 = (document.getElementById('cmp-heat-g2') as HTMLSelectElement).value;
-      if (g1 === g2) return;
-      const heatEl = document.getElementById('viz-cmp-heatmap');
-      const netEl = document.getElementById('viz-cmp-diffnet');
-      if (heatEl) renderDiffHeatmap(heatEl, fullModel.models[g1]!, fullModel.models[g2]!);
-      if (netEl) renderDiffNetwork(netEl, fullModel.models[g1]!, fullModel.models[g2]!);
-    };
-    document.getElementById('cmp-heat-g1')?.addEventListener('change', wireUpdate);
-    document.getElementById('cmp-heat-g2')?.addEventListener('change', wireUpdate);
-  }, 0);
+      let tableHtml = '<table class="preview-table" style="font-size:12px"><thead><tr>';
+      tableHtml += '<th>Group</th><th>States</th><th>Edges</th><th>Density</th><th>Mean Weight</th><th>Max Weight</th><th>Reciprocity</th><th>Self-loops</th>';
+      tableHtml += '</tr></thead><tbody>';
+      for (const m of metrics) {
+        tableHtml += '<tr>';
+        tableHtml += `<td style="font-weight:600">${m.group}</td>`;
+        tableHtml += `<td>${m.nStates}</td>`;
+        tableHtml += `<td>${m.nEdges}</td>`;
+        tableHtml += `<td>${m.density.toFixed(3)}</td>`;
+        tableHtml += `<td>${m.meanWeight.toFixed(4)}</td>`;
+        tableHtml += `<td>${m.maxWeight.toFixed(4)}</td>`;
+        tableHtml += `<td>${m.reciprocity.toFixed(3)}</td>`;
+        tableHtml += `<td>${m.hasSelfLoops ? 'Yes' : 'No'}</td>`;
+        tableHtml += '</tr>';
+      }
+      tableHtml += '</tbody></table>';
+      tablePanel.innerHTML += tableHtml;
+      addPanelDownloadButtons(tablePanel, { csv: true, filename: 'compare-networks-table' });
+      tbl.appendChild(tablePanel);
+    },
+    'cmp-net',
+  );
 }
 
 const GROUP_COLORS = ['#4e79a7', '#e15759', '#59a14f', '#edc948', '#b07aa1', '#76b7b2', '#f28e2b', '#ff9da7'];

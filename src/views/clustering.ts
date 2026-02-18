@@ -5,7 +5,7 @@
 import type { TNA, CentralityResult } from 'tnaj';
 import { clusterSequences } from 'tnaj';
 import type { NetworkSettings } from '../main';
-import { state, saveState, buildGroupModel, computeCentralities, groupNetworkSettings, prune } from '../main';
+import { state, saveState, buildGroupModel, computeCentralities, groupNetworkSettings, prune, AVAILABLE_MEASURES } from '../main';
 import { setGroupAnalysisData, updateSubTabStates, updateTabContent, renderSubTabBar } from './dashboard';
 import { renderNetwork, renderNetworkIntoGroup } from './network';
 import { renderCentralityChart } from './centralities';
@@ -266,7 +266,8 @@ export function renderGroupGrid(
       const cent = cents.get(groupName)!;
 
       if (netEl) renderNetwork(netEl, model, gs);
-      if (centEl) renderCentralityChart(centEl, cent, state.selectedMeasure1);
+      const firstMeasure = AVAILABLE_MEASURES.find(m => !state.disabledMeasures.includes(m)) ?? AVAILABLE_MEASURES[0];
+      if (centEl) renderCentralityChart(centEl, cent, firstMeasure);
 
       const netPanel = netEl?.closest('.panel') as HTMLElement | null;
       const centPanel = centEl?.closest('.panel') as HTMLElement | null;

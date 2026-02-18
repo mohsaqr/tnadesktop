@@ -9,6 +9,7 @@ import type { NetworkSettings } from '../main';
 import { renderNetwork } from './network';
 import { NODE_COLORS } from './colors';
 import { addPanelDownloadButtons } from './export';
+import { createViewToggle } from './dashboard';
 
 export function renderCliquesTab(
   container: HTMLElement,
@@ -43,7 +44,7 @@ export function renderCliquesTab(
   `;
   grid.appendChild(controls);
 
-  // Clique results container
+  // Results container
   const resultsDiv = document.createElement('div');
   resultsDiv.id = `clique-results${idSuffix}`;
   grid.appendChild(resultsDiv);
@@ -66,56 +67,130 @@ export function renderCliquesTab(
       return;
     }
 
-    // Grid of mini-networks
-    const cliqueGrid = document.createElement('div');
-    cliqueGrid.style.display = 'grid';
-    cliqueGrid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(320px, 1fr))';
-    cliqueGrid.style.gap = '12px';
+    createViewToggle(resultsEl,
+      (fig) => {
+        // Card/Combined toggle
+        const toggleBar = document.createElement('div');
+        toggleBar.style.marginBottom = '8px';
+        toggleBar.innerHTML = `<div class="view-toggle"><button class="toggle-btn" id="clq-toggle-card${idSuffix}">Card View</button><button class="toggle-btn active" id="clq-toggle-combined${idSuffix}">Combined</button></div>`;
+        fig.appendChild(toggleBar);
 
-    for (let c = 0; c < nCliques; c++) {
-      const cliqueLabels = results.labels[c]!;
-      const cliqueWeights = results.weights[c]!;
+        const viewContainer = document.createElement('div');
+        fig.appendChild(viewContainer);
 
-      // Build a mini TNA for this clique
-      const inits = new Float64Array(cliqueLabels.length).fill(1 / cliqueLabels.length);
-      const miniModel = createTNA(cliqueWeights, inits, cliqueLabels, null, 'matrix', []);
+        let currentView: 'card' | 'combined' = 'combined';
 
-      const panel = document.createElement('div');
-      panel.className = 'panel';
-      panel.innerHTML = `
-        <div class="panel-title" style="font-size:12px">Clique ${c + 1}: ${cliqueLabels.join(', ')}</div>
-        <div id="viz-clique-${c}${idSuffix}" style="width:100%;height:250px"></div>
-      `;
-      addPanelDownloadButtons(panel, { image: true, filename: `clique-${c + 1}${idSuffix}` });
-      cliqueGrid.appendChild(panel);
-    }
+        function renderMiniNetworks() {
+          requestAnimationFrame(() => {
+            for (let c = 0; c < nCliques; c++) {
+              const el = document.getElementById(`viz-clique-${c}${idSuffix}`);
+              if (!el) continue;
+              const cliqueLabels = results.labels[c]!;
+              const cliqueWeights = results.weights[c]!;
+              const inits = new Float64Array(cliqueLabels.length).fill(1 / cliqueLabels.length);
+              const miniModel = createTNA(cliqueWeights, inits, cliqueLabels, null, 'matrix', []);
 
-    resultsEl.appendChild(cliqueGrid);
+              const miniSettings: NetworkSettings = {
+                ...networkSettings,
+                networkHeight: 250,
+                nodeRadius: 25,
+                nodeLabelSize: 8,
+                edgeLabelSize: 6,
+                edgeThreshold: 0,
+                layout: 'circular',
+                graphPadding: 10,
+                showSelfLoops: false,
+              };
+              renderNetwork(el, miniModel, miniSettings);
+            }
+          });
+        }
 
-    // Render mini networks
-    requestAnimationFrame(() => {
-      for (let c = 0; c < nCliques; c++) {
-        const el = document.getElementById(`viz-clique-${c}${idSuffix}`);
-        if (!el) continue;
-        const cliqueLabels = results.labels[c]!;
-        const cliqueWeights = results.weights[c]!;
-        const inits = new Float64Array(cliqueLabels.length).fill(1 / cliqueLabels.length);
-        const miniModel = createTNA(cliqueWeights, inits, cliqueLabels, null, 'matrix', []);
+        function renderCardView() {
+          viewContainer.innerHTML = '';
+          const cliqueGrid = document.createElement('div');
+          cliqueGrid.style.display = 'grid';
+          cliqueGrid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(320px, 1fr))';
+          cliqueGrid.style.gap = '12px';
 
-        const miniSettings: NetworkSettings = {
-          ...networkSettings,
-          networkHeight: 250,
-          nodeRadius: 25,
-          nodeLabelSize: 8,
-          edgeLabelSize: 6,
-          edgeThreshold: 0,
-          layout: 'circular',
-          graphPadding: 10,
-          showSelfLoops: false,
-        };
-        renderNetwork(el, miniModel, miniSettings);
-      }
-    });
+          for (let c = 0; c < nCliques; c++) {
+            const cliqueLabels = results.labels[c]!;
+            const panel = document.createElement('div');
+            panel.className = 'panel';
+            panel.innerHTML = `
+              <div class="panel-title" style="font-size:12px">Clique ${c + 1}: ${cliqueLabels.join(', ')}</div>
+              <div id="viz-clique-${c}${idSuffix}" style="width:100%;height:250px"></div>
+            `;
+            addPanelDownloadButtons(panel, { image: true, filename: `clique-${c + 1}${idSuffix}` });
+            cliqueGrid.appendChild(panel);
+          }
+          viewContainer.appendChild(cliqueGrid);
+          renderMiniNetworks();
+        }
+
+        function renderCombinedView() {
+          viewContainer.innerHTML = '';
+          const panel = document.createElement('div');
+          panel.className = 'panel';
+          const innerGrid = document.createElement('div');
+          innerGrid.style.display = 'grid';
+          innerGrid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(320px, 1fr))';
+          innerGrid.style.gap = '12px';
+
+          for (let c = 0; c < nCliques; c++) {
+            const cliqueLabels = results.labels[c]!;
+            const cell = document.createElement('div');
+            cell.innerHTML = `
+              <div class="panel-title" style="font-size:12px">Clique ${c + 1}: ${cliqueLabels.join(', ')}</div>
+              <div id="viz-clique-${c}${idSuffix}" style="width:100%;height:250px"></div>
+            `;
+            innerGrid.appendChild(cell);
+          }
+          panel.appendChild(innerGrid);
+          addPanelDownloadButtons(panel, { image: true, filename: `cliques-combined${idSuffix}` });
+          viewContainer.appendChild(panel);
+          renderMiniNetworks();
+        }
+
+        renderCombinedView();
+
+        setTimeout(() => {
+          document.getElementById(`clq-toggle-card${idSuffix}`)?.addEventListener('click', () => {
+            if (currentView === 'card') return;
+            currentView = 'card';
+            document.getElementById(`clq-toggle-card${idSuffix}`)!.classList.add('active');
+            document.getElementById(`clq-toggle-combined${idSuffix}`)!.classList.remove('active');
+            renderCardView();
+          });
+          document.getElementById(`clq-toggle-combined${idSuffix}`)?.addEventListener('click', () => {
+            if (currentView === 'combined') return;
+            currentView = 'combined';
+            document.getElementById(`clq-toggle-combined${idSuffix}`)!.classList.add('active');
+            document.getElementById(`clq-toggle-card${idSuffix}`)!.classList.remove('active');
+            renderCombinedView();
+          });
+        }, 0);
+      },
+      (tbl) => {
+        const tablePanel = document.createElement('div');
+        tablePanel.className = 'panel';
+        tablePanel.style.overflow = 'auto';
+        tablePanel.innerHTML = `<div class="panel-title">Clique Membership (${nCliques} cliques)</div>`;
+
+        let html = '<table class="preview-table" style="font-size:12px"><thead><tr>';
+        html += '<th>Clique #</th><th>Size</th><th>Members</th>';
+        html += '</tr></thead><tbody>';
+        for (let c = 0; c < nCliques; c++) {
+          const cliqueLabels = results.labels[c]!;
+          html += `<tr><td>${c + 1}</td><td>${cliqueLabels.length}</td><td style="font-family:monospace">${cliqueLabels.join(', ')}</td></tr>`;
+        }
+        html += '</tbody></table>';
+        tablePanel.innerHTML += html;
+        addPanelDownloadButtons(tablePanel, { csv: true, filename: `cliques-table${idSuffix}` });
+        tbl.appendChild(tablePanel);
+      },
+      `clq${idSuffix}`,
+    );
   }
 
   // Wire events

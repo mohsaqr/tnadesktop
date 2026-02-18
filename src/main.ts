@@ -59,7 +59,7 @@ export interface NetworkSettings {
 }
 
 // Bump this whenever defaults change to force a localStorage reset
-export const SETTINGS_VERSION = 12;
+export const SETTINGS_VERSION = 14;
 
 export function defaultNetworkSettings(): NetworkSettings {
   return {
@@ -143,14 +143,14 @@ export interface AppState {
   threshold: number;
   showCommunities: boolean;
   communityMethod: CommunityMethod;
-  selectedMeasure1: CentralityMeasure;
-  selectedMeasure2: CentralityMeasure;
-  selectedMeasure3: CentralityMeasure;
+  disabledMeasures: string[];
   centralityLoops: boolean;
+  activeSecondaryTab: string;
   clusterK: number;
   clusterDissimilarity: 'hamming' | 'lv' | 'osa' | 'lcs';
   activeMode: 'data' | 'single' | 'clustering' | 'group' | 'onehot' | 'group_onehot';
   activeSubTab: string;
+  chartMaxWidth: number;
   error: string | null;
   networkSettings: NetworkSettings;
 }
@@ -181,12 +181,12 @@ export const state: AppState = {
   clusterDissimilarity: 'hamming',
   showCommunities: false,
   communityMethod: 'edge_betweenness',
-  selectedMeasure1: 'InStrength',
-  selectedMeasure2: 'BetweennessRSP',
-  selectedMeasure3: 'OutStrength',
+  disabledMeasures: [],
   centralityLoops: false,
+  activeSecondaryTab: '',
   activeMode: 'data',
   activeSubTab: 'network',
+  chartMaxWidth: 900,
   error: null,
   networkSettings: defaultNetworkSettings(),
 };
@@ -310,10 +310,9 @@ function loadState() {
     state.clusterDissimilarity = saved.clusterDissimilarity ?? 'hamming';
     state.showCommunities = saved.showCommunities ?? false;
     state.communityMethod = saved.communityMethod ?? 'louvain';
-    state.selectedMeasure1 = saved.selectedMeasure1 ?? 'InStrength';
-    state.selectedMeasure2 = saved.selectedMeasure2 ?? 'BetweennessRSP';
-    state.selectedMeasure3 = saved.selectedMeasure3 ?? 'OutStrength';
+    state.disabledMeasures = (saved as any).disabledMeasures ?? [];
     state.centralityLoops = saved.centralityLoops ?? false;
+    state.activeSecondaryTab = (saved as any).activeSecondaryTab ?? '';
     state.activeMode = 'data';
     state.activeSubTab = 'network';
     // Reset network settings to fresh defaults when version bumps

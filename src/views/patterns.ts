@@ -7,6 +7,7 @@ import { extractPatterns } from '../analysis/patterns';
 import type { PatternResult } from '../analysis/patterns';
 import { showTooltip, hideTooltip } from '../main';
 import { addPanelDownloadButtons } from './export';
+import { createViewToggle } from './dashboard';
 
 export function renderPatternsTab(
   container: HTMLElement,
@@ -87,51 +88,50 @@ function renderPatternResults(container: HTMLElement, results: PatternResult[], 
     return;
   }
 
-  const resultGrid = document.createElement('div');
-  resultGrid.style.display = 'grid';
-  resultGrid.style.gridTemplateColumns = '1fr 1fr';
-  resultGrid.style.gap = '16px';
+  createViewToggle(container,
+    (fig) => {
+      const chartPanel = document.createElement('div');
+      chartPanel.className = 'panel';
+      chartPanel.innerHTML = `<div class="panel-title">Top Patterns by Count</div><div id="viz-pattern-chart${idSuffix}" style="width:100%"></div>`;
+      addPanelDownloadButtons(chartPanel, { image: true, filename: `patterns-chart${idSuffix}` });
+      fig.appendChild(chartPanel);
 
-  // Table
-  const tablePanel = document.createElement('div');
-  tablePanel.className = 'panel';
-  tablePanel.style.maxHeight = '500px';
-  tablePanel.style.overflow = 'auto';
-  tablePanel.innerHTML = `<div class="panel-title">Patterns (${results.length} found)</div>`;
+      requestAnimationFrame(() => {
+        const el = document.getElementById(`viz-pattern-chart${idSuffix}`);
+        if (el) renderPatternChart(el, results.slice(0, 20));
+      });
+    },
+    (tbl) => {
+      const tablePanel = document.createElement('div');
+      tablePanel.className = 'panel';
+      tablePanel.style.maxHeight = '600px';
+      tablePanel.style.overflow = 'auto';
+      tablePanel.innerHTML = `<div class="panel-title">Patterns (${results.length} found)</div>`;
 
-  const top = results.slice(0, 100);
-  let tableHtml = '<table class="preview-table" style="font-size:11px"><thead><tr>';
-  tableHtml += '<th>Pattern</th><th>Count</th><th>Support</th><th>Frequency</th>';
-  tableHtml += '</tr></thead><tbody>';
-  for (const p of top) {
-    tableHtml += `<tr>`;
-    tableHtml += `<td style="font-family:monospace;white-space:nowrap">${p.pattern}</td>`;
-    tableHtml += `<td>${p.count}</td>`;
-    tableHtml += `<td>${(p.support * 100).toFixed(1)}%</td>`;
-    tableHtml += `<td>${(p.frequency * 100).toFixed(2)}%</td>`;
-    tableHtml += '</tr>';
-  }
-  if (results.length > 100) {
-    tableHtml += `<tr><td colspan="4" style="text-align:center;color:#888;font-style:italic">... ${results.length - 100} more patterns</td></tr>`;
-  }
-  tableHtml += '</tbody></table>';
-  tablePanel.innerHTML += tableHtml;
-  addPanelDownloadButtons(tablePanel, { csv: true, filename: `patterns-table${idSuffix}` });
-  resultGrid.appendChild(tablePanel);
-
-  // Bar chart of top 20 patterns
-  const chartPanel = document.createElement('div');
-  chartPanel.className = 'panel';
-  chartPanel.innerHTML = `<div class="panel-title">Top Patterns by Count</div><div id="viz-pattern-chart${idSuffix}" style="width:100%"></div>`;
-  addPanelDownloadButtons(chartPanel, { image: true, filename: `patterns-chart${idSuffix}` });
-  resultGrid.appendChild(chartPanel);
-
-  container.appendChild(resultGrid);
-
-  requestAnimationFrame(() => {
-    const el = document.getElementById(`viz-pattern-chart${idSuffix}`);
-    if (el) renderPatternChart(el, results.slice(0, 20));
-  });
+      const top = results.slice(0, 100);
+      let tableHtml = '<table class="preview-table" style="font-size:11px"><thead><tr>';
+      tableHtml += '<th>Pattern</th><th>Length</th><th>Count</th><th>Support</th><th>Frequency</th>';
+      tableHtml += '</tr></thead><tbody>';
+      for (const p of top) {
+        const len = p.pattern.split(' → ').length;
+        tableHtml += `<tr>`;
+        tableHtml += `<td style="font-family:monospace;white-space:nowrap">${p.pattern}</td>`;
+        tableHtml += `<td>${len}</td>`;
+        tableHtml += `<td>${p.count}</td>`;
+        tableHtml += `<td>${(p.support * 100).toFixed(1)}%</td>`;
+        tableHtml += `<td>${(p.frequency * 100).toFixed(2)}%</td>`;
+        tableHtml += '</tr>';
+      }
+      if (results.length > 100) {
+        tableHtml += `<tr><td colspan="5" style="text-align:center;color:#888;font-style:italic">... ${results.length - 100} more patterns</td></tr>`;
+      }
+      tableHtml += '</tbody></table>';
+      tablePanel.innerHTML += tableHtml;
+      addPanelDownloadButtons(tablePanel, { csv: true, filename: `patterns-table${idSuffix}` });
+      tbl.appendChild(tablePanel);
+    },
+    `pat-res${idSuffix}`,
+  );
 }
 
 function renderPatternChart(container: HTMLElement, patterns: PatternResult[]) {

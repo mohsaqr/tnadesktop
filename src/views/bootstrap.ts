@@ -8,6 +8,7 @@ import { bootstrapTna } from '../analysis/bootstrap';
 import type { BootstrapResult, BootstrapOptions } from '../analysis/bootstrap';
 import { renderNetwork } from './network';
 import { addPanelDownloadButtons } from './export';
+import { createViewToggle } from './dashboard';
 
 export function renderBootstrapTab(
   container: HTMLElement,
@@ -90,58 +91,55 @@ export function renderBootstrapResults(
   const sigCount = result.edges.filter(e => e.significant).length;
   const totalEdges = result.edges.length;
 
-  const resultGrid = document.createElement('div');
-  resultGrid.style.display = 'grid';
-  resultGrid.style.gridTemplateColumns = '1fr 1fr';
-  resultGrid.style.gap = '16px';
+  createViewToggle(container,
+    (fig) => {
+      const h = networkSettings.networkHeight;
+      const netPanel = document.createElement('div');
+      netPanel.className = 'panel';
+      netPanel.style.minHeight = `${h + 40}px`;
+      netPanel.innerHTML = `
+        <div class="panel-title">Significant Edges Network: ${sigCount}/${totalEdges} edges (${result.method}, ${result.iter} iter)</div>
+        <div id="viz-boot-network${idSuffix}" style="width:100%;height:${h}px"></div>
+      `;
+      addPanelDownloadButtons(netPanel, { image: true, filename: `bootstrap-network${idSuffix}` });
+      fig.appendChild(netPanel);
 
-  // Edge stats table
-  const tablePanel = document.createElement('div');
-  tablePanel.className = 'panel';
-  tablePanel.style.maxHeight = '500px';
-  tablePanel.style.overflow = 'auto';
-  tablePanel.innerHTML = `<div class="panel-title">Bootstrap Results: ${sigCount}/${totalEdges} edges significant (${result.method}, ${result.iter} iterations)</div>`;
+      requestAnimationFrame(() => {
+        const el = document.getElementById(`viz-boot-network${idSuffix}`);
+        if (el) {
+          const bootSettings = { ...networkSettings, edgeThreshold: 0 };
+          renderNetwork(el, result.model, bootSettings);
+        }
+      });
+    },
+    (tbl) => {
+      const tablePanel = document.createElement('div');
+      tablePanel.className = 'panel';
+      tablePanel.style.maxHeight = '600px';
+      tablePanel.style.overflow = 'auto';
+      tablePanel.innerHTML = `<div class="panel-title">Bootstrap Results: ${sigCount}/${totalEdges} edges significant (${result.method}, ${result.iter} iterations)</div>`;
 
-  let tableHtml = '<table class="preview-table" style="font-size:11px"><thead><tr>';
-  tableHtml += '<th>From</th><th>To</th><th>Weight</th><th>p-value</th><th>CI Lower</th><th>CI Upper</th><th>Sig</th>';
-  tableHtml += '</tr></thead><tbody>';
+      let tableHtml = '<table class="preview-table" style="font-size:11px"><thead><tr>';
+      tableHtml += '<th>From</th><th>To</th><th>Weight</th><th>p-value</th><th>CI Lower</th><th>CI Upper</th><th>Sig</th>';
+      tableHtml += '</tr></thead><tbody>';
 
-  const sorted = [...result.edges].sort((a, b) => a.pValue - b.pValue);
-  for (const e of sorted) {
-    const rowStyle = e.significant ? 'background:#d4edda' : '';
-    tableHtml += `<tr style="${rowStyle}">`;
-    tableHtml += `<td>${e.from}</td><td>${e.to}</td>`;
-    tableHtml += `<td>${e.weight.toFixed(4)}</td>`;
-    tableHtml += `<td>${e.pValue.toFixed(4)}</td>`;
-    tableHtml += `<td>${e.ciLower.toFixed(4)}</td>`;
-    tableHtml += `<td>${e.ciUpper.toFixed(4)}</td>`;
-    tableHtml += `<td style="text-align:center">${e.significant ? 'Yes' : ''}</td>`;
-    tableHtml += '</tr>';
-  }
-  tableHtml += '</tbody></table>';
-  tablePanel.innerHTML += tableHtml;
-  addPanelDownloadButtons(tablePanel, { csv: true, filename: `bootstrap-results${idSuffix}` });
-  resultGrid.appendChild(tablePanel);
-
-  // Bootstrap network (significant edges only)
-  const h = networkSettings.networkHeight;
-  const netPanel = document.createElement('div');
-  netPanel.className = 'panel';
-  netPanel.style.minHeight = `${h + 40}px`;
-  netPanel.innerHTML = `
-    <div class="panel-title">Significant Edges Network</div>
-    <div id="viz-boot-network${idSuffix}" style="width:100%;height:${h}px"></div>
-  `;
-  addPanelDownloadButtons(netPanel, { image: true, filename: `bootstrap-network${idSuffix}` });
-  resultGrid.appendChild(netPanel);
-
-  container.appendChild(resultGrid);
-
-  requestAnimationFrame(() => {
-    const el = document.getElementById(`viz-boot-network${idSuffix}`);
-    if (el) {
-      const bootSettings = { ...networkSettings, edgeThreshold: 0 };
-      renderNetwork(el, result.model, bootSettings);
-    }
-  });
+      const sorted = [...result.edges].sort((a, b) => a.pValue - b.pValue);
+      for (const e of sorted) {
+        const rowStyle = e.significant ? 'background:#d4edda' : '';
+        tableHtml += `<tr style="${rowStyle}">`;
+        tableHtml += `<td>${e.from}</td><td>${e.to}</td>`;
+        tableHtml += `<td>${e.weight.toFixed(4)}</td>`;
+        tableHtml += `<td>${e.pValue.toFixed(4)}</td>`;
+        tableHtml += `<td>${e.ciLower.toFixed(4)}</td>`;
+        tableHtml += `<td>${e.ciUpper.toFixed(4)}</td>`;
+        tableHtml += `<td style="text-align:center">${e.significant ? 'Yes' : ''}</td>`;
+        tableHtml += '</tr>';
+      }
+      tableHtml += '</tbody></table>';
+      tablePanel.innerHTML += tableHtml;
+      addPanelDownloadButtons(tablePanel, { csv: true, filename: `bootstrap-results${idSuffix}` });
+      tbl.appendChild(tablePanel);
+    },
+    `boot-res${idSuffix}`,
+  );
 }

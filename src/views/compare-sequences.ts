@@ -8,6 +8,7 @@ import type { GroupTNA, CompareRow } from 'tnaj';
 import { compareSequences } from 'tnaj';
 import { showTooltip, hideTooltip } from '../main';
 import { addPanelDownloadButtons } from './export';
+import { createViewToggle } from './dashboard';
 
 export function renderCompareSequencesTab(
   container: HTMLElement,
@@ -102,25 +103,7 @@ function renderCompareResults(
     return;
   }
 
-  const panel = document.createElement('div');
-  panel.className = 'panel';
-  panel.style.overflow = 'auto';
-  panel.style.maxHeight = '600px';
-
   const hasPValue = rows.some(r => r.pValue !== undefined);
-  panel.innerHTML = `<div class="panel-title">Sequence Pattern Comparison (${rows.length} patterns)</div>`;
-
-  let tableHtml = '<table class="preview-table" style="font-size:11px"><thead><tr>';
-  tableHtml += '<th>Pattern</th>';
-  for (const g of groupNames) {
-    tableHtml += `<th>Freq (${g})</th><th>Prop (${g})</th>`;
-  }
-  if (hasPValue) {
-    tableHtml += '<th>Effect Size</th><th>p-value</th>';
-  }
-  tableHtml += '</tr></thead><tbody>';
-
-  // Sort by p-value if available, else by total frequency
   const sorted = [...rows].sort((a, b) => {
     if (hasPValue && a.pValue !== undefined && b.pValue !== undefined) {
       return a.pValue - b.pValue;
@@ -130,28 +113,98 @@ function renderCompareResults(
     return totalB - totalA;
   });
 
-  for (const row of sorted) {
-    const sig = hasPValue && row.pValue !== undefined && row.pValue < 0.05;
-    const rowStyle = sig ? 'background:#fff3cd' : '';
-    tableHtml += `<tr style="${rowStyle}">`;
-    tableHtml += `<td style="font-family:monospace;white-space:nowrap">${escHtml(row.pattern)}</td>`;
-    for (const g of groupNames) {
-      const freq = row.frequencies[g] ?? 0;
-      const prop = row.proportions[g] ?? 0;
-      tableHtml += `<td style="text-align:right">${freq}</td>`;
-      tableHtml += `<td style="text-align:right">${prop.toFixed(3)}</td>`;
-    }
-    if (hasPValue) {
-      tableHtml += `<td style="text-align:right">${row.effectSize !== undefined ? row.effectSize.toFixed(3) : 'N/A'}</td>`;
-      tableHtml += `<td style="text-align:right">${row.pValue !== undefined ? row.pValue.toFixed(4) : 'N/A'}</td>`;
-    }
-    tableHtml += '</tr>';
-  }
-  tableHtml += '</tbody></table>';
-  panel.innerHTML += tableHtml;
-  addPanelDownloadButtons(panel, { csv: true, filename: 'compare-sequences' });
+  const GROUP_COLORS = ['#4e79a7', '#e15759', '#59a14f', '#edc948', '#b07aa1', '#76b7b2', '#f28e2b', '#ff9da7'];
 
-  container.appendChild(panel);
+  createViewToggle(container,
+    (fig) => {
+      const chartPanel = document.createElement('div');
+      chartPanel.className = 'panel';
+      chartPanel.innerHTML = `<div class="panel-title">Pattern Frequencies by Group (top 20)</div><div id="viz-cmp-seq-chart" style="width:100%"></div>`;
+      addPanelDownloadButtons(chartPanel, { image: true, filename: 'compare-sequences-chart' });
+      fig.appendChild(chartPanel);
+
+      requestAnimationFrame(() => {
+        const el = document.getElementById('viz-cmp-seq-chart');
+        if (!el) return;
+        const top20 = sorted.slice(0, 20);
+        const rect = el.getBoundingClientRect();
+        const width = Math.max(rect.width, 500);
+        const barH = 22;
+        const height = Math.max(top20.length * barH * groupNames.length + 60, 200);
+        const margin = { top: 10, right: 50, bottom: 30, left: 180 };
+        const innerW = width - margin.left - margin.right;
+        const innerH = height - margin.top - margin.bottom;
+
+        const svg = d3.select(el).append('svg').attr('width', width).attr('height', height);
+        const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+
+        const y0 = d3.scaleBand().domain(top20.map(r => r.pattern)).range([0, innerH]).padding(0.15);
+        const y1 = d3.scaleBand().domain(groupNames).range([0, y0.bandwidth()]).padding(0.05);
+        const maxFreq = Math.max(...top20.flatMap(r => groupNames.map(gn => r.frequencies[gn] ?? 0)), 1);
+        const x = d3.scaleLinear().domain([0, maxFreq * 1.1]).range([0, innerW]);
+
+        for (const row of top20) {
+          for (let gi = 0; gi < groupNames.length; gi++) {
+            const freq = row.frequencies[groupNames[gi]!] ?? 0;
+            g.append('rect')
+              .attr('y', (y0(row.pattern) ?? 0) + (y1(groupNames[gi]!) ?? 0))
+              .attr('x', 0)
+              .attr('width', x(freq))
+              .attr('height', y1.bandwidth())
+              .attr('fill', GROUP_COLORS[gi % GROUP_COLORS.length]!)
+              .attr('rx', 2);
+          }
+        }
+
+        g.append('g').call(d3.axisLeft(y0).tickSize(0).tickPadding(6))
+          .selectAll('text').attr('font-size', '9px').attr('font-family', 'monospace');
+        g.append('g').attr('transform', `translate(0,${innerH})`).call(d3.axisBottom(x).ticks(5));
+
+        groupNames.forEach((gn, gi) => {
+          svg.append('rect').attr('x', margin.left + gi * 100).attr('y', height - 12).attr('width', 10).attr('height', 10).attr('fill', GROUP_COLORS[gi % GROUP_COLORS.length]!).attr('rx', 2);
+          svg.append('text').attr('x', margin.left + gi * 100 + 14).attr('y', height - 3).attr('font-size', '10px').attr('fill', '#555').text(gn);
+        });
+      });
+    },
+    (tbl) => {
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+      panel.style.overflow = 'auto';
+      panel.style.maxHeight = '600px';
+      panel.innerHTML = `<div class="panel-title">Sequence Pattern Comparison (${rows.length} patterns)</div>`;
+
+      let tableHtml = '<table class="preview-table" style="font-size:11px"><thead><tr>';
+      tableHtml += '<th>Pattern</th>';
+      for (const g2 of groupNames) {
+        tableHtml += `<th>Freq (${g2})</th><th>Prop (${g2})</th>`;
+      }
+      if (hasPValue) tableHtml += '<th>Effect Size</th><th>p-value</th>';
+      tableHtml += '</tr></thead><tbody>';
+
+      for (const row of sorted) {
+        const sig = hasPValue && row.pValue !== undefined && row.pValue < 0.05;
+        const rowStyle = sig ? 'background:#fff3cd' : '';
+        tableHtml += `<tr style="${rowStyle}">`;
+        tableHtml += `<td style="font-family:monospace;white-space:nowrap">${escHtml(row.pattern)}</td>`;
+        for (const g2 of groupNames) {
+          const freq = row.frequencies[g2] ?? 0;
+          const prop = row.proportions[g2] ?? 0;
+          tableHtml += `<td style="text-align:right">${freq}</td>`;
+          tableHtml += `<td style="text-align:right">${prop.toFixed(3)}</td>`;
+        }
+        if (hasPValue) {
+          tableHtml += `<td style="text-align:right">${row.effectSize !== undefined ? row.effectSize.toFixed(3) : 'N/A'}</td>`;
+          tableHtml += `<td style="text-align:right">${row.pValue !== undefined ? row.pValue.toFixed(4) : 'N/A'}</td>`;
+        }
+        tableHtml += '</tr>';
+      }
+      tableHtml += '</tbody></table>';
+      panel.innerHTML += tableHtml;
+      addPanelDownloadButtons(panel, { csv: true, filename: 'compare-sequences' });
+      tbl.appendChild(panel);
+    },
+    'cmp-seq-res',
+  );
 }
 
 function escHtml(s: string): string {

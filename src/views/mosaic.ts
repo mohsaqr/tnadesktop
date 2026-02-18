@@ -43,10 +43,10 @@ function gammaP(a: number, x: number): number {
   return 1 - h * Math.exp(-x + a * Math.log(x) - lgamma(a));
 }
 
-interface ChiSqResult { chiSq: number; df: number; pValue: number; stdRes: number[][] }
+export interface ChiSqResult { chiSq: number; df: number; pValue: number; stdRes: number[][] }
 
 /** Pearson chi-square test on a contingency table (rows × cols). */
-function chiSquareTest(tab: number[][]): ChiSqResult {
+export function chiSquareTest(tab: number[][]): ChiSqResult {
   const nR = tab.length, nC = tab[0]!.length;
   const rS = new Array(nR).fill(0) as number[];
   const cS = new Array(nC).fill(0) as number[];

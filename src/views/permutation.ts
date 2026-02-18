@@ -8,6 +8,7 @@ import { showTooltip, hideTooltip } from '../main';
 import { permutationTest } from '../analysis/permutation';
 import type { PermutationResult, PermutationOptions } from '../analysis/permutation';
 import { addPanelDownloadButtons } from './export';
+import { createViewToggle } from './dashboard';
 
 export function renderPermutationTab(
   container: HTMLElement,
@@ -118,55 +119,51 @@ function renderPermutationResults(
 ) {
   container.innerHTML = '';
 
-  const grid = document.createElement('div');
-  grid.style.display = 'grid';
-  grid.style.gridTemplateColumns = '1fr 1fr';
-  grid.style.gap = '16px';
-
-  // Edge stats table
-  const tablePanel = document.createElement('div');
-  tablePanel.className = 'panel';
-  tablePanel.style.maxHeight = '500px';
-  tablePanel.style.overflow = 'auto';
-
   const sigCount = result.edgeStats.filter(e => e.pValue < result.level).length;
-  tablePanel.innerHTML = `<div class="panel-title">Edge Differences: ${group1} vs ${group2} (${sigCount} significant)</div>`;
 
-  let tableHtml = '<table class="preview-table" style="font-size:11px"><thead><tr>';
-  tableHtml += '<th>From</th><th>To</th><th>Diff</th><th>Effect Size</th><th>p-value</th><th>Sig</th>';
-  tableHtml += '</tr></thead><tbody>';
+  createViewToggle(container,
+    (fig) => {
+      const heatPanel = document.createElement('div');
+      heatPanel.className = 'panel';
+      heatPanel.innerHTML = `<div class="panel-title">Significant Differences Heatmap: ${group1} vs ${group2} (${sigCount} significant)</div><div id="viz-perm-heatmap" style="width:100%"></div>`;
+      addPanelDownloadButtons(heatPanel, { image: true, filename: 'permutation-heatmap' });
+      fig.appendChild(heatPanel);
 
-  // Sort by p-value
-  const sorted = [...result.edgeStats].sort((a, b) => a.pValue - b.pValue);
-  for (const e of sorted) {
-    const sig = e.pValue < result.level;
-    const rowStyle = sig ? 'background:#fff3cd' : '';
-    tableHtml += `<tr style="${rowStyle}">`;
-    tableHtml += `<td>${e.from}</td><td>${e.to}</td>`;
-    tableHtml += `<td>${e.diffTrue.toFixed(4)}</td>`;
-    tableHtml += `<td>${isNaN(e.effectSize) ? 'N/A' : e.effectSize.toFixed(3)}</td>`;
-    tableHtml += `<td>${e.pValue.toFixed(4)}</td>`;
-    tableHtml += `<td style="text-align:center">${sig ? '***' : ''}</td>`;
-    tableHtml += '</tr>';
-  }
-  tableHtml += '</tbody></table>';
-  tablePanel.innerHTML += tableHtml;
-  addPanelDownloadButtons(tablePanel, { csv: true, filename: `permutation-results` });
-  grid.appendChild(tablePanel);
+      requestAnimationFrame(() => {
+        const el = document.getElementById('viz-perm-heatmap');
+        if (el) renderDiffHeatmap(el, result);
+      });
+    },
+    (tbl) => {
+      const tablePanel = document.createElement('div');
+      tablePanel.className = 'panel';
+      tablePanel.style.maxHeight = '600px';
+      tablePanel.style.overflow = 'auto';
+      tablePanel.innerHTML = `<div class="panel-title">Edge Differences: ${group1} vs ${group2} (${sigCount} significant)</div>`;
 
-  // Difference heatmap
-  const heatPanel = document.createElement('div');
-  heatPanel.className = 'panel';
-  heatPanel.innerHTML = `<div class="panel-title">Significant Differences Heatmap</div><div id="viz-perm-heatmap" style="width:100%"></div>`;
-  addPanelDownloadButtons(heatPanel, { image: true, filename: 'permutation-heatmap' });
-  grid.appendChild(heatPanel);
+      let tableHtml = '<table class="preview-table" style="font-size:11px"><thead><tr>';
+      tableHtml += '<th>From</th><th>To</th><th>Diff</th><th>Effect Size</th><th>p-value</th><th>Sig</th>';
+      tableHtml += '</tr></thead><tbody>';
 
-  container.appendChild(grid);
-
-  requestAnimationFrame(() => {
-    const el = document.getElementById('viz-perm-heatmap');
-    if (el) renderDiffHeatmap(el, result);
-  });
+      const sorted = [...result.edgeStats].sort((a, b) => a.pValue - b.pValue);
+      for (const e of sorted) {
+        const sig = e.pValue < result.level;
+        const rowStyle = sig ? 'background:#fff3cd' : '';
+        tableHtml += `<tr style="${rowStyle}">`;
+        tableHtml += `<td>${e.from}</td><td>${e.to}</td>`;
+        tableHtml += `<td>${e.diffTrue.toFixed(4)}</td>`;
+        tableHtml += `<td>${isNaN(e.effectSize) ? 'N/A' : e.effectSize.toFixed(3)}</td>`;
+        tableHtml += `<td>${e.pValue.toFixed(4)}</td>`;
+        tableHtml += `<td style="text-align:center">${sig ? '***' : ''}</td>`;
+        tableHtml += '</tr>';
+      }
+      tableHtml += '</tbody></table>';
+      tablePanel.innerHTML += tableHtml;
+      addPanelDownloadButtons(tablePanel, { csv: true, filename: 'permutation-results' });
+      tbl.appendChild(tablePanel);
+    },
+    'perm-res',
+  );
 }
 
 function renderDiffHeatmap(container: HTMLElement, result: PermutationResult) {

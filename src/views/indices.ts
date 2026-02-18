@@ -6,7 +6,17 @@ import type { TNA } from 'tnaj';
 import { computeSequenceIndices, summarizeIndices } from '../analysis/indices';
 import type { SequenceIndex, IndicesSummary } from '../analysis/indices';
 import { addPanelDownloadButtons } from './export';
+import { createViewToggle } from './dashboard';
+import { state } from '../main';
 
+const metricDefs: { key: keyof SequenceIndex; label: string }[] = [
+  { key: 'entropy', label: 'Shannon Entropy' },
+  { key: 'turbulence', label: 'Turbulence' },
+  { key: 'normalizedEntropy', label: 'Normalized Entropy' },
+  { key: 'selfLoopRate', label: 'Self-Loop Rate' },
+];
+
+/** Original combined view (kept for multi-group card usage). */
 export function renderIndicesTab(
   container: HTMLElement,
   model: TNA,
@@ -20,10 +30,230 @@ export function renderIndicesTab(
   const indices = computeSequenceIndices(model.data);
   const summaries = summarizeIndices(indices);
 
-  const grid = document.createElement('div');
-  grid.className = 'panels-grid';
+  createViewToggle(container,
+    (fig) => {
+      const chartGrid = document.createElement('div');
+      chartGrid.style.display = 'grid';
+      chartGrid.style.gridTemplateColumns = '1fr 1fr';
+      chartGrid.style.gap = '16px';
 
-  // Summary statistics table
+      for (const def of metricDefs) {
+        const panel = document.createElement('div');
+        panel.className = 'panel';
+        panel.innerHTML = `<div class="panel-title">${def.label}</div><div id="viz-idx-${def.key}${idSuffix}" style="width:100%"></div>`;
+        addPanelDownloadButtons(panel, { image: true, filename: `index-${def.key}${idSuffix}` });
+        chartGrid.appendChild(panel);
+      }
+      fig.appendChild(chartGrid);
+
+      requestAnimationFrame(() => {
+        for (const def of metricDefs) {
+          const el = document.getElementById(`viz-idx-${def.key}${idSuffix}`);
+          if (el) {
+            const vals = indices.map(idx => idx[def.key] as number);
+            renderIndexHistogram(el, vals, def.label);
+          }
+        }
+      });
+    },
+    (tbl) => {
+      renderSummaryTable(tbl, indices, summaries, idSuffix);
+    },
+    `idx${idSuffix}`,
+  );
+}
+
+/** Histograms-only sub-view for secondary tabs. */
+export function renderIdxHistView(
+  container: HTMLElement,
+  model: TNA,
+  idSuffix = '',
+) {
+  if (!model.data) {
+    container.innerHTML = '<div class="panel" style="text-align:center;color:#888;padding:40px">No sequence data available.</div>';
+    return;
+  }
+
+  const indices = computeSequenceIndices(model.data);
+
+  createViewToggle(container,
+    (fig) => {
+      // Card/Combined toggle
+      const toggleBar = document.createElement('div');
+      toggleBar.style.marginBottom = '8px';
+      toggleBar.innerHTML = `<div class="view-toggle"><button class="toggle-btn" id="idx-hist-toggle-card${idSuffix}">Card View</button><button class="toggle-btn active" id="idx-hist-toggle-combined${idSuffix}">Combined</button></div>`;
+      fig.appendChild(toggleBar);
+
+      const outerWrapper = document.createElement('div');
+      outerWrapper.className = 'chart-width-container';
+      outerWrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+      outerWrapper.style.margin = '0 auto';
+      const viewContainer = document.createElement('div');
+      outerWrapper.appendChild(viewContainer);
+      fig.appendChild(outerWrapper);
+
+      let currentView: 'card' | 'combined' = 'combined';
+
+      function renderCardView() {
+        viewContainer.innerHTML = '';
+        const chartGrid = document.createElement('div');
+        chartGrid.style.display = 'grid';
+        chartGrid.style.gridTemplateColumns = '1fr 1fr';
+        chartGrid.style.gap = '16px';
+
+        for (const def of metricDefs) {
+          const panel = document.createElement('div');
+          panel.className = 'panel';
+          panel.innerHTML = `<div class="panel-title">${def.label}</div><div id="viz-idx-${def.key}${idSuffix}" style="width:100%"></div>`;
+          addPanelDownloadButtons(panel, { image: true, filename: `index-${def.key}${idSuffix}` });
+          chartGrid.appendChild(panel);
+        }
+        viewContainer.appendChild(chartGrid);
+
+        requestAnimationFrame(() => {
+          for (const def of metricDefs) {
+            const el = document.getElementById(`viz-idx-${def.key}${idSuffix}`);
+            if (el) {
+              const vals = indices.map(idx => idx[def.key] as number);
+              renderIndexHistogram(el, vals, def.label);
+            }
+          }
+        });
+      }
+
+      function renderCombinedView() {
+        viewContainer.innerHTML = '';
+        const panel = document.createElement('div');
+        panel.className = 'panel';
+        const innerGrid = document.createElement('div');
+        innerGrid.style.display = 'grid';
+        innerGrid.style.gridTemplateColumns = '1fr 1fr';
+        innerGrid.style.gap = '16px';
+
+        for (const def of metricDefs) {
+          const cell = document.createElement('div');
+          cell.innerHTML = `<div class="panel-title">${def.label}</div><div id="viz-idx-${def.key}${idSuffix}" style="width:100%"></div>`;
+          innerGrid.appendChild(cell);
+        }
+        panel.appendChild(innerGrid);
+        addPanelDownloadButtons(panel, { image: true, filename: `indices-histograms${idSuffix}` });
+        viewContainer.appendChild(panel);
+
+        requestAnimationFrame(() => {
+          for (const def of metricDefs) {
+            const el = document.getElementById(`viz-idx-${def.key}${idSuffix}`);
+            if (el) {
+              const vals = indices.map(idx => idx[def.key] as number);
+              renderIndexHistogram(el, vals, def.label);
+            }
+          }
+        });
+      }
+
+      renderCombinedView();
+
+      setTimeout(() => {
+        document.getElementById(`idx-hist-toggle-card${idSuffix}`)?.addEventListener('click', () => {
+          if (currentView === 'card') return;
+          currentView = 'card';
+          document.getElementById(`idx-hist-toggle-card${idSuffix}`)!.classList.add('active');
+          document.getElementById(`idx-hist-toggle-combined${idSuffix}`)!.classList.remove('active');
+          renderCardView();
+        });
+        document.getElementById(`idx-hist-toggle-combined${idSuffix}`)?.addEventListener('click', () => {
+          if (currentView === 'combined') return;
+          currentView = 'combined';
+          document.getElementById(`idx-hist-toggle-combined${idSuffix}`)!.classList.add('active');
+          document.getElementById(`idx-hist-toggle-card${idSuffix}`)!.classList.remove('active');
+          renderCombinedView();
+        });
+      }, 0);
+    },
+    (tbl) => {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'chart-width-container';
+      wrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+      wrapper.style.margin = '0 auto';
+      // Per-sequence detail table
+      const detailPanel = document.createElement('div');
+      detailPanel.className = 'panel';
+      detailPanel.style.maxHeight = '500px';
+      detailPanel.style.overflow = 'auto';
+      detailPanel.innerHTML = `<div class="panel-title">Per-Sequence Indices</div>`;
+
+      let detailHtml = '<table class="preview-table" style="font-size:11px"><thead><tr>';
+      detailHtml += '<th>Seq</th><th>Length</th><th>States</th><th>Entropy</th><th>Norm. Entropy</th><th>Transitions</th><th>Turbulence</th><th>Self-Loop Rate</th>';
+      detailHtml += '</tr></thead><tbody>';
+      const maxShow = Math.min(indices.length, 200);
+      for (let i = 0; i < maxShow; i++) {
+        const idx = indices[i]!;
+        detailHtml += '<tr>';
+        detailHtml += `<td>${idx.id + 1}</td>`;
+        detailHtml += `<td>${idx.length}</td>`;
+        detailHtml += `<td>${idx.nUniqueStates}</td>`;
+        detailHtml += `<td>${idx.entropy.toFixed(3)}</td>`;
+        detailHtml += `<td>${idx.normalizedEntropy.toFixed(3)}</td>`;
+        detailHtml += `<td>${idx.complexity}</td>`;
+        detailHtml += `<td>${idx.turbulence.toFixed(3)}</td>`;
+        detailHtml += `<td>${idx.selfLoopRate.toFixed(3)}</td>`;
+        detailHtml += '</tr>';
+      }
+      if (indices.length > maxShow) {
+        detailHtml += `<tr><td colspan="8" style="text-align:center;color:#888;font-style:italic">... ${indices.length - maxShow} more sequences</td></tr>`;
+      }
+      detailHtml += '</tbody></table>';
+      detailPanel.innerHTML += detailHtml;
+      addPanelDownloadButtons(detailPanel, { csv: true, filename: `indices-detail${idSuffix}` });
+      wrapper.appendChild(detailPanel);
+      tbl.appendChild(wrapper);
+    },
+    `idx-hist${idSuffix}`,
+  );
+}
+
+/** Summary-only sub-view for secondary tabs. */
+export function renderIdxSummaryView(
+  container: HTMLElement,
+  model: TNA,
+  idSuffix = '',
+) {
+  if (!model.data) {
+    container.innerHTML = '<div class="panel" style="text-align:center;color:#888;padding:40px">No sequence data available.</div>';
+    return;
+  }
+
+  const indices = computeSequenceIndices(model.data);
+  const summaries = summarizeIndices(indices);
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'chart-width-container';
+  wrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+  wrapper.style.margin = '0 auto';
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.innerHTML = `<div class="panel-title">Sequence Index Summary (${indices.length} sequences)</div>`;
+
+  let summaryHtml = '<table class="preview-table" style="font-size:12px"><thead><tr>';
+  summaryHtml += '<th>Metric</th><th>Mean</th><th>SD</th><th>Median</th><th>Min</th><th>Max</th>';
+  summaryHtml += '</tr></thead><tbody>';
+  for (const s of summaries) {
+    summaryHtml += '<tr>';
+    summaryHtml += `<td style="font-weight:600">${s.metric}</td>`;
+    summaryHtml += `<td>${s.mean.toFixed(3)}</td>`;
+    summaryHtml += `<td>${s.sd.toFixed(3)}</td>`;
+    summaryHtml += `<td>${s.median.toFixed(3)}</td>`;
+    summaryHtml += `<td>${s.min.toFixed(3)}</td>`;
+    summaryHtml += `<td>${s.max.toFixed(3)}</td>`;
+    summaryHtml += '</tr>';
+  }
+  summaryHtml += '</tbody></table>';
+  panel.innerHTML += summaryHtml;
+  addPanelDownloadButtons(panel, { csv: true, filename: `indices-summary${idSuffix}` });
+  wrapper.appendChild(panel);
+  container.appendChild(wrapper);
+}
+
+function renderSummaryTable(tbl: HTMLElement, indices: SequenceIndex[], summaries: IndicesSummary[], idSuffix: string) {
   const summaryPanel = document.createElement('div');
   summaryPanel.className = 'panel';
   summaryPanel.innerHTML = `<div class="panel-title">Sequence Index Summary (${indices.length} sequences)</div>`;
@@ -44,36 +274,14 @@ export function renderIndicesTab(
   summaryHtml += '</tbody></table>';
   summaryPanel.innerHTML += summaryHtml;
   addPanelDownloadButtons(summaryPanel, { csv: true, filename: `indices-summary${idSuffix}` });
-  grid.appendChild(summaryPanel);
+  tbl.appendChild(summaryPanel);
 
-  // Histograms for key metrics
-  const chartGrid = document.createElement('div');
-  chartGrid.style.display = 'grid';
-  chartGrid.style.gridTemplateColumns = '1fr 1fr';
-  chartGrid.style.gap = '16px';
-
-  const metricDefs: { key: keyof SequenceIndex; label: string }[] = [
-    { key: 'entropy', label: 'Shannon Entropy' },
-    { key: 'turbulence', label: 'Turbulence' },
-    { key: 'normalizedEntropy', label: 'Normalized Entropy' },
-    { key: 'selfLoopRate', label: 'Self-Loop Rate' },
-  ];
-
-  for (const def of metricDefs) {
-    const panel = document.createElement('div');
-    panel.className = 'panel';
-    panel.innerHTML = `<div class="panel-title">${def.label}</div><div id="viz-idx-${def.key}${idSuffix}" style="width:100%"></div>`;
-    addPanelDownloadButtons(panel, { image: true, filename: `index-${def.key}${idSuffix}` });
-    chartGrid.appendChild(panel);
-  }
-
-  grid.appendChild(chartGrid);
-
-  // Per-sequence table (scrollable)
+  // Per-sequence detail table
   const detailPanel = document.createElement('div');
   detailPanel.className = 'panel';
-  detailPanel.style.maxHeight = '400px';
+  detailPanel.style.maxHeight = '500px';
   detailPanel.style.overflow = 'auto';
+  detailPanel.style.marginTop = '16px';
   detailPanel.innerHTML = `<div class="panel-title">Per-Sequence Indices</div>`;
 
   let detailHtml = '<table class="preview-table" style="font-size:11px"><thead><tr>';
@@ -99,20 +307,7 @@ export function renderIndicesTab(
   detailHtml += '</tbody></table>';
   detailPanel.innerHTML += detailHtml;
   addPanelDownloadButtons(detailPanel, { csv: true, filename: `indices-detail${idSuffix}` });
-  grid.appendChild(detailPanel);
-
-  container.appendChild(grid);
-
-  // Render histograms
-  requestAnimationFrame(() => {
-    for (const def of metricDefs) {
-      const el = document.getElementById(`viz-idx-${def.key}${idSuffix}`);
-      if (el) {
-        const vals = indices.map(idx => idx[def.key] as number);
-        renderIndexHistogram(el, vals, def.label);
-      }
-    }
-  });
+  tbl.appendChild(detailPanel);
 }
 
 function renderIndexHistogram(container: HTMLElement, values: number[], label: string) {
