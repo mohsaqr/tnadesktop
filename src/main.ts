@@ -61,7 +61,7 @@ export interface NetworkSettings {
 }
 
 // Bump this whenever defaults change to force a localStorage reset
-export const SETTINGS_VERSION = 9;
+export const SETTINGS_VERSION = 10;
 
 export function defaultNetworkSettings(): NetworkSettings {
   return {
@@ -147,7 +147,8 @@ export interface AppState {
   centralityLoops: boolean;
   clusterK: number;
   clusterDissimilarity: 'hamming' | 'lv' | 'osa' | 'lcs';
-  activeTab: string;
+  activeMode: 'single' | 'clustering' | 'group';
+  activeSubTab: string;
   error: string | null;
   networkSettings: NetworkSettings;
 }
@@ -178,7 +179,8 @@ export const state: AppState = {
   selectedMeasure2: 'BetweennessRSP',
   selectedMeasure3: 'OutStrength',
   centralityLoops: false,
-  activeTab: 'network',
+  activeMode: 'single',
+  activeSubTab: 'network',
   error: null,
   networkSettings: defaultNetworkSettings(),
 };
@@ -301,7 +303,8 @@ function loadState() {
     state.selectedMeasure2 = saved.selectedMeasure2 ?? 'BetweennessRSP';
     state.selectedMeasure3 = saved.selectedMeasure3 ?? 'OutStrength';
     state.centralityLoops = saved.centralityLoops ?? false;
-    state.activeTab = 'network'; // always land on network tab
+    state.activeMode = 'single';
+    state.activeSubTab = 'network';
     // Reset network settings to fresh defaults when version bumps
     if (settingsStale) {
       state.networkSettings = defaultNetworkSettings();

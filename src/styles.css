@@ -424,8 +424,48 @@ body {
   grid-column: 1 / -1;
 }
 
-/* ─── Tab Bar ─── */
-.tab-bar {
+/* ─── Mode Bar ─── */
+.mode-bar {
+  display: flex;
+  gap: 0;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.mode-bar button {
+  flex: 1;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  background: transparent;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  color: #888;
+  transition: all 0.15s;
+}
+
+.mode-bar button:first-child { border-radius: 6px 0 0 6px; }
+.mode-bar button:last-child { border-radius: 0 6px 6px 0; }
+.mode-bar button:not(:first-child) { border-left: none; }
+
+.mode-bar button.active {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+}
+
+.mode-bar button.active + button {
+  border-left-color: var(--blue);
+}
+
+.mode-bar button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ─── Subtab Bar ─── */
+.subtab-bar {
   display: flex;
   gap: 2px;
   margin-bottom: 16px;
@@ -434,9 +474,9 @@ body {
   padding: 3px;
 }
 
-.tab-bar button {
+.subtab-bar button {
   flex: 1;
-  padding: 8px 16px;
+  padding: 8px 12px;
   border: none;
   border-radius: 6px;
   font-size: 12px;
@@ -447,14 +487,20 @@ body {
   transition: all 0.15s;
 }
 
-.tab-bar button.active {
+.subtab-bar button.active {
   background: #fff;
   color: var(--text);
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
-.tab-bar button:hover:not(.active) {
+.subtab-bar button:hover:not(.active):not(.disabled) {
   color: var(--text);
+}
+
+.subtab-bar button.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 /* ─── SVG Styles ─── */

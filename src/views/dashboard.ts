@@ -20,21 +20,20 @@ import { bootstrapTna } from '../analysis/bootstrap';
 import type { BootstrapOptions } from '../analysis/bootstrap';
 import { renderPatternsTab } from './patterns';
 import { renderIndicesTab } from './indices';
-import { renderGroupAnalysisTab } from './clustering';
-import { renderMosaic } from './mosaic';
+import { renderClusteringSetup, renderGroupSetup, renderGroupGrid, renderCombinedCanvas } from './clustering';
+import { renderMosaic, renderClusterMosaic } from './mosaic';
 import { renderCompareNetworksTab } from './compare-networks';
 import { estimateCS } from '../analysis/stability';
 import type { StabilityResult } from '../analysis/stability';
 import { NODE_COLORS } from './colors';
 import * as d3 from 'd3';
 
-type Tab = 'network' | 'group-analysis' | 'centralities' | 'betweenness' | 'communities' | 'cliques' | 'bootstrap' | 'frequencies' | 'sequences' | 'patterns' | 'indices' | 'permutation' | 'compare-sequences' | 'compare-networks';
+type Mode = 'single' | 'clustering' | 'group';
 
-interface TabDef { id: Tab; label: string; groupOnly?: boolean; singleOnly?: boolean }
+interface SubTabDef { id: string; label: string }
 
-const TABS: TabDef[] = [
+const SINGLE_TABS: SubTabDef[] = [
   { id: 'network', label: 'Network' },
-  { id: 'group-analysis', label: 'Group Analysis' },
   { id: 'frequencies', label: 'Frequencies' },
   { id: 'centralities', label: 'Centralities' },
   { id: 'communities', label: 'Communities' },
@@ -43,9 +42,23 @@ const TABS: TabDef[] = [
   { id: 'sequences', label: 'Sequences' },
   { id: 'patterns', label: 'Patterns' },
   { id: 'indices', label: 'Seq. Indices' },
-  { id: 'permutation', label: 'Permutation Test', groupOnly: true },
-  { id: 'compare-sequences', label: 'Compare Sequences', groupOnly: true },
-  { id: 'compare-networks', label: 'Compare Networks', groupOnly: true },
+];
+
+const GROUP_TABS: SubTabDef[] = [
+  { id: 'setup', label: 'Setup' },
+  { id: 'network', label: 'Network' },
+  { id: 'mosaic', label: 'Mosaic' },
+  { id: 'frequencies', label: 'Frequencies' },
+  { id: 'centralities', label: 'Centralities' },
+  { id: 'communities', label: 'Communities' },
+  { id: 'cliques', label: 'Cliques' },
+  { id: 'bootstrap', label: 'Bootstrap' },
+  { id: 'sequences', label: 'Sequences' },
+  { id: 'patterns', label: 'Patterns' },
+  { id: 'indices', label: 'Seq. Indices' },
+  { id: 'permutation', label: 'Permutation' },
+  { id: 'compare-sequences', label: 'Compare Seq' },
+  { id: 'compare-networks', label: 'Compare Net' },
 ];
 
 // ─── Cached model data for fast network-only re-render ───
@@ -110,21 +123,68 @@ export function getActiveGroupCents(): Map<string, CentralityResult> {
   return activeGroupCents;
 }
 
-/** Update group tab visibility (called from clustering.ts after activation/deactivation). */
-export function updateGroupTabVisibility() {
-  const hasMulti = isGroupAnalysisActive();
-  const tabBar = document.getElementById('main-tab-bar');
-  if (tabBar) {
-    tabBar.querySelectorAll('button').forEach(btn => {
-      const b = btn as HTMLElement;
-      if (b.dataset.groupOnly === 'true') {
-        b.style.display = hasMulti ? '' : 'none';
+/** Get the subtab list for the current mode. */
+function getSubTabs(): SubTabDef[] {
+  return state.activeMode === 'single' ? SINGLE_TABS : GROUP_TABS;
+}
+
+/** Update subtab enabled/disabled states (called after group activation/deactivation). */
+export function updateSubTabStates() {
+  if (state.activeMode !== 'single') {
+    const groupsActive = isGroupAnalysisActive();
+    const btns = document.querySelectorAll('#subtab-bar button');
+    btns.forEach(btn => {
+      const b = btn as HTMLButtonElement;
+      if (b.dataset.subtab !== 'setup') {
+        b.disabled = !groupsActive;
+        b.classList.toggle('disabled', !groupsActive);
       }
     });
   }
-  if (!hasMulti && TABS.find(t => t.id === state.activeTab)?.groupOnly) {
-    state.activeTab = 'network';
+}
+
+/** Rebuild the subtab bar for the current mode. */
+export function renderSubTabBar() {
+  const bar = document.getElementById('subtab-bar');
+  if (!bar) return;
+  bar.innerHTML = '';
+  const tabs = getSubTabs();
+  const groupsActive = isGroupAnalysisActive();
+  for (const tab of tabs) {
+    const btn = document.createElement('button');
+    btn.textContent = tab.label;
+    btn.dataset.subtab = tab.id;
+    if (tab.id === state.activeSubTab) btn.classList.add('active');
+    // In clustering/group modes, disable non-setup subtabs until groups are active
+    if (state.activeMode !== 'single' && tab.id !== 'setup' && !groupsActive) {
+      btn.disabled = true;
+      btn.classList.add('disabled');
+    }
+    btn.addEventListener('click', () => {
+      if (btn.disabled) return;
+      state.activeSubTab = tab.id;
+      bar.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      updateTabContent();
+      saveState();
+    });
+    bar.appendChild(btn);
   }
+}
+
+/** Switch the top-level mode and reset subtab accordingly. */
+function switchMode(newMode: Mode) {
+  state.activeMode = newMode;
+  if (newMode === 'single') {
+    state.activeSubTab = 'network';
+  } else {
+    const groupsActive = isGroupAnalysisActive();
+    state.activeSubTab = groupsActive ? 'network' : 'setup';
+  }
+  renderSubTabBar();
+  updateSubTabStates();
+  updateTabContent();
+  saveState();
 }
 
 const GROUP_CARD_COLORS = ['#4e79a7', '#e15759', '#59a14f', '#edc948', '#b07aa1', '#76b7b2', '#f28e2b', '#ff9da7'];
@@ -137,14 +197,15 @@ function debouncedNetworkUpdate() {
 }
 
 function updateNetworkOnly() {
-  // Network tab is always single model now
   if (!cachedModel) return;
-  if (state.activeTab === 'network') {
+  const mode = state.activeMode;
+  const sub = state.activeSubTab;
+
+  if (mode === 'single' && sub === 'network') {
     const el = document.getElementById('viz-network');
     if (el) renderNetwork(el, cachedModel, state.networkSettings);
-  } else if (state.activeTab === 'communities') {
-    // Communities tab may be multi-group when group analysis is active
-    if (isGroupAnalysisActive() && cachedModels.size > 0) {
+  } else if (sub === 'communities') {
+    if (mode !== 'single' && isGroupAnalysisActive() && cachedModels.size > 0) {
       const gs = groupNetworkSettings(state.networkSettings);
       let i = 0;
       for (const [groupName, model] of cachedModels) {
@@ -152,7 +213,7 @@ function updateNetworkOnly() {
         if (el) renderNetwork(el, model, gs, cachedComms.get(groupName) ?? undefined);
         i++;
       }
-    } else {
+    } else if (mode === 'single') {
       const el = document.getElementById('viz-community-network');
       if (el) renderNetwork(el, cachedModel, state.networkSettings, cachedComm ?? undefined);
     }
@@ -473,27 +534,41 @@ export function renderDashboard(container: HTMLElement) {
   main.className = 'main-content';
   dashboard.appendChild(main);
 
-  // Tab bar (group-only tabs are shown/hidden dynamically in updateAll)
-  const tabBar = document.createElement('div');
-  tabBar.className = 'tab-bar';
-  tabBar.id = 'main-tab-bar';
-  for (const tab of TABS) {
+  // Mode bar (top-level: Single Network / Clustering / Group Analysis)
+  const modeBar = document.createElement('div');
+  modeBar.className = 'mode-bar';
+  modeBar.id = 'mode-bar';
+
+  const modes: { id: Mode; label: string }[] = [
+    { id: 'single', label: 'Single Network' },
+    { id: 'clustering', label: 'Clustering' },
+    { id: 'group', label: 'Group Analysis' },
+  ];
+
+  for (const mode of modes) {
     const btn = document.createElement('button');
-    btn.textContent = tab.label;
-    btn.dataset.tab = tab.id;
-    if (tab.groupOnly) btn.dataset.groupOnly = 'true';
-    if (tab.singleOnly) btn.dataset.singleOnly = 'true';
-    if (tab.id === state.activeTab) btn.classList.add('active');
+    btn.textContent = mode.label;
+    btn.dataset.mode = mode.id;
+    if (mode.id === state.activeMode) btn.classList.add('active');
+    if (mode.id === 'group' && !state.groupLabels) {
+      btn.disabled = true;
+      btn.title = 'No group column in data';
+    }
     btn.addEventListener('click', () => {
-      state.activeTab = tab.id;
-      updateTabContent();
-      tabBar.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      if (btn.disabled) return;
+      switchMode(mode.id);
+      modeBar.querySelectorAll('button').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      saveState();
     });
-    tabBar.appendChild(btn);
+    modeBar.appendChild(btn);
   }
-  main.appendChild(tabBar);
+  main.appendChild(modeBar);
+
+  // Subtab bar (secondary navigation within current mode)
+  const subtabBar = document.createElement('div');
+  subtabBar.className = 'subtab-bar';
+  subtabBar.id = 'subtab-bar';
+  main.appendChild(subtabBar);
 
   // Content area
   const content = document.createElement('div');
@@ -527,13 +602,9 @@ export function renderDashboard(container: HTMLElement) {
     const pruneLabel = document.getElementById('prune-value');
     if (pruneLabel) pruneLabel.textContent = '0.00';
 
-    // Navigate to Network tab on model type change
-    state.activeTab = 'network';
-    const tabBar = document.getElementById('tab-bar');
-    if (tabBar) {
-      tabBar.querySelectorAll('button').forEach(b => b.classList.remove('active'));
-      tabBar.querySelector('[data-tab="network"]')?.classList.add('active');
-    }
+    // Navigate to Network subtab on model type change
+    state.activeSubTab = 'network';
+    renderSubTabBar();
 
     updateAll();
   });
@@ -633,7 +704,8 @@ export function renderDashboard(container: HTMLElement) {
     debouncedNetworkUpdate();
   });
 
-  // Initial render
+  // Initial render: populate subtab bar, then render content
+  renderSubTabBar();
   updateAll();
 }
 
@@ -745,8 +817,8 @@ function updateAll() {
     // Populate node color pickers
     populateNodeColors();
 
-    // Show/hide group-only tabs
-    updateGroupTabVisibility();
+    // Update subtab enabled/disabled states
+    updateSubTabStates();
 
     updateTabContent(model, cachedCent);
     saveState();
@@ -764,7 +836,6 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
   if (!content) return;
 
   if (!model) {
-    // Use cached values from updateAll() when just switching tabs
     if (cachedModel) {
       model = cachedModel;
       cent = cachedCent;
@@ -780,77 +851,93 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
 
   content.innerHTML = '';
 
-  const tab = state.activeTab as Tab;
-  const isDownstreamTab = tab !== 'network' && tab !== 'group-analysis';
-  const groupActive = isGroupAnalysisActive();
+  const mode = state.activeMode;
+  const sub = state.activeSubTab;
 
-  // For downstream tabs, populate cachedModels/cachedCents from active group data
-  if (isDownstreamTab && groupActive) {
-    cachedModels = new Map(activeGroupModels);
-    cachedCents = new Map(activeGroupCents);
-  }
-
-  const useMulti = isDownstreamTab && groupActive;
-
-  switch (tab) {
-    case 'network':
-      // Network tab: always single model
-      renderNetworkTab(content, model);
-      break;
-    case 'group-analysis':
-      renderGroupAnalysisTab(content, model, state.networkSettings);
-      break;
-    case 'centralities':
-      if (useMulti) renderCentralitiesTabMulti(content);
-      else renderCentralitiesTab(content, model, cent);
-      break;
-    case 'betweenness':
-      // Legacy: redirect to centralities tab
-      state.activeTab = 'centralities';
-      currentCentSubView = 'betweenness';
-      if (useMulti) renderCentralitiesTabMulti(content);
-      else renderCentralitiesTab(content, model, cent);
-      break;
-    case 'frequencies':
-      if (useMulti) renderFrequenciesTabMulti(content);
-      else renderFrequenciesTab(content, model);
-      break;
-    case 'sequences':
-      if (useMulti) renderSequencesTabMulti(content);
-      else renderSequencesTab(content, model);
-      break;
-    case 'communities':
-      if (useMulti) renderCommunitiesTabMulti(content);
-      else renderCommunitiesTab(content, model, comm);
-      break;
-    case 'cliques':
-      if (useMulti) renderMultiGroupTab(content, (card, m, suffix) => renderCliquesTab(card, m, state.networkSettings, suffix));
-      else renderCliquesTab(content, model, state.networkSettings);
-      break;
-    case 'bootstrap':
-      if (useMulti) renderBootstrapTabMulti(content);
-      else renderBootstrapTab(content, model, state.networkSettings);
-      break;
-    case 'patterns':
-      if (useMulti) renderMultiGroupTab(content, (card, m, suffix) => renderPatternsTab(card, m, suffix));
-      else renderPatternsTab(content, model);
-      break;
-    case 'indices':
-      if (useMulti) renderMultiGroupTab(content, (card, m, suffix) => renderIndicesTab(card, m, suffix));
-      else renderIndicesTab(content, model);
-      break;
-    // Group-only tabs: use the full GroupTNA from group analysis
-    case 'permutation': {
-      if (activeGroupFullModel) renderPermutationTab(content, activeGroupFullModel);
-      break;
+  if (mode === 'single') {
+    // ─── Single Network mode ───
+    switch (sub) {
+      case 'network':
+        renderNetworkTab(content, model);
+        break;
+      case 'centralities':
+        renderCentralitiesTab(content, model, cent);
+        break;
+      case 'frequencies':
+        renderFrequenciesTab(content, model);
+        break;
+      case 'sequences':
+        renderSequencesTab(content, model);
+        break;
+      case 'communities':
+        renderCommunitiesTab(content, model, comm);
+        break;
+      case 'cliques':
+        renderCliquesTab(content, model, state.networkSettings);
+        break;
+      case 'bootstrap':
+        renderBootstrapTab(content, model, state.networkSettings);
+        break;
+      case 'patterns':
+        renderPatternsTab(content, model);
+        break;
+      case 'indices':
+        renderIndicesTab(content, model);
+        break;
     }
-    case 'compare-sequences': {
-      if (activeGroupFullModel) renderCompareSequencesTab(content, activeGroupFullModel);
-      break;
+  } else {
+    // ─── Clustering or Group Analysis mode ───
+    // Populate cachedModels/cachedCents from active group data for downstream tabs
+    const groupActive = isGroupAnalysisActive();
+    if (groupActive && sub !== 'setup') {
+      cachedModels = new Map(activeGroupModels);
+      cachedCents = new Map(activeGroupCents);
     }
-    case 'compare-networks': {
-      if (activeGroupFullModel) renderCompareNetworksTab(content, activeGroupFullModel);
-      break;
+
+    switch (sub) {
+      case 'setup':
+        if (mode === 'clustering') renderClusteringSetup(content, model, state.networkSettings);
+        else renderGroupSetup(content, model, state.networkSettings);
+        break;
+      case 'network':
+        renderGroupNetworkTab(content);
+        break;
+      case 'mosaic':
+        renderMosaicTab(content);
+        break;
+      case 'centralities':
+        renderCentralitiesTabMulti(content);
+        break;
+      case 'frequencies':
+        renderFrequenciesTabMulti(content);
+        break;
+      case 'sequences':
+        renderSequencesTabMulti(content);
+        break;
+      case 'communities':
+        renderCommunitiesTabMulti(content);
+        break;
+      case 'cliques':
+        renderMultiGroupTab(content, (card, m, suffix) => renderCliquesTab(card, m, state.networkSettings, suffix));
+        break;
+      case 'bootstrap':
+        renderBootstrapTabMulti(content);
+        break;
+      case 'patterns':
+        renderMultiGroupTab(content, (card, m, suffix) => renderPatternsTab(card, m, suffix));
+        break;
+      case 'indices':
+        renderMultiGroupTab(content, (card, m, suffix) => renderIndicesTab(card, m, suffix));
+        break;
+      case 'permutation':
+        if (activeGroupFullModel) renderPermutationTab(content, activeGroupFullModel);
+        break;
+      case 'compare-sequences':
+        if (activeGroupFullModel) renderCompareSequencesTab(content, activeGroupFullModel);
+        break;
+      case 'compare-networks':
+        if (activeGroupFullModel) renderCompareNetworksTab(content, activeGroupFullModel);
+        break;
     }
   }
 }
@@ -878,6 +965,104 @@ function renderNetworkTab(content: HTMLElement, model: any) {
   requestAnimationFrame(() => {
     const el = document.getElementById('viz-network');
     if (el) renderNetwork(el, model, state.networkSettings);
+  });
+}
+
+// ─── Group Network tab (clustering/group modes) ───
+function renderGroupNetworkTab(content: HTMLElement) {
+  const models = getActiveGroupModels();
+  const cents = getActiveGroupCents();
+  if (models.size === 0) return;
+
+  const wrapper = document.createElement('div');
+  wrapper.style.margin = '0 auto';
+
+  // Summary bar + view toggle + clear button
+  const source = getGroupAnalysisSource();
+  const sourceLabel = source === 'column' ? 'Groups from data column' : 'Groups from clustering';
+
+  const sizesHtml = [...models.entries()].map(([name, m], i) => {
+    const nSeq = m.data ? m.data.length : '?';
+    return `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px">
+      <span style="width:10px;height:10px;border-radius:50%;background:${GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]}"></span>
+      ${name}: <strong>${nSeq}</strong> sequences
+    </span>`;
+  }).join('');
+
+  const summary = document.createElement('div');
+  summary.className = 'panel';
+  summary.style.padding = '16px 20px';
+  summary.innerHTML = `
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px">
+      <span style="font-size:14px;font-weight:600;color:#333">${sourceLabel}</span>
+      <span style="font-size:12px;color:#888">${models.size} groups</span>
+      <div class="view-toggle" style="margin-left:16px">
+        <button class="toggle-btn active" id="toggle-card">Card View</button>
+        <button class="toggle-btn" id="toggle-combined">Combined</button>
+      </div>
+      <button id="clear-group-analysis" class="btn-secondary" style="font-size:12px;padding:4px 14px;margin-left:auto">Clear Group Analysis</button>
+    </div>
+    <div style="font-size:13px;line-height:1.8">${sizesHtml}</div>
+  `;
+  wrapper.appendChild(summary);
+
+  // View container
+  const viewContainer = document.createElement('div');
+  viewContainer.id = 'group-view-container';
+  wrapper.appendChild(viewContainer);
+
+  // Initial render: card view
+  renderGroupGrid(viewContainer, models, cents, state.networkSettings);
+  content.appendChild(wrapper);
+
+  // Wire toggle + clear
+  setTimeout(() => {
+    document.getElementById('clear-group-analysis')?.addEventListener('click', () => {
+      clearGroupAnalysisData();
+      state.activeSubTab = 'setup';
+      updateSubTabStates();
+      renderSubTabBar();
+      updateTabContent();
+    });
+
+    document.getElementById('toggle-card')?.addEventListener('click', () => {
+      document.getElementById('toggle-card')!.classList.add('active');
+      document.getElementById('toggle-combined')!.classList.remove('active');
+      const vc = document.getElementById('group-view-container');
+      if (vc) {
+        vc.innerHTML = '';
+        renderGroupGrid(vc, models, cents, state.networkSettings);
+      }
+    });
+
+    document.getElementById('toggle-combined')?.addEventListener('click', () => {
+      document.getElementById('toggle-combined')!.classList.add('active');
+      document.getElementById('toggle-card')!.classList.remove('active');
+      const vc = document.getElementById('group-view-container');
+      if (vc) {
+        vc.innerHTML = '';
+        renderCombinedCanvas(vc, models, state.networkSettings);
+      }
+    });
+  }, 0);
+}
+
+// ─── Mosaic tab (clustering/group modes) ───
+function renderMosaicTab(content: HTMLElement) {
+  const models = getActiveGroupModels();
+  if (models.size === 0) return;
+
+  const source = getGroupAnalysisSource();
+  const srcLabel = source === 'clustering' ? 'Cluster' : 'Group';
+
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.style.padding = '12px 16px';
+  content.appendChild(panel);
+  addPanelDownloadButtons(panel, { image: true, filename: 'state-frequency-mosaic' });
+
+  requestAnimationFrame(() => {
+    renderClusterMosaic(panel, models, srcLabel);
   });
 }
 
