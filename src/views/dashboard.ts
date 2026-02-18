@@ -1102,6 +1102,13 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
     }
   }
 
+  // Resizable wrapper for all tab content
+  const tabWrapper = document.createElement('div');
+  tabWrapper.className = 'chart-width-container';
+  tabWrapper.style.width = `${state.chartMaxWidth}px`;
+  tabWrapper.style.margin = '0 auto';
+  content.appendChild(tabWrapper);
+
   // Check if this subtab has secondary tabs
   const secDefs = SECONDARY_TABS[sub];
   if (secDefs) {
@@ -1109,10 +1116,10 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
     if (!secDefs.find(d => d.id === state.activeSecondaryTab)) {
       state.activeSecondaryTab = secDefs[0]!.id;
     }
-    renderSecondaryTabBar(content, secDefs);
+    renderSecondaryTabBar(tabWrapper, secDefs);
     const secContent = document.createElement('div');
     secContent.id = 'secondary-tab-content';
-    content.appendChild(secContent);
+    tabWrapper.appendChild(secContent);
     renderSecondaryContent(secContent);
     updateSidebarAppearance();
     return;
@@ -1122,53 +1129,53 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
   if (mode === 'single' || mode === 'onehot') {
     switch (sub) {
       case 'network':
-        renderNetworkTab(content, model);
+        renderNetworkTab(tabWrapper, model);
         break;
       case 'communities':
-        renderCommunitiesTab(content, model, comm);
+        renderCommunitiesTab(tabWrapper, model, comm);
         break;
       case 'cliques':
-        renderCliquesTab(content, model, state.networkSettings);
+        renderCliquesTab(tabWrapper, model, state.networkSettings);
         break;
       case 'bootstrap':
-        renderBootstrapTab(content, model, state.networkSettings);
+        renderBootstrapTab(tabWrapper, model, state.networkSettings);
         break;
       case 'patterns':
-        renderPatternsTab(content, model);
+        renderPatternsTab(tabWrapper, model);
         break;
     }
   } else {
     switch (sub) {
       case 'setup':
-        if (mode === 'clustering') renderClusteringSetup(content, model, state.networkSettings);
-        else renderGroupSetup(content, model, state.networkSettings);
+        if (mode === 'clustering') renderClusteringSetup(tabWrapper, model, state.networkSettings);
+        else renderGroupSetup(tabWrapper, model, state.networkSettings);
         break;
       case 'network':
-        renderGroupNetworkTab(content);
+        renderGroupNetworkTab(tabWrapper);
         break;
       case 'mosaic':
-        renderMosaicTab(content);
+        renderMosaicTab(tabWrapper);
         break;
       case 'communities':
-        renderCommunitiesTabMulti(content);
+        renderCommunitiesTabMulti(tabWrapper);
         break;
       case 'cliques':
-        renderMultiGroupTab(content, (card, m, suffix) => renderCliquesTab(card, m, state.networkSettings, suffix));
+        renderMultiGroupTab(tabWrapper, (card, m, suffix) => renderCliquesTab(card, m, state.networkSettings, suffix));
         break;
       case 'bootstrap':
-        renderBootstrapTabMulti(content);
+        renderBootstrapTabMulti(tabWrapper);
         break;
       case 'patterns':
-        renderMultiGroupTab(content, (card, m, suffix) => renderPatternsTab(card, m, suffix));
+        renderMultiGroupTab(tabWrapper, (card, m, suffix) => renderPatternsTab(card, m, suffix));
         break;
       case 'permutation':
-        if (activeGroupFullModel) renderPermutationTab(content, activeGroupFullModel);
+        if (activeGroupFullModel) renderPermutationTab(tabWrapper, activeGroupFullModel);
         break;
       case 'compare-sequences':
-        if (activeGroupFullModel) renderCompareSequencesTab(content, activeGroupFullModel);
+        if (activeGroupFullModel) renderCompareSequencesTab(tabWrapper, activeGroupFullModel);
         break;
       case 'compare-networks':
-        if (activeGroupFullModel) renderCompareNetworksTab(content, activeGroupFullModel);
+        if (activeGroupFullModel) renderCompareNetworksTab(tabWrapper, activeGroupFullModel);
         break;
     }
   }
@@ -1429,8 +1436,7 @@ function renderNetworkTab(content: HTMLElement, model: any) {
     (fig) => {
       const h = state.networkSettings.networkHeight;
       const grid = document.createElement('div');
-      grid.className = 'panels-grid chart-width-container';
-      grid.style.width = `${state.chartMaxWidth}px`;
+      grid.className = 'panels-grid';
       grid.style.margin = '0 auto';
       grid.innerHTML = `
         <div class="panel" style="min-height:${h + 40}px">
@@ -1637,8 +1643,6 @@ function renderCentChartsView(content: HTMLElement, model: any, cent: any) {
       fig.appendChild(toggleBar);
 
       const outerWrapper = document.createElement('div');
-      outerWrapper.className = 'chart-width-container';
-      outerWrapper.style.width = `${state.chartMaxWidth}px`;
       outerWrapper.style.margin = '0 auto';
       const viewContainer = document.createElement('div');
       outerWrapper.appendChild(viewContainer);
@@ -1747,8 +1751,6 @@ function renderCentChartsView(content: HTMLElement, model: any, cent: any) {
     },
     (tbl) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'chart-width-container';
-      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       const panel = document.createElement('div');
       panel.className = 'panel';
@@ -1779,16 +1781,12 @@ function renderCentBetweennessView(content: HTMLElement, model: any) {
   createViewToggle(content,
     (fig) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'chart-width-container';
-      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       renderBetweennessTab(wrapper, model, state.networkSettings);
       fig.appendChild(wrapper);
     },
     (tbl) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'chart-width-container';
-      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       const cent = cachedCent!;
       const panel = document.createElement('div');
@@ -1813,8 +1811,7 @@ function renderCentStabilityView(content: HTMLElement, model: any) {
   createViewToggle(content,
     (fig) => {
       const stabPanel = document.createElement('div');
-      stabPanel.className = 'panel chart-width-container';
-      stabPanel.style.width = `${state.chartMaxWidth}px`;
+      stabPanel.className = 'panel';
       stabPanel.innerHTML = `
         <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
           <div class="panel-title" style="margin-bottom:0">Centrality Stability (CS Coefficients)</div>
@@ -1871,8 +1868,6 @@ function renderFreqStateView(content: HTMLElement, model: any) {
   createViewToggle(content,
     (fig) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'chart-width-container';
-      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       const panel = document.createElement('div');
       panel.className = 'panel';
@@ -1887,8 +1882,6 @@ function renderFreqStateView(content: HTMLElement, model: any) {
     },
     (tbl) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'chart-width-container';
-      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       const panel = document.createElement('div');
       panel.className = 'panel';
@@ -1931,8 +1924,6 @@ function renderFreqWeightView(content: HTMLElement, model: any) {
   createViewToggle(content,
     (fig) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'chart-width-container';
-      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       const panel = document.createElement('div');
       panel.className = 'panel';
@@ -1947,8 +1938,6 @@ function renderFreqWeightView(content: HTMLElement, model: any) {
     },
     (tbl) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'chart-width-container';
-      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       // Weight statistics table
       const n = model.labels.length;
@@ -1992,8 +1981,6 @@ function renderFreqMosaicView(content: HTMLElement, model: any) {
   createViewToggle(content,
     (fig) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'chart-width-container';
-      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       const panel = document.createElement('div');
       panel.className = 'panel';
@@ -2008,8 +1995,6 @@ function renderFreqMosaicView(content: HTMLElement, model: any) {
     },
     (tbl) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'chart-width-container';
-      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       // Standardized residuals table
       const labels = model.labels;
@@ -2058,8 +2043,7 @@ function renderSeqDistView(content: HTMLElement) {
   createViewToggle(content,
     (fig) => {
       const panel = document.createElement('div');
-      panel.className = 'panel chart-width-container';
-      panel.style.width = `${fixedW}px`;
+      panel.className = 'panel';
       panel.innerHTML = `<div class="panel-title">State Distribution Over Time</div><div id="viz-dist" style="width:100%"></div>`;
       addPanelDownloadButtons(panel, { image: true, filename: 'state-distribution' });
       fig.appendChild(panel);
@@ -2112,8 +2096,7 @@ function renderSeqIndexView(content: HTMLElement) {
   createViewToggle(content,
     (fig) => {
       const panel = document.createElement('div');
-      panel.className = 'panel chart-width-container';
-      panel.style.width = `${fixedW}px`;
+      panel.className = 'panel';
       panel.innerHTML = `<div class="panel-title">Sequence Index Plot</div><div id="viz-seq" style="width:100%;overflow-x:auto"></div>`;
       addPanelDownloadButtons(panel, { image: true, filename: 'sequence-index' });
       fig.appendChild(panel);
@@ -2156,8 +2139,6 @@ function renderSeqIndexView(content: HTMLElement) {
 
 function renderCommunitiesTab(content: HTMLElement, model: any, _comm: any) {
   const wrapper = document.createElement('div');
-  wrapper.className = 'chart-width-container';
-  wrapper.style.width = `${state.chartMaxWidth}px`;
   wrapper.style.margin = '0 auto';
 
   // Controls bar (above toggle — affects both views)

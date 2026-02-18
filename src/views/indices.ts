@@ -7,7 +7,6 @@ import { computeSequenceIndices, summarizeIndices } from '../analysis/indices';
 import type { SequenceIndex, IndicesSummary } from '../analysis/indices';
 import { addPanelDownloadButtons } from './export';
 import { createViewToggle } from './dashboard';
-import { state } from '../main';
 
 const metricDefs: { key: keyof SequenceIndex; label: string }[] = [
   { key: 'entropy', label: 'Shannon Entropy' },
@@ -85,8 +84,7 @@ export function renderIdxHistView(
       fig.appendChild(toggleBar);
 
       const outerWrapper = document.createElement('div');
-      outerWrapper.className = 'chart-width-container';
-      outerWrapper.style.width = `${state.chartMaxWidth}px`;
+      outerWrapper.style.maxWidth = '900px';
       outerWrapper.style.margin = '0 auto';
       const viewContainer = document.createElement('div');
       outerWrapper.appendChild(viewContainer);
@@ -171,8 +169,7 @@ export function renderIdxHistView(
     },
     (tbl) => {
       const wrapper = document.createElement('div');
-      wrapper.className = 'chart-width-container';
-      wrapper.style.width = `${state.chartMaxWidth}px`;
+      wrapper.style.maxWidth = '900px';
       wrapper.style.margin = '0 auto';
       // Per-sequence detail table
       const detailPanel = document.createElement('div');
@@ -226,8 +223,7 @@ export function renderIdxSummaryView(
   const summaries = summarizeIndices(indices);
 
   const wrapper = document.createElement('div');
-  wrapper.className = 'chart-width-container';
-  wrapper.style.width = `${state.chartMaxWidth}px`;
+  wrapper.style.maxWidth = '800px';
   wrapper.style.margin = '0 auto';
   const panel = document.createElement('div');
   panel.className = 'panel';
