@@ -124,7 +124,7 @@ export function permutationTest(
   });
 
   // Compute per-sequence transitions for combined data
-  const combinedTrans = computeTransitions3D(padded, labels, modelType);
+  const combinedTrans = computeTransitions3D(padded, labels, modelType, x.params);
 
   // Compute true differences directly from model weights (matches R: weights_x - weights_y)
   const trueDiff = new Float64Array(a * a);

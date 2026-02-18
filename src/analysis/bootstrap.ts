@@ -78,7 +78,7 @@ export function bootstrapTna(
   });
 
   // Compute per-sequence 3D transitions
-  const trans = computeTransitions3D(padded, labels, modelType);
+  const trans = computeTransitions3D(padded, labels, modelType, model.params);
 
   // Compute original weights from 3D transitions
   const weights = computeWeightsFrom3D(trans, modelType, modelScaling);

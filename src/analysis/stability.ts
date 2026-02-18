@@ -66,7 +66,7 @@ export function estimateCS(
   });
 
   // Compute per-sequence 3D transitions
-  const trans = computeTransitions3D(padded, labels, modelType);
+  const trans = computeTransitions3D(padded, labels, modelType, model.params);
 
   // Compute original centralities
   const origCent = centralities(model, { measures });
