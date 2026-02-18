@@ -5,8 +5,6 @@
 import type { TNA, GroupTNA, CentralityResult, CommunityResult, CentralityMeasure, CommunityMethod, SequenceData } from 'tnaj';
 import { tna, ftna, ctna, atna, centralities, prune, summary, AVAILABLE_MEASURES, AVAILABLE_METHODS, groupTna, groupFtna, groupCtna, groupAtna, isGroupTNA, clusterSequences, importOnehot } from 'tnaj';
 import { detectCommunities } from './analysis/communities';
-import { renderWelcome } from './views/welcome';
-import { renderPreview } from './views/preview';
 import { renderDashboard } from './views/dashboard';
 
 // ═══════════════════════════════════════════════════════════
@@ -61,7 +59,7 @@ export interface NetworkSettings {
 }
 
 // Bump this whenever defaults change to force a localStorage reset
-export const SETTINGS_VERSION = 10;
+export const SETTINGS_VERSION = 12;
 
 export function defaultNetworkSettings(): NetworkSettings {
   return {
@@ -122,17 +120,21 @@ export function groupNetworkSettings(base: NetworkSettings): NetworkSettings {
 //  App State
 // ═══════════════════════════════════════════════════════════
 export interface AppState {
-  view: 'welcome' | 'preview' | 'dashboard';
   filename: string;
   rawData: string[][];
   headers: string[];
   sequenceData: SequenceData | null;
-  format: 'wide' | 'long' | 'onehot';
+  format: 'wide' | 'long' | 'onehot' | 'group_onehot';
   longIdCol: number;
   longTimeCol: number;
   longStateCol: number;
   longGroupCol: number;          // -1 = no grouping
   onehotCols: string[];          // selected binary column names for one-hot import
+  onehotActorCol: number;        // actor column index for one-hot (-1 = none)
+  onehotSessionCol: number;      // session column index for one-hot (-1 = none)
+  onehotGroupCol: number;        // group column index for group one-hot (-1 = none)
+  onehotWindowSize: number;      // window size for one-hot import
+  onehotWindowType: 'tumbling' | 'sliding';  // window type for one-hot import
   groupLabels: string[] | null;  // one per sequence, parallel to sequenceData
   activeGroup: string | null;    // selected group name, null = first group
   modelType: 'tna' | 'ftna' | 'ctna' | 'atna';
@@ -147,14 +149,13 @@ export interface AppState {
   centralityLoops: boolean;
   clusterK: number;
   clusterDissimilarity: 'hamming' | 'lv' | 'osa' | 'lcs';
-  activeMode: 'single' | 'clustering' | 'group';
+  activeMode: 'data' | 'single' | 'clustering' | 'group' | 'onehot' | 'group_onehot';
   activeSubTab: string;
   error: string | null;
   networkSettings: NetworkSettings;
 }
 
 export const state: AppState = {
-  view: 'welcome',
   filename: '',
   rawData: [],
   headers: [],
@@ -165,6 +166,11 @@ export const state: AppState = {
   longStateCol: 2,
   longGroupCol: -1,
   onehotCols: [],
+  onehotActorCol: -1,
+  onehotSessionCol: -1,
+  onehotGroupCol: -1,
+  onehotWindowSize: 1,
+  onehotWindowType: 'tumbling',
   groupLabels: null,
   activeGroup: null,
   modelType: 'tna',
@@ -179,7 +185,7 @@ export const state: AppState = {
   selectedMeasure2: 'BetweennessRSP',
   selectedMeasure3: 'OutStrength',
   centralityLoops: false,
-  activeMode: 'single',
+  activeMode: 'data',
   activeSubTab: 'network',
   error: null,
   networkSettings: defaultNetworkSettings(),
@@ -284,13 +290,18 @@ function loadState() {
     const savedVersion = parseInt(localStorage.getItem(VERSION_KEY) ?? '0', 10);
     const settingsStale = savedVersion < SETTINGS_VERSION;
 
-    // Data is no longer persisted — always start at welcome
+    // Data is no longer persisted — always start with no data loaded
     // Only restore settings/preferences
     state.format = saved.format ?? 'wide';
     state.longIdCol = saved.longIdCol ?? 0;
     state.longTimeCol = saved.longTimeCol ?? 1;
     state.longStateCol = saved.longStateCol ?? 2;
     state.longGroupCol = saved.longGroupCol ?? -1;
+    state.onehotActorCol = (saved as any).onehotActorCol ?? -1;
+    state.onehotSessionCol = (saved as any).onehotSessionCol ?? -1;
+    state.onehotGroupCol = (saved as any).onehotGroupCol ?? -1;
+    state.onehotWindowSize = (saved as any).onehotWindowSize ?? 1;
+    state.onehotWindowType = (saved as any).onehotWindowType ?? 'tumbling';
     state.modelType = saved.modelType ?? 'tna';
     state.scaling = (saved as any).scaling ?? '';
     state.atnaBeta = (saved as any).atnaBeta ?? 0.1;
@@ -303,7 +314,7 @@ function loadState() {
     state.selectedMeasure2 = saved.selectedMeasure2 ?? 'BetweennessRSP';
     state.selectedMeasure3 = saved.selectedMeasure3 ?? 'OutStrength';
     state.centralityLoops = saved.centralityLoops ?? false;
-    state.activeMode = 'single';
+    state.activeMode = 'data';
     state.activeSubTab = 'network';
     // Reset network settings to fresh defaults when version bumps
     if (settingsStale) {
@@ -321,17 +332,7 @@ const app = document.getElementById('app')!;
 
 export function render() {
   app.innerHTML = '';
-  switch (state.view) {
-    case 'welcome':
-      renderWelcome(app);
-      break;
-    case 'preview':
-      renderPreview(app);
-      break;
-    case 'dashboard':
-      renderDashboard(app);
-      break;
-  }
+  renderDashboard(app);
   saveState();
 }
 

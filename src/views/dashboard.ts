@@ -26,39 +26,62 @@ import { renderCompareNetworksTab } from './compare-networks';
 import { estimateCS } from '../analysis/stability';
 import type { StabilityResult } from '../analysis/stability';
 import { NODE_COLORS } from './colors';
+import { renderLoadPanel } from './load-data';
 import * as d3 from 'd3';
 
-type Mode = 'single' | 'clustering' | 'group';
+type Mode = 'data' | 'single' | 'clustering' | 'group' | 'onehot' | 'group_onehot';
 
 interface SubTabDef { id: string; label: string }
 
 const SINGLE_TABS: SubTabDef[] = [
-  { id: 'network', label: 'Network' },
-  { id: 'frequencies', label: 'Frequencies' },
-  { id: 'centralities', label: 'Centralities' },
-  { id: 'communities', label: 'Communities' },
-  { id: 'cliques', label: 'Cliques' },
-  { id: 'bootstrap', label: 'Bootstrap' },
-  { id: 'sequences', label: 'Sequences' },
-  { id: 'patterns', label: 'Patterns' },
-  { id: 'indices', label: 'Seq. Indices' },
+  { id: 'network', label: 'Transition Network' },
+  { id: 'frequencies', label: 'State Frequencies' },
+  { id: 'centralities', label: 'Centrality Measures' },
+  { id: 'communities', label: 'Community Detection' },
+  { id: 'cliques', label: 'Network Cliques' },
+  { id: 'bootstrap', label: 'Bootstrap Validation' },
+  { id: 'sequences', label: 'Sequence Visualization' },
+  { id: 'patterns', label: 'Transition Patterns' },
+  { id: 'indices', label: 'Sequence Indices' },
 ];
 
 const GROUP_TABS: SubTabDef[] = [
-  { id: 'setup', label: 'Setup' },
-  { id: 'network', label: 'Network' },
-  { id: 'mosaic', label: 'Mosaic' },
-  { id: 'frequencies', label: 'Frequencies' },
-  { id: 'centralities', label: 'Centralities' },
-  { id: 'communities', label: 'Communities' },
-  { id: 'cliques', label: 'Cliques' },
-  { id: 'bootstrap', label: 'Bootstrap' },
-  { id: 'sequences', label: 'Sequences' },
-  { id: 'patterns', label: 'Patterns' },
-  { id: 'indices', label: 'Seq. Indices' },
-  { id: 'permutation', label: 'Permutation' },
-  { id: 'compare-sequences', label: 'Compare Seq' },
-  { id: 'compare-networks', label: 'Compare Net' },
+  { id: 'setup', label: 'Group Setup' },
+  { id: 'network', label: 'Transition Networks' },
+  { id: 'mosaic', label: 'Mosaic Plot' },
+  { id: 'frequencies', label: 'State Frequencies' },
+  { id: 'centralities', label: 'Centrality Measures' },
+  { id: 'communities', label: 'Community Detection' },
+  { id: 'cliques', label: 'Network Cliques' },
+  { id: 'bootstrap', label: 'Bootstrap Validation' },
+  { id: 'sequences', label: 'Sequence Visualization' },
+  { id: 'patterns', label: 'Transition Patterns' },
+  { id: 'indices', label: 'Sequence Indices' },
+  { id: 'permutation', label: 'Permutation Test' },
+  { id: 'compare-sequences', label: 'Compare Sequences' },
+  { id: 'compare-networks', label: 'Compare Networks' },
+];
+
+const ONEHOT_TABS: SubTabDef[] = [
+  { id: 'network', label: 'Co-occurrence Network' },
+  { id: 'frequencies', label: 'State Frequencies' },
+  { id: 'centralities', label: 'Centrality Measures' },
+  { id: 'communities', label: 'Community Detection' },
+  { id: 'cliques', label: 'Network Cliques' },
+  { id: 'bootstrap', label: 'Bootstrap Validation' },
+];
+
+const GROUP_ONEHOT_TABS: SubTabDef[] = [
+  { id: 'setup', label: 'Group Setup' },
+  { id: 'network', label: 'Co-occurrence Networks' },
+  { id: 'mosaic', label: 'Mosaic Plot' },
+  { id: 'frequencies', label: 'State Frequencies' },
+  { id: 'centralities', label: 'Centrality Measures' },
+  { id: 'communities', label: 'Community Detection' },
+  { id: 'cliques', label: 'Network Cliques' },
+  { id: 'bootstrap', label: 'Bootstrap Validation' },
+  { id: 'permutation', label: 'Permutation Test' },
+  { id: 'compare-networks', label: 'Compare Networks' },
 ];
 
 // ─── Cached model data for fast network-only re-render ───
@@ -125,65 +148,57 @@ export function getActiveGroupCents(): Map<string, CentralityResult> {
 
 /** Get the subtab list for the current mode. */
 function getSubTabs(): SubTabDef[] {
-  return state.activeMode === 'single' ? SINGLE_TABS : GROUP_TABS;
+  switch (state.activeMode) {
+    case 'single': return SINGLE_TABS;
+    case 'onehot': return ONEHOT_TABS;
+    case 'group_onehot': return GROUP_ONEHOT_TABS;
+    default: return GROUP_TABS;
+  }
 }
 
-/** Update subtab enabled/disabled states (called after group activation/deactivation). */
+/** Update subtab enabled/disabled states in dropdown menus. */
 export function updateSubTabStates() {
-  if (state.activeMode !== 'single') {
-    const groupsActive = isGroupAnalysisActive();
-    const btns = document.querySelectorAll('#subtab-bar button');
-    btns.forEach(btn => {
-      const b = btn as HTMLButtonElement;
-      if (b.dataset.subtab !== 'setup') {
-        b.disabled = !groupsActive;
-        b.classList.toggle('disabled', !groupsActive);
+  const groupsActive = isGroupAnalysisActive();
+  const nav = document.getElementById('top-nav');
+  if (!nav) return;
+  nav.querySelectorAll('.top-nav-dropdown').forEach(dd => {
+    const mode = dd.getAttribute('data-navmode');
+    if (mode === 'single' || mode === 'onehot') return; // single-model modes don't need group gating
+    dd.querySelectorAll('.nav-menu-item').forEach(item => {
+      const btn = item as HTMLButtonElement;
+      if (btn.dataset.subtab !== 'setup') {
+        btn.disabled = !groupsActive;
       }
     });
-  }
+  });
 }
 
-/** Rebuild the subtab bar for the current mode. */
+/** Update the active state of nav dropdown items. */
 export function renderSubTabBar() {
-  const bar = document.getElementById('subtab-bar');
-  if (!bar) return;
-  bar.innerHTML = '';
-  const tabs = getSubTabs();
-  const groupsActive = isGroupAnalysisActive();
-  for (const tab of tabs) {
-    const btn = document.createElement('button');
-    btn.textContent = tab.label;
-    btn.dataset.subtab = tab.id;
-    if (tab.id === state.activeSubTab) btn.classList.add('active');
-    // In clustering/group modes, disable non-setup subtabs until groups are active
-    if (state.activeMode !== 'single' && tab.id !== 'setup' && !groupsActive) {
-      btn.disabled = true;
-      btn.classList.add('disabled');
-    }
-    btn.addEventListener('click', () => {
-      if (btn.disabled) return;
-      state.activeSubTab = tab.id;
-      bar.querySelectorAll('button').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      updateTabContent();
-      saveState();
-    });
-    bar.appendChild(btn);
-  }
+  updateNavActive();
 }
 
 /** Switch the top-level mode and reset subtab accordingly. */
 function switchMode(newMode: Mode) {
   state.activeMode = newMode;
-  if (newMode === 'single') {
-    state.activeSubTab = 'network';
+  const dashboard = document.getElementById('dashboard');
+  if (newMode === 'data') {
+    if (dashboard) dashboard.classList.add('data-mode');
+    updateNavActive();
+    renderDataView();
   } else {
-    const groupsActive = isGroupAnalysisActive();
-    state.activeSubTab = groupsActive ? 'network' : 'setup';
+    if (newMode === 'single' || newMode === 'onehot') {
+      state.activeSubTab = 'network';
+    } else {
+      // clustering, group, group_onehot
+      const groupsActive = isGroupAnalysisActive();
+      state.activeSubTab = groupsActive ? 'network' : 'setup';
+    }
+    if (dashboard) dashboard.classList.remove('data-mode');
+    updateNavActive();
+    updateSubTabStates();
+    updateTabContent();
   }
-  renderSubTabBar();
-  updateSubTabStates();
-  updateTabContent();
   saveState();
 }
 
@@ -201,11 +216,11 @@ function updateNetworkOnly() {
   const mode = state.activeMode;
   const sub = state.activeSubTab;
 
-  if (mode === 'single' && sub === 'network') {
+  if ((mode === 'single' || mode === 'onehot') && sub === 'network') {
     const el = document.getElementById('viz-network');
     if (el) renderNetwork(el, cachedModel, state.networkSettings);
   } else if (sub === 'communities') {
-    if (mode !== 'single' && isGroupAnalysisActive() && cachedModels.size > 0) {
+    if (mode !== 'single' && mode !== 'onehot' && isGroupAnalysisActive() && cachedModels.size > 0) {
       const gs = groupNetworkSettings(state.networkSettings);
       let i = 0;
       for (const [groupName, model] of cachedModels) {
@@ -213,7 +228,7 @@ function updateNetworkOnly() {
         if (el) renderNetwork(el, model, gs, cachedComms.get(groupName) ?? undefined);
         i++;
       }
-    } else if (mode === 'single') {
+    } else if (mode === 'single' || mode === 'onehot') {
       const el = document.getElementById('viz-community-network');
       if (el) renderNetwork(el, cachedModel, state.networkSettings, cachedComm ?? undefined);
     }
@@ -221,35 +236,37 @@ function updateNetworkOnly() {
 }
 
 export function renderDashboard(container: HTMLElement) {
-  // Toolbar
-  const toolbar = document.createElement('div');
-  toolbar.className = 'toolbar';
-  toolbar.innerHTML = `
-    <h1>TNA Desktop</h1>
-    <span class="filename">${state.filename}</span>
-    <div class="spacer"></div>
-    <button id="export-btn">Export</button>
-    <button id="new-file-btn">Open File</button>
-  `;
-  container.appendChild(toolbar);
+  // ─── Top Navigation Bar ───
+  const nav = document.createElement('nav');
+  nav.className = 'top-nav';
+  nav.id = 'top-nav';
+  container.appendChild(nav);
+  buildTopNav(nav);
 
-  // Dashboard grid
+  // ─── Dashboard Body ───
+  const isDataMode = state.activeMode === 'data' || !state.sequenceData;
+  if (isDataMode) state.activeMode = 'data';
+
   const dashboard = document.createElement('div');
   dashboard.className = 'dashboard';
+  dashboard.id = 'dashboard';
+  if (isDataMode) dashboard.classList.add('data-mode');
   container.appendChild(dashboard);
 
-  // ─── Sidebar ───
+  // ─── Sidebar (always created, hidden in data mode via CSS) ───
   const sidebar = document.createElement('div');
   sidebar.className = 'sidebar';
+  sidebar.id = 'sidebar';
 
   const s = state.networkSettings;
+  const isOnehotMode = state.activeMode === 'onehot' || state.activeMode === 'group_onehot';
 
   sidebar.innerHTML = `
     <div class="section-title">Controls</div>
 
-    <div class="control-group">
+    <div class="control-group" id="model-type-wrap">
       <label>Model Type</label>
-      <select id="model-type">
+      <select id="model-type" ${isOnehotMode ? 'disabled title="Locked to CTNA for one-hot data"' : ''}>
         <option value="tna" ${state.modelType === 'tna' ? 'selected' : ''}>TNA (Relative)</option>
         <option value="ftna" ${state.modelType === 'ftna' ? 'selected' : ''}>FTNA (Frequency)</option>
         <option value="ctna" ${state.modelType === 'ctna' ? 'selected' : ''}>CTNA (Co-occurrence)</option>
@@ -534,43 +551,7 @@ export function renderDashboard(container: HTMLElement) {
   main.className = 'main-content';
   dashboard.appendChild(main);
 
-  // Mode bar (top-level: Single Network / Clustering / Group Analysis)
-  const modeBar = document.createElement('div');
-  modeBar.className = 'mode-bar';
-  modeBar.id = 'mode-bar';
-
-  const modes: { id: Mode; label: string }[] = [
-    { id: 'single', label: 'Single Network' },
-    { id: 'clustering', label: 'Clustering' },
-    { id: 'group', label: 'Group Analysis' },
-  ];
-
-  for (const mode of modes) {
-    const btn = document.createElement('button');
-    btn.textContent = mode.label;
-    btn.dataset.mode = mode.id;
-    if (mode.id === state.activeMode) btn.classList.add('active');
-    if (mode.id === 'group' && !state.groupLabels) {
-      btn.disabled = true;
-      btn.title = 'No group column in data';
-    }
-    btn.addEventListener('click', () => {
-      if (btn.disabled) return;
-      switchMode(mode.id);
-      modeBar.querySelectorAll('button').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-    });
-    modeBar.appendChild(btn);
-  }
-  main.appendChild(modeBar);
-
-  // Subtab bar (secondary navigation within current mode)
-  const subtabBar = document.createElement('div');
-  subtabBar.className = 'subtab-bar';
-  subtabBar.id = 'subtab-bar';
-  main.appendChild(subtabBar);
-
-  // Content area
+  // Content area (navigation is in top-nav dropdowns)
   const content = document.createElement('div');
   content.id = 'tab-content';
   main.appendChild(content);
@@ -632,17 +613,8 @@ export function renderDashboard(container: HTMLElement) {
     updateAll();
   });
 
-  document.getElementById('export-btn')!.addEventListener('click', () => {
-    const model = buildModel();
-    const cent = computeCentralities(model);
-    showExportDialog(model, cent);
-  });
-
-  document.getElementById('new-file-btn')!.addEventListener('click', () => {
-    state.view = 'welcome';
-    state.sequenceData = null;
-    render();
-  });
+  // ─── Top navigation events ───
+  wireNavEvents();
 
   // ─── Network appearance events ───
   wireSlider('ns-graphPadding', 'graphPadding', parseFloat);
@@ -704,9 +676,14 @@ export function renderDashboard(container: HTMLElement) {
     debouncedNetworkUpdate();
   });
 
-  // Initial render: populate subtab bar, then render content
-  renderSubTabBar();
-  updateAll();
+  // Initial render
+  if (state.activeMode === 'data' || !state.sequenceData) {
+    state.activeMode = 'data';
+    dashboard.classList.add('data-mode');
+    renderDataView();
+  } else {
+    updateAll();
+  }
 }
 
 // ─── Wiring helpers ───
@@ -761,7 +738,244 @@ function populateNodeColors() {
   });
 }
 
+// ═══════════════════════════════════════════════════════════
+//  Top Navigation Bar
+// ═══════════════════════════════════════════════════════════
+
+function buildTopNav(nav: HTMLElement) {
+  const hasData = !!state.sequenceData;
+  const hasGroups = !!state.groupLabels;
+
+  const brand = document.createElement('span');
+  brand.className = 'top-nav-brand';
+  brand.textContent = 'TNA Desktop';
+  nav.appendChild(brand);
+
+  const items = document.createElement('div');
+  items.className = 'top-nav-items';
+  items.id = 'nav-items';
+
+  // Data button (no dropdown)
+  const dataBtn = document.createElement('button');
+  dataBtn.className = 'top-nav-btn' + (state.activeMode === 'data' ? ' active' : '');
+  dataBtn.textContent = 'Data';
+  dataBtn.dataset.navmode = 'data';
+  items.appendChild(dataBtn);
+
+  // Separator between data and analysis
+  const sep1 = document.createElement('span');
+  sep1.className = 'top-nav-sep';
+  items.appendChild(sep1);
+
+  // Sequence-based analysis dropdowns
+  const isOnehotData = state.format === 'onehot' || state.format === 'group_onehot';
+  items.appendChild(buildNavDropdown('single', 'Single Network', SINGLE_TABS, !hasData || isOnehotData));
+  items.appendChild(buildNavDropdown('clustering', 'Clustering', GROUP_TABS, !hasData || isOnehotData));
+  items.appendChild(buildNavDropdown('group', 'Group Analysis', GROUP_TABS, !hasData || !hasGroups || isOnehotData));
+
+  // Separator before co-occurrence modes
+  const sep2 = document.createElement('span');
+  sep2.className = 'top-nav-sep';
+  items.appendChild(sep2);
+
+  // Co-occurrence (One-Hot) dropdowns
+  items.appendChild(buildNavDropdown('onehot', 'One-Hot', ONEHOT_TABS, !hasData || !isOnehotData));
+  items.appendChild(buildNavDropdown('group_onehot', 'Group One-Hot', GROUP_ONEHOT_TABS, !hasData || state.format !== 'group_onehot' || !hasGroups));
+
+  nav.appendChild(items);
+
+  const right = document.createElement('div');
+  right.className = 'top-nav-right';
+  if (state.filename) {
+    const fn = document.createElement('span');
+    fn.className = 'top-nav-filename';
+    fn.textContent = state.filename;
+    right.appendChild(fn);
+  }
+  const exportBtn = document.createElement('button');
+  exportBtn.className = 'top-nav-action';
+  exportBtn.id = 'export-btn';
+  exportBtn.textContent = 'Export';
+  if (!hasData) exportBtn.disabled = true;
+  right.appendChild(exportBtn);
+  nav.appendChild(right);
+}
+
+function buildNavDropdown(mode: string, label: string, tabs: SubTabDef[], disabled: boolean): HTMLElement {
+  const dropdown = document.createElement('div');
+  dropdown.className = 'top-nav-dropdown' + (state.activeMode === mode ? ' active' : '');
+  dropdown.dataset.navmode = mode;
+
+  const trigger = document.createElement('button');
+  trigger.className = 'top-nav-btn' + (state.activeMode === mode ? ' active' : '');
+  trigger.disabled = disabled;
+  trigger.innerHTML = `${label} <span class="nav-caret">&#9662;</span>`;
+  dropdown.appendChild(trigger);
+
+  const menu = document.createElement('div');
+  menu.className = 'top-nav-menu';
+
+  const groupsActive = isGroupAnalysisActive();
+  for (const tab of tabs) {
+    const item = document.createElement('button');
+    item.className = 'nav-menu-item';
+    item.textContent = tab.label;
+    item.dataset.subtab = tab.id;
+    if (state.activeMode === mode && state.activeSubTab === tab.id) item.classList.add('active');
+    if (mode !== 'single' && mode !== 'onehot' && tab.id !== 'setup' && !groupsActive) {
+      item.disabled = true;
+    }
+    menu.appendChild(item);
+  }
+
+  dropdown.appendChild(menu);
+  return dropdown;
+}
+
+function wireNavEvents() {
+  const nav = document.getElementById('top-nav');
+  if (!nav) return;
+
+  // Data button
+  const dataBtn = nav.querySelector('[data-navmode="data"]') as HTMLButtonElement;
+  if (dataBtn) {
+    dataBtn.addEventListener('click', () => {
+      switchMode('data');
+    });
+  }
+
+  // Dropdown triggers and menu items
+  nav.querySelectorAll('.top-nav-dropdown').forEach(dd => {
+    const trigger = dd.querySelector('.top-nav-btn') as HTMLButtonElement;
+    const ddMode = dd.getAttribute('data-navmode');
+
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (trigger.disabled) {
+        // When disabled one-hot/group-onehot dropdown is clicked, navigate to data mode
+        // with the format pre-selected so the user can load appropriate data
+        if (ddMode === 'onehot') {
+          state.format = 'onehot';
+          switchMode('data');
+        } else if (ddMode === 'group_onehot') {
+          state.format = 'group_onehot';
+          switchMode('data');
+        }
+        return;
+      }
+      const wasOpen = dd.classList.contains('open');
+      closeAllDropdowns();
+      if (!wasOpen) dd.classList.add('open');
+    });
+
+    dd.querySelectorAll('.nav-menu-item').forEach(item => {
+      item.addEventListener('click', () => {
+        if ((item as HTMLButtonElement).disabled) return;
+        const mode = dd.getAttribute('data-navmode')! as Mode;
+        const subtab = (item as HTMLElement).dataset.subtab!;
+        dd.classList.remove('open');
+
+        state.activeMode = mode;
+        state.activeSubTab = subtab;
+        const dashboard = document.getElementById('dashboard');
+        if (dashboard) dashboard.classList.remove('data-mode');
+        updateNavActive();
+        updateAll();
+        saveState();
+
+        // Auto-run bootstrap and permutation when navigated to from menu
+        if (subtab === 'bootstrap') {
+          setTimeout(() => {
+            const runBtn = document.getElementById('run-bootstrap') as HTMLButtonElement;
+            if (runBtn) runBtn.click();
+          }, 100);
+        } else if (subtab === 'permutation') {
+          setTimeout(() => {
+            const runBtn = document.getElementById('run-permutation') as HTMLButtonElement;
+            if (runBtn) runBtn.click();
+          }, 100);
+        }
+      });
+    });
+  });
+
+  // Close dropdowns on outside click
+  document.addEventListener('click', closeAllDropdowns);
+
+  // Export
+  document.getElementById('export-btn')?.addEventListener('click', () => {
+    if (!state.sequenceData) return;
+    const model = buildModel();
+    const cent = computeCentralities(model);
+    showExportDialog(model, cent);
+  });
+}
+
+function closeAllDropdowns() {
+  document.querySelectorAll('.top-nav-dropdown.open').forEach(d => d.classList.remove('open'));
+}
+
+function updateNavActive() {
+  const nav = document.getElementById('top-nav');
+  if (!nav) return;
+
+  // Data button
+  const dataBtn = nav.querySelector('[data-navmode="data"]:not(.top-nav-dropdown)') as HTMLElement;
+  if (dataBtn) dataBtn.classList.toggle('active', state.activeMode === 'data');
+
+  // Dropdown triggers and items
+  nav.querySelectorAll('.top-nav-dropdown').forEach(dd => {
+    const mode = dd.getAttribute('data-navmode');
+    const isActive = state.activeMode === mode;
+    const trigger = dd.querySelector('.top-nav-btn') as HTMLElement;
+    trigger.classList.toggle('active', isActive);
+    dd.classList.toggle('active', isActive);
+
+    dd.querySelectorAll('.nav-menu-item').forEach(item => {
+      const subtab = (item as HTMLElement).dataset.subtab;
+      (item as HTMLElement).classList.toggle('active', isActive && subtab === state.activeSubTab);
+    });
+  });
+
+  // Enable/disable based on data availability and format
+  const hasData = !!state.sequenceData;
+  const hasGroups = !!state.groupLabels;
+  const isOnehotData = state.format === 'onehot' || state.format === 'group_onehot';
+  nav.querySelectorAll('.top-nav-dropdown').forEach(dd => {
+    const mode = dd.getAttribute('data-navmode');
+    const trigger = dd.querySelector('.top-nav-btn') as HTMLButtonElement;
+    if (mode === 'single') {
+      trigger.disabled = !hasData || isOnehotData;
+    } else if (mode === 'clustering') {
+      trigger.disabled = !hasData || isOnehotData;
+    } else if (mode === 'group') {
+      trigger.disabled = !hasData || !hasGroups || isOnehotData;
+    } else if (mode === 'onehot') {
+      trigger.disabled = !hasData || !isOnehotData;
+      trigger.title = trigger.disabled ? 'Load one-hot encoded data to analyze co-occurrence networks' : '';
+    } else if (mode === 'group_onehot') {
+      trigger.disabled = !hasData || state.format !== 'group_onehot' || !hasGroups;
+      trigger.title = trigger.disabled ? 'Load group one-hot data for group co-occurrence analysis' : '';
+    }
+  });
+  const exportBtn = document.getElementById('export-btn') as HTMLButtonElement;
+  if (exportBtn) exportBtn.disabled = !hasData;
+}
+
+function renderDataView() {
+  const content = document.getElementById('tab-content');
+  if (!content) return;
+  content.innerHTML = '';
+  const loadContainer = document.createElement('div');
+  loadContainer.className = 'load-panel-container';
+  content.appendChild(loadContainer);
+  renderLoadPanel(loadContainer);
+}
+
+// ═══════════════════════════════════════════════════════════
+
 function updateAll() {
+  if (state.activeMode === 'data') return;
   try {
     // buildModel() always returns a single TNA now
     const model = buildModel();
@@ -834,6 +1048,7 @@ function updateAll() {
 export function updateTabContent(model?: any, cent?: any, comm?: any) {
   const content = document.getElementById('tab-content');
   if (!content) return;
+  if (state.activeMode === 'data') { renderDataView(); return; }
 
   if (!model) {
     if (cachedModel) {
@@ -854,8 +1069,8 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
   const mode = state.activeMode;
   const sub = state.activeSubTab;
 
-  if (mode === 'single') {
-    // ─── Single Network mode ───
+  if (mode === 'single' || mode === 'onehot') {
+    // ─── Single Network / One-Hot Co-occurrence mode ───
     switch (sub) {
       case 'network':
         renderNetworkTab(content, model);
@@ -886,7 +1101,7 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
         break;
     }
   } else {
-    // ─── Clustering or Group Analysis mode ───
+    // ─── Clustering, Group Analysis, or Group One-Hot mode ───
     // Populate cachedModels/cachedCents from active group data for downstream tabs
     const groupActive = isGroupAnalysisActive();
     if (groupActive && sub !== 'setup') {
@@ -997,8 +1212,8 @@ function renderGroupNetworkTab(content: HTMLElement) {
       <span style="font-size:14px;font-weight:600;color:#333">${sourceLabel}</span>
       <span style="font-size:12px;color:#888">${models.size} groups</span>
       <div class="view-toggle" style="margin-left:16px">
-        <button class="toggle-btn active" id="toggle-card">Card View</button>
-        <button class="toggle-btn" id="toggle-combined">Combined</button>
+        <button class="toggle-btn" id="toggle-card">Card View</button>
+        <button class="toggle-btn active" id="toggle-combined">Combined</button>
       </div>
       <button id="clear-group-analysis" class="btn-secondary" style="font-size:12px;padding:4px 14px;margin-left:auto">Clear Group Analysis</button>
     </div>
@@ -1011,8 +1226,8 @@ function renderGroupNetworkTab(content: HTMLElement) {
   viewContainer.id = 'group-view-container';
   wrapper.appendChild(viewContainer);
 
-  // Initial render: card view
-  renderGroupGrid(viewContainer, models, cents, state.networkSettings);
+  // Initial render: combined view
+  renderCombinedCanvas(viewContainer, models, state.networkSettings);
   content.appendChild(wrapper);
 
   // Wire toggle + clear
@@ -1558,8 +1773,8 @@ function renderCentralitiesTabMulti(content: HTMLElement) {
   controls.innerHTML = `
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
       <div class="view-toggle">
-        <button class="toggle-btn active" id="cent-toggle-card">Card View</button>
-        <button class="toggle-btn" id="cent-toggle-combined">Combined</button>
+        <button class="toggle-btn" id="cent-toggle-card">Card View</button>
+        <button class="toggle-btn active" id="cent-toggle-combined">Combined</button>
       </div>
       <div style="display:flex;align-items:center;gap:6px">
         <label style="font-size:13px;color:#555;font-weight:600">Measure 1:</label>
@@ -1593,7 +1808,7 @@ function renderCentralitiesTabMulti(content: HTMLElement) {
   viewContainer.id = 'cent-view-container';
   content.appendChild(viewContainer);
 
-  let currentView: 'card' | 'combined' = 'card';
+  let currentView: 'card' | 'combined' = 'combined';
 
   function renderCardView() {
     viewContainer.innerHTML = '';
@@ -1734,7 +1949,7 @@ function renderCentralitiesTabMulti(content: HTMLElement) {
   }
 
   // Initial render
-  renderCardView();
+  renderCombinedView();
 
   // Wire toggle + shared controls
   setTimeout(() => {
@@ -1825,8 +2040,8 @@ function renderFrequenciesTabMulti(content: HTMLElement) {
   toggleBar.style.padding = '10px 16px';
   toggleBar.innerHTML = `
     <div class="view-toggle">
-      <button class="toggle-btn active" id="freq-toggle-card">Card View</button>
-      <button class="toggle-btn" id="freq-toggle-combined">Combined</button>
+      <button class="toggle-btn" id="freq-toggle-card">Card View</button>
+      <button class="toggle-btn active" id="freq-toggle-combined">Combined</button>
     </div>
   `;
   content.appendChild(toggleBar);
@@ -1835,7 +2050,7 @@ function renderFrequenciesTabMulti(content: HTMLElement) {
   viewContainer.id = 'freq-view-container';
   content.appendChild(viewContainer);
 
-  let currentView: 'card' | 'combined' = 'card';
+  let currentView: 'card' | 'combined' = 'combined';
 
   function renderCardView() {
     viewContainer.innerHTML = '';
@@ -1952,7 +2167,7 @@ function renderFrequenciesTabMulti(content: HTMLElement) {
     renderGroupedBars(container, data, nodeLabels, groupNames, 'Mean Weight');
   }
 
-  renderCardView();
+  renderCombinedView();
 
   setTimeout(() => {
     document.getElementById('freq-toggle-card')?.addEventListener('click', () => {
@@ -2007,8 +2222,8 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
   controls.innerHTML = `
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
       <div class="view-toggle">
-        <button class="toggle-btn active" id="comm-toggle-card">Card View</button>
-        <button class="toggle-btn" id="comm-toggle-combined">Combined</button>
+        <button class="toggle-btn" id="comm-toggle-card">Card View</button>
+        <button class="toggle-btn active" id="comm-toggle-combined">Combined</button>
       </div>
       <div style="display:flex;align-items:center;gap:6px">
         <label style="font-size:13px;color:#555;font-weight:600">Method:</label>
@@ -2029,7 +2244,7 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
 
   const h = groupNetworkHeight();
   const gs = groupNetworkSettings(state.networkSettings);
-  let currentView: 'card' | 'combined' = 'card';
+  let currentView: 'card' | 'combined' = 'combined';
 
   function renderCardView() {
     viewContainer.innerHTML = '';
@@ -2178,7 +2393,7 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
     }
   }
 
-  renderCardView();
+  renderCombinedView();
 
   // Wire controls
   setTimeout(() => {
