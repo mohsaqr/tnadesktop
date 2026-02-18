@@ -3,6 +3,7 @@ import { defineConfig } from 'vite';
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
+  base: process.env.NODE_ENV === 'production' ? '/tnadesktop/' : '/',
   clearScreen: false,
   server: {
     port: 1420,

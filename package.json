@@ -18,7 +18,7 @@
     "html2canvas": "^1.4.1",
     "jspdf": "^2.5.2",
     "papaparse": "^5.5.2",
-    "tnaj": "file:../tna-js",
+    "tnaj": "github:mohsaqr/tna-js",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {

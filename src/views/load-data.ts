@@ -4,6 +4,7 @@
  */
 import { state, render, showLoading, hideLoading, importOnehot } from '../main';
 import { parseFile, wideToSequences, longToSequences, guessColumns } from '../data';
+import { clearGroupAnalysisData } from './dashboard';
 import sampleCsv from '../sample-data.csv?raw';
 
 function escHtml(s: string): string {
@@ -514,6 +515,9 @@ function renderAnalyzeButton(panel: HTMLElement) {
 
   actions.querySelector('#load-analyze-btn')!.addEventListener('click', () => {
     try {
+      // Clear any stale group analysis from a previous dataset
+      clearGroupAnalysisData();
+
       if (state.format === 'wide') {
         state.sequenceData = wideToSequences(state.rawData);
         state.groupLabels = null;

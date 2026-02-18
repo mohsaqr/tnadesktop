@@ -35,6 +35,13 @@ export function showExportDialog(model: TNA, cent: CentralityResult) {
           <p>Export the transition weight matrix</p>
         </div>
       </div>
+      <div class="export-option" id="export-html">
+        <div class="icon">&#127760;</div>
+        <div class="info">
+          <h4>Full Report (HTML)</h4>
+          <p>Self-contained HTML file with tables and images</p>
+        </div>
+      </div>
       <div class="export-option" id="export-pdf">
         <div class="icon">&#128209;</div>
         <div class="info">
@@ -63,6 +70,10 @@ export function showExportDialog(model: TNA, cent: CentralityResult) {
   document.getElementById('export-weights')!.addEventListener('click', () => {
     overlay.remove();
     exportWeightsCsv(model);
+  });
+  document.getElementById('export-html')!.addEventListener('click', () => {
+    overlay.remove();
+    exportHtml(model, cent);
   });
   document.getElementById('export-pdf')!.addEventListener('click', () => {
     overlay.remove();
@@ -117,6 +128,91 @@ function exportWeightsCsv(model: TNA) {
     csv += '\n';
   }
   downloadText(csv, 'tna-weights.csv', 'text/csv');
+}
+
+async function exportHtml(model: TNA, cent: CentralityResult) {
+  const measures = Object.keys(cent.measures) as (keyof typeof cent.measures)[];
+  const n = model.labels.length;
+
+  // --- Centralities table ---
+  let centRows = '';
+  for (let i = 0; i < cent.labels.length; i++) {
+    const cls = i % 2 === 0 ? 'even' : 'odd';
+    centRows += `<tr class="${cls}"><td>${cent.labels[i]}</td>`;
+    for (const m of measures) {
+      centRows += `<td>${cent.measures[m]![i]!.toFixed(4)}</td>`;
+    }
+    centRows += '</tr>';
+  }
+  const centHeaders = '<th>State</th>' + measures.map(m => `<th>${m}</th>`).join('');
+
+  // --- Weight matrix table ---
+  let weightRows = '';
+  for (let i = 0; i < n; i++) {
+    const cls = i % 2 === 0 ? 'even' : 'odd';
+    weightRows += `<tr class="${cls}"><td><strong>${model.labels[i]}</strong></td>`;
+    for (let j = 0; j < n; j++) {
+      weightRows += `<td>${model.weights.get(i, j).toFixed(4)}</td>`;
+    }
+    weightRows += '</tr>';
+  }
+  const weightHeaders = '<th></th>' + model.labels.map(l => `<th>${l}</th>`).join('');
+
+  // --- Capture visible panel visualizations ---
+  let imagesHtml = '';
+  const tabContent = document.getElementById('tab-content');
+  if (tabContent) {
+    const panels = tabContent.querySelectorAll('.panel');
+    for (const panel of panels) {
+      const el = panel as HTMLElement;
+      if (!el.querySelector('svg, canvas')) continue;
+      const titleEl = el.querySelector('.panel-title');
+      const title = titleEl ? (titleEl as HTMLElement).innerText.replace(/SVG|PNG|CSV/g, '').trim() : 'Visualization';
+      try {
+        const canvas = await html2canvas(el, { backgroundColor: '#fff', scale: 2 });
+        const dataUrl = canvas.toDataURL('image/png');
+        imagesHtml += `<h2>${title}</h2><img src="${dataUrl}" alt="${title}">\n`;
+      } catch {
+        // skip panels that fail
+      }
+    }
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TNA Analysis Report</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 1100px; margin: 0 auto; padding: 2rem; color: #1a1a1a; line-height: 1.5; }
+  h1 { border-bottom: 2px solid #333; padding-bottom: .4em; }
+  h2 { margin-top: 2rem; color: #333; }
+  .meta { color: #555; margin-bottom: 2rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0 2rem; }
+  th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; }
+  th { background: #f0f0f0; font-weight: 600; }
+  tr.odd td { background: #fafafa; }
+  tr.even td { background: #fff; }
+  img { max-width: 100%; height: auto; margin: 1rem 0; border: 1px solid #e0e0e0; border-radius: 4px; }
+  @media print { body { padding: 0; } img { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<h1>TNA Analysis Report</h1>
+<p class="meta">Model: <strong>${model.type}</strong> &nbsp;|&nbsp; States: <strong>${n}</strong> &nbsp;|&nbsp; Date: ${new Date().toLocaleDateString()}</p>
+
+<h2>Centrality Measures</h2>
+<table>${centHeaders}${centRows}</table>
+
+<h2>Transition Weight Matrix</h2>
+<table>${weightHeaders}${weightRows}</table>
+
+${imagesHtml}
+</body>
+</html>`;
+
+  downloadText(html, 'tna-report.html', 'text/html');
 }
 
 async function exportPdf(model: TNA, cent: CentralityResult) {
