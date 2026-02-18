@@ -367,6 +367,8 @@ export function renderDashboard(container: HTMLElement) {
   const isOnehotMode = state.activeMode === 'onehot' || state.activeMode === 'group_onehot';
 
   sidebar.innerHTML = `
+    <button class="sidebar-toggle" id="sidebar-toggle" title="Collapse sidebar">&#9664;</button>
+    <div class="sidebar-content" id="sidebar-content">
     <div class="section-title">Controls</div>
 
     <div class="control-group" id="model-type-wrap">
@@ -648,6 +650,7 @@ export function renderDashboard(container: HTMLElement) {
 
     <div class="section-title">Model Summary</div>
     <div class="summary-card" id="model-summary"></div>
+    </div>
   `;
   dashboard.appendChild(sidebar);
 
@@ -660,6 +663,17 @@ export function renderDashboard(container: HTMLElement) {
   const content = document.createElement('div');
   content.id = 'tab-content';
   main.appendChild(content);
+
+  // ─── Sidebar collapse toggle ───
+  document.getElementById('sidebar-toggle')!.addEventListener('click', () => {
+    const sb = document.getElementById('sidebar')!;
+    const db = document.getElementById('dashboard')!;
+    const btn = document.getElementById('sidebar-toggle')!;
+    const collapsed = sb.classList.toggle('collapsed');
+    db.classList.toggle('sidebar-collapsed', collapsed);
+    btn.innerHTML = collapsed ? '&#9654;' : '&#9664;';
+    btn.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  });
 
   // ─── Collapsible section toggle ───
   sidebar.querySelectorAll('.section-header').forEach(header => {

@@ -705,6 +705,47 @@ body {
   border-right: 1px solid var(--border);
   padding: 16px;
   overflow-y: auto;
+  position: relative;
+  transition: width 0.2s ease, padding 0.2s ease;
+}
+
+.sidebar-toggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #f0f2f5;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  padding: 0;
+  transition: background 0.15s;
+}
+.sidebar-toggle:hover { background: var(--blue); color: #fff; border-color: var(--blue); }
+
+.dashboard.sidebar-collapsed {
+  grid-template-columns: 36px 1fr;
+}
+
+.sidebar.collapsed {
+  padding: 8px 6px;
+  overflow: hidden;
+}
+
+.sidebar.collapsed .sidebar-content {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-toggle {
+  position: static;
+  margin: 0 auto;
 }
 
 .sidebar .section-title {
