@@ -15,7 +15,7 @@ A phased plan for expanding TNA Desktop from its current core analysis capabilit
 - Sequence index plot + state distribution over time
 - State frequencies + mosaic plot (chi-squared residuals)
 - Data import: CSV, TSV, TXT, Excel (wide and long format)
-- Export: PNG (network), CSV (centralities + weight matrix), PDF report
+- Export: PNG (network), CSV (centralities + weight matrix), HTML report, PDF report
 
 **Not yet exposed from tnaj:**
 - Model types: reverse, n-gram, gap, window

@@ -30,11 +30,12 @@
 - `drawNetwork()` is the extracted core from `renderNetwork()` — takes a root `<g>` element
 
 ### Architecture: Export System (export.ts)
-- `showExportDialog()` — modal with PNG, CSV (centralities), CSV (weights), PDF options
+- `showExportDialog()` — modal with PNG, CSV (centralities), CSV (weights), HTML report, PDF options
 - `downloadText()` — generic blob download helper (now exported)
 - `downloadSvgFromElement(container, filename)` — clones SVG, XMLSerializer, downloads .svg
 - `downloadPngFromElement(container, filename)` — html2canvas at 2x scale, SVG fallback
 - `downloadTableAsCsv(tableOrContainer, filename)` — iterates `<tr>`/`<th>`/`<td>`, builds CSV
+- `exportHtml(model, cent)` — self-contained HTML report with inline CSS, centrality/weight tables, and html2canvas-captured panel images as base64 PNGs
 - `addPanelDownloadButtons(panelEl, opts)` — appends SVG/PNG/CSV buttons to `.panel-title`
 
 ### Per-Panel Download Buttons: API Design (Critical Learning)
@@ -138,3 +139,12 @@ Every panel that displays a visualization or data table should have download but
 - **Multi-group frequency sections**: `image: true` (captures all groups)
 - **Group analysis network/centrality panels**: `image: true`
 - **Combined canvas panel**: `image: true`
+
+### Deployment: GitHub Pages
+- Deployed via GitHub Actions workflow (`.github/workflows/deploy.yml`)
+- Build: `npx vite build` → uploads `dist/` as Pages artifact
+- Custom domain: `saqr.me/tnadesktop/` via `public/CNAME`
+- `vite.config.ts` sets `base: '/tnadesktop/'` in production for correct asset paths
+- `tnaj` dependency changed from `file:../tna-js` to `github:mohsaqr/tna-js` for CI compatibility
+- The tna-js `prepare` script (`tsup`) runs automatically when npm installs from GitHub
+- Pages configured as `build_type: "workflow"` (not legacy gh-pages branch)

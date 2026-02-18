@@ -47,7 +47,7 @@ Built with [Tauri v2](https://v2.tauri.app/), [Vite](https://vite.dev/), TypeScr
 
 ### Other
 - **State persistence** — page refresh preserves your entire analysis (data, settings, active tab)
-- Export results as **PDF** or **PNG**
+- Export results as **HTML report**, **PDF**, or **PNG**
 - Cross-platform: **macOS**, **Windows**, **Linux**
 
 ## Prerequisites
@@ -160,7 +160,7 @@ src/
     sequences.ts          # Sequence index plot + state distribution
     mosaic.ts             # Mosaic plot with standardized residuals
     colors.ts             # Color palette (nodes + communities)
-    export.ts             # PDF/PNG export dialog
+    export.ts             # HTML/PDF/PNG export dialog
 src-tauri/
   src/main.rs             # Tauri backend
   Cargo.toml              # Rust dependencies
@@ -178,7 +178,7 @@ package.json              # Node dependencies
 3. **Analyze** — Click "Analyze" to build the transition network
 4. **Explore tabs** — Switch between Network, Centralities, Frequencies, Sequences, and Communities
 5. **Customize** — Expand "Network Appearance" in the sidebar to adjust every visual parameter
-6. **Export** — Click "Export" to save as PDF or PNG
+6. **Export** — Click "Export" to save as HTML report, PDF, or PNG
 
 ## Dependencies
 
@@ -191,6 +191,10 @@ package.json              # Node dependencies
 | [jsPDF](https://github.com/parallax/jsPDF) | PDF export |
 | [html2canvas](https://html2canvas.hertzen.com/) | PNG export |
 | [Tauri v2](https://v2.tauri.app/) | Native desktop shell |
+
+## Live Demo
+
+The app is deployed at **[saqr.me/tnadesktop](https://saqr.me/tnadesktop/)** via GitHub Pages, automatically updated on every push to `main`.
 
 ## License
 
