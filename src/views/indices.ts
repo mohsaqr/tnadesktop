@@ -86,7 +86,7 @@ export function renderIdxHistView(
 
       const outerWrapper = document.createElement('div');
       outerWrapper.className = 'chart-width-container';
-      outerWrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+      outerWrapper.style.width = `${state.chartMaxWidth}px`;
       outerWrapper.style.margin = '0 auto';
       const viewContainer = document.createElement('div');
       outerWrapper.appendChild(viewContainer);
@@ -172,7 +172,7 @@ export function renderIdxHistView(
     (tbl) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'chart-width-container';
-      wrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       // Per-sequence detail table
       const detailPanel = document.createElement('div');
@@ -227,7 +227,7 @@ export function renderIdxSummaryView(
 
   const wrapper = document.createElement('div');
   wrapper.className = 'chart-width-container';
-  wrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+  wrapper.style.width = `${state.chartMaxWidth}px`;
   wrapper.style.margin = '0 auto';
   const panel = document.createElement('div');
   panel.className = 'panel';

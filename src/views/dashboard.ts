@@ -1197,35 +1197,12 @@ export function createViewToggle(
   bar.className = 'panel';
   bar.style.padding = '8px 16px';
   bar.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-      <div class="view-toggle">
-        <button class="toggle-btn active" id="${idPrefix}-toggle-figure">Figure</button>
-        <button class="toggle-btn" id="${idPrefix}-toggle-table">Table</button>
-      </div>
-      <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#555">
-        <label style="white-space:nowrap">Width</label>
-        <input type="range" class="chart-width-slider" min="500" max="1600" step="50" value="${state.chartMaxWidth}" style="width:120px;accent-color:#4a7bf7">
-        <span class="chart-width-slider-val" style="min-width:40px">${state.chartMaxWidth}px</span>
-      </div>
+    <div class="view-toggle">
+      <button class="toggle-btn active" id="${idPrefix}-toggle-figure">Figure</button>
+      <button class="toggle-btn" id="${idPrefix}-toggle-table">Table</button>
     </div>
   `;
   parent.appendChild(bar);
-
-  // Wire chart-width slider in this toggle bar
-  const cwSlider = bar.querySelector('.chart-width-slider') as HTMLInputElement | null;
-  if (cwSlider) {
-    cwSlider.addEventListener('input', () => {
-      const val = parseInt(cwSlider.value);
-      state.chartMaxWidth = val;
-      // Update all slider labels and slider values across the page
-      document.querySelectorAll('.chart-width-slider-val').forEach(el => { el.textContent = `${val}px`; });
-      document.querySelectorAll('.chart-width-slider').forEach(el => { (el as HTMLInputElement).value = String(val); });
-      document.querySelectorAll('.chart-width-container').forEach(el => {
-        (el as HTMLElement).style.maxWidth = `${val}px`;
-      });
-      saveState();
-    });
-  }
 
   const figureContainer = document.createElement('div');
   figureContainer.id = `${idPrefix}-figure`;
@@ -1453,7 +1430,7 @@ function renderNetworkTab(content: HTMLElement, model: any) {
       const h = state.networkSettings.networkHeight;
       const grid = document.createElement('div');
       grid.className = 'panels-grid chart-width-container';
-      grid.style.maxWidth = `${state.chartMaxWidth}px`;
+      grid.style.width = `${state.chartMaxWidth}px`;
       grid.style.margin = '0 auto';
       grid.innerHTML = `
         <div class="panel" style="min-height:${h + 40}px">
@@ -1661,7 +1638,7 @@ function renderCentChartsView(content: HTMLElement, model: any, cent: any) {
 
       const outerWrapper = document.createElement('div');
       outerWrapper.className = 'chart-width-container';
-      outerWrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+      outerWrapper.style.width = `${state.chartMaxWidth}px`;
       outerWrapper.style.margin = '0 auto';
       const viewContainer = document.createElement('div');
       outerWrapper.appendChild(viewContainer);
@@ -1771,7 +1748,7 @@ function renderCentChartsView(content: HTMLElement, model: any, cent: any) {
     (tbl) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'chart-width-container';
-      wrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       const panel = document.createElement('div');
       panel.className = 'panel';
@@ -1803,7 +1780,7 @@ function renderCentBetweennessView(content: HTMLElement, model: any) {
     (fig) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'chart-width-container';
-      wrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       renderBetweennessTab(wrapper, model, state.networkSettings);
       fig.appendChild(wrapper);
@@ -1811,7 +1788,7 @@ function renderCentBetweennessView(content: HTMLElement, model: any) {
     (tbl) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'chart-width-container';
-      wrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       const cent = cachedCent!;
       const panel = document.createElement('div');
@@ -1837,7 +1814,7 @@ function renderCentStabilityView(content: HTMLElement, model: any) {
     (fig) => {
       const stabPanel = document.createElement('div');
       stabPanel.className = 'panel chart-width-container';
-      stabPanel.style.maxWidth = `${state.chartMaxWidth}px`;
+      stabPanel.style.width = `${state.chartMaxWidth}px`;
       stabPanel.innerHTML = `
         <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
           <div class="panel-title" style="margin-bottom:0">Centrality Stability (CS Coefficients)</div>
@@ -1895,7 +1872,7 @@ function renderFreqStateView(content: HTMLElement, model: any) {
     (fig) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'chart-width-container';
-      wrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       const panel = document.createElement('div');
       panel.className = 'panel';
@@ -1911,7 +1888,7 @@ function renderFreqStateView(content: HTMLElement, model: any) {
     (tbl) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'chart-width-container';
-      wrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       const panel = document.createElement('div');
       panel.className = 'panel';
@@ -1955,7 +1932,7 @@ function renderFreqWeightView(content: HTMLElement, model: any) {
     (fig) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'chart-width-container';
-      wrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       const panel = document.createElement('div');
       panel.className = 'panel';
@@ -1971,7 +1948,7 @@ function renderFreqWeightView(content: HTMLElement, model: any) {
     (tbl) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'chart-width-container';
-      wrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       // Weight statistics table
       const n = model.labels.length;
@@ -2016,7 +1993,7 @@ function renderFreqMosaicView(content: HTMLElement, model: any) {
     (fig) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'chart-width-container';
-      wrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       const panel = document.createElement('div');
       panel.className = 'panel';
@@ -2032,7 +2009,7 @@ function renderFreqMosaicView(content: HTMLElement, model: any) {
     (tbl) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'chart-width-container';
-      wrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+      wrapper.style.width = `${state.chartMaxWidth}px`;
       wrapper.style.margin = '0 auto';
       // Standardized residuals table
       const labels = model.labels;
@@ -2081,8 +2058,8 @@ function renderSeqDistView(content: HTMLElement) {
   createViewToggle(content,
     (fig) => {
       const panel = document.createElement('div');
-      panel.className = 'panel';
-      panel.style.maxWidth = `${fixedW}px`;
+      panel.className = 'panel chart-width-container';
+      panel.style.width = `${fixedW}px`;
       panel.innerHTML = `<div class="panel-title">State Distribution Over Time</div><div id="viz-dist" style="width:100%"></div>`;
       addPanelDownloadButtons(panel, { image: true, filename: 'state-distribution' });
       fig.appendChild(panel);
@@ -2135,8 +2112,8 @@ function renderSeqIndexView(content: HTMLElement) {
   createViewToggle(content,
     (fig) => {
       const panel = document.createElement('div');
-      panel.className = 'panel';
-      panel.style.maxWidth = `${fixedW}px`;
+      panel.className = 'panel chart-width-container';
+      panel.style.width = `${fixedW}px`;
       panel.innerHTML = `<div class="panel-title">Sequence Index Plot</div><div id="viz-seq" style="width:100%;overflow-x:auto"></div>`;
       addPanelDownloadButtons(panel, { image: true, filename: 'sequence-index' });
       fig.appendChild(panel);
@@ -2180,7 +2157,7 @@ function renderSeqIndexView(content: HTMLElement) {
 function renderCommunitiesTab(content: HTMLElement, model: any, _comm: any) {
   const wrapper = document.createElement('div');
   wrapper.className = 'chart-width-container';
-  wrapper.style.maxWidth = `${state.chartMaxWidth}px`;
+  wrapper.style.width = `${state.chartMaxWidth}px`;
   wrapper.style.margin = '0 auto';
 
   // Controls bar (above toggle — affects both views)
