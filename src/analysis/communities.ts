@@ -24,8 +24,10 @@ export function detectCommunities(model: TNA, method: CommunityMethod): Communit
   let assignments: number[];
   switch (method) {
     case 'louvain':
-    case 'walktrap':
       assignments = louvain(sym, n);
+      break;
+    case 'walktrap':
+      assignments = walktrapDetect(weights, n);
       break;
     case 'fast_greedy':
       assignments = greedyModularity(sym, n);
@@ -50,6 +52,141 @@ export function detectCommunities(model: TNA, method: CommunityMethod): Communit
   assignMap[method] = assignments;
 
   return { counts, assignments: assignMap, labels: model.labels };
+}
+
+/**
+ * Walktrap community detection (Pons & Latapy 2005).
+ * Uses random walks on the directed graph + Ward-style agglomerative clustering.
+ * @param directedWeights - Original directed weight matrix (Matrix from tnaj)
+ * @param n - Number of nodes
+ * @param t - Walk length (default 4, matching R igraph default)
+ */
+function walktrapDetect(directedWeights: import('tnaj').Matrix, n: number, t = 4): number[] {
+  if (n <= 1) return new Array(n).fill(0);
+
+  // Step 1: Build row-stochastic transition matrix P from directed weights
+  const P: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    P.push(new Array(n).fill(0));
+    let rowSum = 0;
+    for (let j = 0; j < n; j++) rowSum += directedWeights.get(i, j);
+    if (rowSum > 0) {
+      for (let j = 0; j < n; j++) P[i]![j] = directedWeights.get(i, j) / rowSum;
+    }
+  }
+
+  // Step 2: Compute P^t (t-step transition probabilities)
+  let Pt: number[][] = P.map(row => [...row]);
+  for (let step = 1; step < t; step++) {
+    const next: number[][] = [];
+    for (let i = 0; i < n; i++) {
+      next.push(new Array(n).fill(0));
+      for (let j = 0; j < n; j++) {
+        let s = 0;
+        for (let k = 0; k < n; k++) s += Pt[i]![k]! * P[k]![j]!;
+        next[i]![j] = s;
+      }
+    }
+    Pt = next;
+  }
+
+  // Step 3: Compute vertex degrees (out-degree from directed adjacency)
+  const deg = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) deg[i] += directedWeights.get(i, j);
+  }
+
+  // Step 4: For each community, maintain mean walk distribution
+  const communityDist: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    communityDist.push([...Pt[i]!]);
+  }
+
+  const comm = Array.from({ length: n }, (_, i) => i);
+  const commSize = new Float64Array(n).fill(1);
+
+  // Build symmetric adjacency for modularity computation
+  const sym: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    sym.push(new Array(n).fill(0));
+    for (let j = 0; j < n; j++) {
+      sym[i]![j] = directedWeights.get(i, j) + directedWeights.get(j, i);
+    }
+  }
+
+  // Track best partition by modularity
+  let bestComm = comm.slice();
+  let bestMod = modularityArr(sym, comm, n);
+
+  // Step 5: Ward-style agglomerative clustering (n-1 merges at most)
+  for (let step = 0; step < n - 1; step++) {
+    const activeComms = [...new Set(comm)];
+    if (activeComms.length <= 1) break;
+
+    let bestA = -1, bestB = -1;
+    let bestDist = Infinity;
+
+    for (let ai = 0; ai < activeComms.length; ai++) {
+      for (let bi = ai + 1; bi < activeComms.length; bi++) {
+        const cA = activeComms[ai]!;
+        const cB = activeComms[bi]!;
+        const sA = commSize[cA]!;
+        const sB = commSize[cB]!;
+
+        let d2 = 0;
+        for (let k = 0; k < n; k++) {
+          if (deg[k]! === 0) continue;
+          const diff = communityDist[cA]![k]! - communityDist[cB]![k]!;
+          d2 += (diff * diff) / deg[k]!;
+        }
+        const ward = (sA * sB) / (sA + sB) * d2;
+
+        if (ward < bestDist) {
+          bestDist = ward;
+          bestA = cA;
+          bestB = cB;
+        }
+      }
+    }
+
+    if (bestA < 0) break;
+
+    const sA = commSize[bestA]!;
+    const sB = commSize[bestB]!;
+    const sNew = sA + sB;
+
+    for (let k = 0; k < n; k++) {
+      communityDist[bestA]![k] = (sA * communityDist[bestA]![k]! + sB * communityDist[bestB]![k]!) / sNew;
+    }
+    commSize[bestA] = sNew;
+
+    for (let i = 0; i < n; i++) {
+      if (comm[i] === bestB) comm[i] = bestA;
+    }
+
+    const mod = modularityArr(sym, comm, n);
+    if (mod > bestMod) {
+      bestMod = mod;
+      bestComm = comm.slice();
+    }
+  }
+
+  return renumber(bestComm);
+}
+
+function modularityArr(adj: number[][], partition: number[], n: number): number {
+  const m2 = totalWeight2(adj, n);
+  if (m2 === 0) return 0;
+  let q = 0;
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (partition[i] !== partition[j]) continue;
+      let ki = 0, kj = 0;
+      for (let x = 0; x < n; x++) { ki += adj[i]![x]!; kj += adj[j]![x]!; }
+      q += adj[i]![j]! - (ki * kj) / m2;
+    }
+  }
+  return q / m2;
 }
 
 function renumber(comm: number[]): number[] {

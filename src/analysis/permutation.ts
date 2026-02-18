@@ -72,6 +72,8 @@ export interface PermutationOptions {
   adjust?: 'none' | 'bonferroni' | 'holm' | 'fdr' | 'BH';
   level?: number;
   seed?: number;
+  /** When true and nX === nY, swap within pairs instead of full shuffle. */
+  paired?: boolean;
 }
 
 /**
@@ -83,7 +85,7 @@ export function permutationTest(
   y: TNA,
   options: PermutationOptions = {},
 ): PermutationResult {
-  const { iter = 1000, adjust = 'none', level = 0.05, seed = 42 } = options;
+  const { iter = 1000, adjust = 'none', level = 0.05, seed = 42, paired = false } = options;
 
   if (!x.data || !y.data) {
     throw new Error('Both TNA models must have sequence data for permutation test');
@@ -124,19 +126,19 @@ export function permutationTest(
   // Compute per-sequence transitions for combined data
   const combinedTrans = computeTransitions3D(padded, labels, modelType);
 
-  // Compute true differences from the 3D transitions (same pipeline as permutations)
-  // rather than from original model weights, which may use different nCols per group.
-  const wTrueX = computeWeightsFrom3D(combinedTrans.slice(0, nX), modelType, modelScaling);
-  const wTrueY = computeWeightsFrom3D(combinedTrans.slice(nX), modelType, modelScaling);
-
+  // Compute true differences directly from model weights (matches R: weights_x - weights_y)
   const trueDiff = new Float64Array(a * a);
   const absTrueDiff = new Float64Array(a * a);
   for (let i = 0; i < a; i++) {
     for (let j = 0; j < a; j++) {
       const idx = i * a + j;
-      trueDiff[idx] = wTrueX.get(i, j) - wTrueY.get(i, j);
+      trueDiff[idx] = x.weights.get(i, j) - y.weights.get(i, j);
       absTrueDiff[idx] = Math.abs(trueDiff[idx]!);
     }
+  }
+
+  if (paired && nX !== nY) {
+    throw new Error('Paired permutation test requires equal group sizes');
   }
 
   const rng = new SeededRNG(seed);
@@ -148,7 +150,18 @@ export function permutationTest(
 
   // Permutation loop
   for (let it = 0; it < iter; it++) {
-    const permIdx = rng.permutation(nXY);
+    let permIdx: number[];
+    if (paired) {
+      // Paired: randomly swap within each pair
+      permIdx = Array.from({ length: nXY }, (_, i) => i);
+      for (let p = 0; p < nX; p++) {
+        if (rng.random() < 0.5) {
+          [permIdx[p], permIdx[nX + p]] = [permIdx[nX + p]!, permIdx[p]!];
+        }
+      }
+    } else {
+      permIdx = rng.permutation(nXY);
+    }
 
     // Split permuted indices into two groups
     const transPermX: Matrix[] = [];

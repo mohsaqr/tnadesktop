@@ -4,7 +4,7 @@
  * Uses tnaj's computeTransitions3D / computeWeightsFrom3D for R equivalence.
  */
 import type { TNA, Matrix } from 'tnaj';
-import { computeTransitions3D, computeWeightsFrom3D, createTNA, SeededRNG } from 'tnaj';
+import { computeTransitions3D, computeWeightsFrom3D, createTNA, SeededRNG, arrayQuantile } from 'tnaj';
 
 export interface BootstrapEdge {
   from: string;
@@ -26,6 +26,10 @@ export interface BootstrapResult {
   method: string;
   iter: number;
   level: number;
+  /** Mean bootstrap weights (a x a), row-major. */
+  weightsMean: Float64Array;
+  /** Standard deviation of bootstrap weights (a x a), row-major. */
+  weightsSd: Float64Array;
 }
 
 export interface BootstrapOptions {
@@ -148,16 +152,23 @@ export function bootstrapTna(
     pValues[i] = (pCounts[i]! + 1) / (iter + 1);
   }
 
-  // Confidence intervals
+  // Confidence intervals using R-compatible type 7 quantile (linear interpolation)
   const ciLower = new Float64Array(a * a);
   const ciUpper = new Float64Array(a * a);
   const halfLevel = level / 2;
   for (let idx = 0; idx < a * a; idx++) {
-    const sorted = Float64Array.from(bootWeights[idx]!).sort();
-    const loIdx = Math.floor(sorted.length * halfLevel);
-    const hiIdx = Math.floor(sorted.length * (1 - halfLevel));
-    ciLower[idx] = sorted[loIdx]!;
-    ciUpper[idx] = sorted[Math.min(hiIdx, sorted.length - 1)]!;
+    ciLower[idx] = arrayQuantile(bootWeights[idx]!, halfLevel);
+    ciUpper[idx] = arrayQuantile(bootWeights[idx]!, 1 - halfLevel);
+  }
+
+  // Compute mean and sd of bootstrap weights
+  const weightsMean = new Float64Array(a * a);
+  const weightsSd = new Float64Array(a * a);
+  for (let i = 0; i < a * a; i++) {
+    const mean = bootSums[i]! / iter;
+    weightsMean[i] = mean;
+    const variance = (bootSqSums[i]! / iter) - mean * mean;
+    weightsSd[i] = iter > 1 ? Math.sqrt((variance * iter) / (iter - 1)) : 0;
   }
 
   // Build edge stats (column-major to match R ordering)
@@ -228,5 +239,7 @@ export function bootstrapTna(
     method,
     iter,
     level,
+    weightsMean,
+    weightsSd,
   };
 }

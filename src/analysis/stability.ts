@@ -22,6 +22,8 @@ export interface StabilityOptions {
   threshold?: number;
   certainty?: number;
   seed?: number;
+  /** Correlation method: 'pearson' (default) or 'spearman'. */
+  corrMethod?: 'pearson' | 'spearman';
 }
 
 /**
@@ -38,6 +40,7 @@ export function estimateCS(
     threshold = 0.7,
     certainty = 0.95,
     seed = 42,
+    corrMethod = 'pearson',
   } = options;
 
   if (!model.data) {
@@ -109,8 +112,10 @@ export function estimateCS(
       for (const m of validMeasures) {
         const origVals = origCent.measures[m]!;
         const subVals = subCent.measures[m]!;
-        const corr = pearsonCorr(origVals, subVals);
-        correlations[m]![j]!.push(isNaN(corr) ? 0 : corr);
+        const corr = corrMethod === 'spearman'
+          ? spearmanCorr(origVals, subVals)
+          : pearsonCorr(origVals, subVals);
+        correlations[m]![j]!.push(corr);
       }
     }
   }
@@ -124,11 +129,12 @@ export function estimateCS(
       const means: number[] = [];
       for (let j = 0; j < dropProps.length; j++) {
         const corrs = correlations[m]![j]!;
-        if (corrs.length === 0) {
+        const valid = corrs.filter(c => !isNaN(c));
+        if (valid.length === 0) {
           means.push(NaN);
           continue;
         }
-        means.push(corrs.reduce((s, v) => s + v, 0) / corrs.length);
+        means.push(valid.reduce((s, v) => s + v, 0) / valid.length);
       }
       meanCorrelations[m] = means;
 
@@ -136,8 +142,9 @@ export function estimateCS(
       let cs = 0;
       for (let j = 0; j < dropProps.length; j++) {
         const corrs = correlations[m]![j]!;
-        if (corrs.length === 0) continue;
-        const aboveThreshold = corrs.filter(c => c >= threshold).length / corrs.length;
+        const validCorrs = corrs.filter(c => !isNaN(c));
+        if (validCorrs.length === 0) continue;
+        const aboveThreshold = validCorrs.filter(c => c >= threshold).length / validCorrs.length;
         if (aboveThreshold >= certainty) {
           cs = dropProps[j]!;
         }
@@ -156,4 +163,25 @@ export function estimateCS(
     threshold,
     certainty,
   };
+}
+
+/** Rank array values (1-based, no tie handling — simple dense rank by sort order). */
+function rankArray(arr: Float64Array): Float64Array {
+  const indexed = Array.from(arr, (v, i) => ({ v, i })).sort((a, b) => a.v - b.v);
+  const ranks = new Float64Array(arr.length);
+  // Average ranks for ties
+  let i = 0;
+  while (i < indexed.length) {
+    let j = i;
+    while (j < indexed.length && indexed[j]!.v === indexed[i]!.v) j++;
+    const avgRank = (i + j + 1) / 2; // average of 1-based ranks i+1..j
+    for (let k = i; k < j; k++) ranks[indexed[k]!.i] = avgRank;
+    i = j;
+  }
+  return ranks;
+}
+
+/** Spearman rank correlation = Pearson correlation on ranks. */
+function spearmanCorr(a: Float64Array, b: Float64Array): number {
+  return pearsonCorr(rankArray(a), rankArray(b));
 }

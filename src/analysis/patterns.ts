@@ -40,7 +40,7 @@ export function extractPatterns(
 
     for (let n = minN; n <= maxN; n++) {
       for (let i = 0; i <= seq.length - n; i++) {
-        const gram = seq.slice(i, i + n).join(' → ');
+        const gram = seq.slice(i, i + n).join('->');
         patternCounts.set(gram, (patternCounts.get(gram) ?? 0) + 1);
         if (!patternSeqs.has(gram)) patternSeqs.set(gram, new Set());
         patternSeqs.get(gram)!.add(si);
