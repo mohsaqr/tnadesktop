@@ -4,9 +4,10 @@
 import type { TNA, GroupTNA, CentralityResult, CommunityResult, CentralityMeasure, CommunityMethod } from 'tnaj';
 import type { NetworkSettings } from '../main';
 import { state, render, saveState, buildModel, buildGroupModel, computeCentralities, computeCommunities, computeSummary, groupNetworkSettings, AVAILABLE_MEASURES, AVAILABLE_METHODS, prune } from '../main';
-import { renderNetwork } from './network';
+import { renderNetwork, renderNetworkIntoGroup } from './network';
 import { renderCentralityChart } from './centralities';
 import { renderFrequencies, renderWeightHistogram } from './frequencies';
+import { COMMUNITY_COLORS } from './colors';
 
 import { renderSequences, renderDistribution } from './sequences';
 import { showExportDialog, addPanelDownloadButtons } from './export';
@@ -20,12 +21,14 @@ import type { BootstrapOptions } from '../analysis/bootstrap';
 import { renderPatternsTab } from './patterns';
 import { renderIndicesTab } from './indices';
 import { renderGroupAnalysisTab } from './clustering';
+import { renderMosaic } from './mosaic';
+import { renderCompareNetworksTab } from './compare-networks';
 import { estimateCS } from '../analysis/stability';
 import type { StabilityResult } from '../analysis/stability';
 import { NODE_COLORS } from './colors';
 import * as d3 from 'd3';
 
-type Tab = 'network' | 'group-analysis' | 'centralities' | 'betweenness' | 'communities' | 'cliques' | 'bootstrap' | 'frequencies' | 'sequences' | 'patterns' | 'indices' | 'permutation' | 'compare-sequences';
+type Tab = 'network' | 'group-analysis' | 'centralities' | 'betweenness' | 'communities' | 'cliques' | 'bootstrap' | 'frequencies' | 'sequences' | 'patterns' | 'indices' | 'permutation' | 'compare-sequences' | 'compare-networks';
 
 interface TabDef { id: Tab; label: string; groupOnly?: boolean; singleOnly?: boolean }
 
@@ -42,6 +45,7 @@ const TABS: TabDef[] = [
   { id: 'indices', label: 'Seq. Indices' },
   { id: 'permutation', label: 'Permutation Test', groupOnly: true },
   { id: 'compare-sequences', label: 'Compare Sequences', groupOnly: true },
+  { id: 'compare-networks', label: 'Compare Networks', groupOnly: true },
 ];
 
 // ─── Cached model data for fast network-only re-render ───
@@ -190,6 +194,24 @@ export function renderDashboard(container: HTMLElement) {
         <option value="ctna" ${state.modelType === 'ctna' ? 'selected' : ''}>CTNA (Co-occurrence)</option>
         <option value="atna" ${state.modelType === 'atna' ? 'selected' : ''}>ATNA (Attention)</option>
       </select>
+    </div>
+
+    <div class="control-group">
+      <label>Scaling</label>
+      <select id="scaling-select">
+        <option value="" ${state.scaling === '' ? 'selected' : ''}>None</option>
+        <option value="minmax" ${state.scaling === 'minmax' ? 'selected' : ''}>MinMax</option>
+        <option value="max" ${state.scaling === 'max' ? 'selected' : ''}>Max</option>
+        <option value="rank" ${state.scaling === 'rank' ? 'selected' : ''}>Rank</option>
+      </select>
+    </div>
+
+    <div class="control-group" id="atna-beta-wrap" style="display:${state.modelType === 'atna' ? 'block' : 'none'}">
+      <label>ATNA Beta (decay)</label>
+      <div class="slider-row">
+        <input type="range" id="atna-beta" min="0.01" max="2.0" step="0.01" value="${state.atnaBeta}">
+        <span class="slider-value" id="atna-beta-value">${state.atnaBeta.toFixed(2)}</span>
+      </div>
     </div>
 
     <div class="control-group">
@@ -492,6 +514,38 @@ export function renderDashboard(container: HTMLElement) {
   // ─── Model / prune / community events ───
   document.getElementById('model-type')!.addEventListener('change', (e) => {
     state.modelType = (e.target as HTMLSelectElement).value as typeof state.modelType;
+    const betaWrap = document.getElementById('atna-beta-wrap');
+    if (betaWrap) betaWrap.style.display = state.modelType === 'atna' ? 'block' : 'none';
+
+    // Reset scaling and threshold on model type change (clean slate)
+    state.scaling = '' as any;
+    state.threshold = 0;
+    const scalingSel = document.getElementById('scaling-select') as HTMLSelectElement | null;
+    if (scalingSel) scalingSel.value = '';
+    const pruneSlider = document.getElementById('prune-threshold') as HTMLInputElement | null;
+    if (pruneSlider) { pruneSlider.value = '0'; }
+    const pruneLabel = document.getElementById('prune-value');
+    if (pruneLabel) pruneLabel.textContent = '0.00';
+
+    // Navigate to Network tab on model type change
+    state.activeTab = 'network';
+    const tabBar = document.getElementById('tab-bar');
+    if (tabBar) {
+      tabBar.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      tabBar.querySelector('[data-tab="network"]')?.classList.add('active');
+    }
+
+    updateAll();
+  });
+
+  document.getElementById('scaling-select')!.addEventListener('change', (e) => {
+    state.scaling = (e.target as HTMLSelectElement).value as typeof state.scaling;
+    updateAll();
+  });
+
+  document.getElementById('atna-beta')!.addEventListener('input', (e) => {
+    state.atnaBeta = parseFloat((e.target as HTMLInputElement).value);
+    document.getElementById('atna-beta-value')!.textContent = state.atnaBeta.toFixed(2);
     updateAll();
   });
 
@@ -794,6 +848,10 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
       if (activeGroupFullModel) renderCompareSequencesTab(content, activeGroupFullModel);
       break;
     }
+    case 'compare-networks': {
+      if (activeGroupFullModel) renderCompareNetworksTab(content, activeGroupFullModel);
+      break;
+    }
   }
 }
 
@@ -1040,11 +1098,21 @@ function renderFrequenciesTab(content: HTMLElement, model: any) {
 
   content.appendChild(grid);
 
+  // Mosaic plot: full-width panel below the 2-column grid
+  const mosaicPanel = document.createElement('div');
+  mosaicPanel.className = 'panel';
+  mosaicPanel.style.marginTop = '16px';
+  mosaicPanel.innerHTML = `<div class="panel-title">Mosaic Plot (Standardized Residuals)</div><div id="viz-mosaic" style="width:100%"></div>`;
+  addPanelDownloadButtons(mosaicPanel, { image: true, filename: 'mosaic-plot' });
+  content.appendChild(mosaicPanel);
+
   requestAnimationFrame(() => {
     const freqEl = document.getElementById('viz-freq');
     const histEl = document.getElementById('viz-histogram');
+    const mosaicEl = document.getElementById('viz-mosaic');
     if (freqEl) renderFrequencies(freqEl, model);
     if (histEl) renderWeightHistogram(histEl, model);
+    if (mosaicEl) renderMosaic(mosaicEl, model);
   });
 }
 
@@ -1242,6 +1310,60 @@ function renderMultiGroupTab(
   }
 }
 
+/** Shared grouped bar chart renderer for combined views. */
+function renderGroupedBars(
+  container: HTMLElement,
+  data: { node: string; group: string; value: number; color: string }[],
+  nodeLabels: string[],
+  groupNames: string[],
+  _yLabel?: string,
+) {
+  const rect = container.getBoundingClientRect();
+  const width = Math.max(rect.width, 400);
+  const height = 280;
+  const margin = { top: 10, right: 20, bottom: 50, left: 60 };
+  const innerW = width - margin.left - margin.right;
+  const innerH = height - margin.top - margin.bottom;
+
+  d3.select(container).selectAll('*').remove();
+  const svg = d3.select(container).append('svg').attr('width', width).attr('height', height);
+  const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+
+  const x0 = d3.scaleBand().domain(nodeLabels).range([0, innerW]).padding(0.2);
+  const x1 = d3.scaleBand().domain(groupNames).range([0, x0.bandwidth()]).padding(0.05);
+  const maxVal = Math.max(...data.map(d => d.value), 1e-6);
+  const y = d3.scaleLinear().domain([0, maxVal * 1.1]).range([innerH, 0]);
+
+  g.selectAll('rect')
+    .data(data)
+    .enter()
+    .append('rect')
+    .attr('x', d => (x0(d.node) ?? 0) + (x1(d.group) ?? 0))
+    .attr('y', d => y(d.value))
+    .attr('width', x1.bandwidth())
+    .attr('height', d => innerH - y(d.value))
+    .attr('fill', d => d.color)
+    .attr('rx', 2);
+
+  g.append('g')
+    .attr('transform', `translate(0,${innerH})`)
+    .call(d3.axisBottom(x0).tickSize(0).tickPadding(6))
+    .selectAll('text')
+    .attr('font-size', '9px')
+    .attr('transform', 'rotate(-30)')
+    .attr('text-anchor', 'end');
+
+  g.append('g')
+    .call(d3.axisLeft(y).ticks(5))
+    .selectAll('text').attr('font-size', '10px');
+
+  // Legend
+  groupNames.forEach((gn, gi) => {
+    svg.append('rect').attr('x', margin.left + gi * 100).attr('y', height - 12).attr('width', 10).attr('height', 10).attr('fill', GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]!).attr('rx', 2);
+    svg.append('text').attr('x', margin.left + gi * 100 + 14).attr('y', height - 3).attr('font-size', '10px').attr('fill', '#555').text(gn);
+  });
+}
+
 // ─── Centralities tab (multi-group) ───
 function renderCentralitiesTabMulti(content: HTMLElement) {
   // Shared controls at the top
@@ -1250,6 +1372,10 @@ function renderCentralitiesTabMulti(content: HTMLElement) {
   controls.style.padding = '10px 16px';
   controls.innerHTML = `
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <div class="view-toggle">
+        <button class="toggle-btn active" id="cent-toggle-card">Card View</button>
+        <button class="toggle-btn" id="cent-toggle-combined">Combined</button>
+      </div>
       <div style="display:flex;align-items:center;gap:6px">
         <label style="font-size:13px;color:#555;font-weight:600">Measure 1:</label>
         <select id="measure-sel-1" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
@@ -1277,6 +1403,77 @@ function renderCentralitiesTabMulti(content: HTMLElement) {
   `;
   content.appendChild(controls);
 
+  // View container
+  const viewContainer = document.createElement('div');
+  viewContainer.id = 'cent-view-container';
+  content.appendChild(viewContainer);
+
+  let currentView: 'card' | 'combined' = 'card';
+
+  function renderCardView() {
+    viewContainer.innerHTML = '';
+    const rows = document.createElement('div');
+    rows.style.display = 'flex';
+    rows.style.flexDirection = 'column';
+    rows.style.gap = '12px';
+    viewContainer.appendChild(rows);
+
+    let i = 0;
+    for (const [groupName] of cachedModels) {
+      const card = document.createElement('div');
+      card.className = 'group-card';
+      const color = GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]!;
+      card.innerHTML = `
+        <div class="group-card-header">
+          <span class="group-color-dot" style="background:${color}"></span>
+          ${groupName}
+        </div>
+        <div class="group-card-content" style="padding:8px">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+            <div class="panel" style="box-shadow:none;padding:4px"><div class="panel-title" style="font-size:10px">${state.selectedMeasure1}</div><div id="viz-cent-1-g${i}" style="width:100%;height:240px"></div></div>
+            <div class="panel" style="box-shadow:none;padding:4px"><div class="panel-title" style="font-size:10px">${state.selectedMeasure2}</div><div id="viz-cent-2-g${i}" style="width:100%;height:240px"></div></div>
+            <div class="panel" style="box-shadow:none;padding:4px"><div class="panel-title" style="font-size:10px">${state.selectedMeasure3}</div><div id="viz-cent-3-g${i}" style="width:100%;height:240px"></div></div>
+          </div>
+          <div id="stability-results-g${i}" style="color:#888;font-size:12px;margin-top:4px"></div>
+        </div>
+      `;
+      rows.appendChild(card);
+      i++;
+    }
+
+    requestAnimationFrame(() => {
+      renderAllGroupCharts();
+      let gi = 0;
+      for (const [groupName] of cachedModels) {
+        for (let m = 1; m <= 3; m++) {
+          const chartEl = document.getElementById(`viz-cent-${m}-g${gi}`);
+          const miniPanel = chartEl?.closest('.panel') as HTMLElement | null;
+          if (miniPanel) addPanelDownloadButtons(miniPanel, { image: true, filename: `centrality-${groupName}-m${m}` });
+        }
+        gi++;
+      }
+    });
+  }
+
+  function renderCombinedView() {
+    viewContainer.innerHTML = '';
+    const measures = [state.selectedMeasure1, state.selectedMeasure2, state.selectedMeasure3];
+    for (let m = 0; m < 3; m++) {
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+      panel.style.marginBottom = '16px';
+      panel.innerHTML = `<div class="panel-title">${measures[m]} — All Groups</div><div id="viz-cent-combined-${m}" style="width:100%;height:300px"></div>`;
+      addPanelDownloadButtons(panel, { image: true, filename: `centrality-combined-${measures[m]}` });
+      viewContainer.appendChild(panel);
+    }
+    requestAnimationFrame(() => {
+      for (let m = 0; m < 3; m++) {
+        const el = document.getElementById(`viz-cent-combined-${m}`);
+        if (el) renderGroupedBarChart(el, measures[m]!);
+      }
+    });
+  }
+
   function renderAllGroupCharts() {
     let j = 0;
     for (const [groupName] of cachedModels) {
@@ -1290,75 +1487,114 @@ function renderCentralitiesTabMulti(content: HTMLElement) {
     }
   }
 
-  // Each group as a full-width row
-  const rows = document.createElement('div');
-  rows.style.display = 'flex';
-  rows.style.flexDirection = 'column';
-  rows.style.gap = '12px';
-  content.appendChild(rows);
+  function renderGroupedBarChart(container: HTMLElement, measure: string) {
+    const groupNames = [...cachedModels.keys()];
+    const nodeLabels = cachedCents.get(groupNames[0]!)?.labels ?? [];
+    const nNodes = nodeLabels.length;
+    const nGroups = groupNames.length;
 
-  let i = 0;
-  for (const [groupName] of cachedModels) {
-    const card = document.createElement('div');
-    card.className = 'group-card';
-    const color = GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]!;
-    card.innerHTML = `
-      <div class="group-card-header">
-        <span class="group-color-dot" style="background:${color}"></span>
-        ${groupName}
-      </div>
-      <div class="group-card-content" style="padding:8px">
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-          <div class="panel" style="box-shadow:none;padding:4px"><div class="panel-title" style="font-size:10px">${state.selectedMeasure1}</div><div id="viz-cent-1-g${i}" style="width:100%;height:240px"></div></div>
-          <div class="panel" style="box-shadow:none;padding:4px"><div class="panel-title" style="font-size:10px">${state.selectedMeasure2}</div><div id="viz-cent-2-g${i}" style="width:100%;height:240px"></div></div>
-          <div class="panel" style="box-shadow:none;padding:4px"><div class="panel-title" style="font-size:10px">${state.selectedMeasure3}</div><div id="viz-cent-3-g${i}" style="width:100%;height:240px"></div></div>
-        </div>
-        <div id="stability-results-g${i}" style="color:#888;font-size:12px;margin-top:4px"></div>
-      </div>
-    `;
-    rows.appendChild(card);
-    i++;
+    const data: { node: string; group: string; value: number; color: string }[] = [];
+    for (let gi = 0; gi < nGroups; gi++) {
+      const cent = cachedCents.get(groupNames[gi]!)!;
+      const vals: number[] = (cent.measures as any)[measure] ?? [];
+      for (let ni = 0; ni < nNodes; ni++) {
+        data.push({ node: nodeLabels[ni]!, group: groupNames[gi]!, value: vals[ni] ?? 0, color: GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]! });
+      }
+    }
+
+    const rect = container.getBoundingClientRect();
+    const width = Math.max(rect.width, 400);
+    const height = 280;
+    const margin = { top: 10, right: 20, bottom: 50, left: 60 };
+    const innerW = width - margin.left - margin.right;
+    const innerH = height - margin.top - margin.bottom;
+
+    d3.select(container).selectAll('*').remove();
+    const svg = d3.select(container).append('svg').attr('width', width).attr('height', height);
+    const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+
+    const x0 = d3.scaleBand().domain(nodeLabels).range([0, innerW]).padding(0.2);
+    const x1 = d3.scaleBand().domain(groupNames).range([0, x0.bandwidth()]).padding(0.05);
+    const maxVal = Math.max(...data.map(d => d.value), 1e-6);
+    const y = d3.scaleLinear().domain([0, maxVal * 1.1]).range([innerH, 0]);
+
+    g.selectAll('rect')
+      .data(data)
+      .enter()
+      .append('rect')
+      .attr('x', d => (x0(d.node) ?? 0) + (x1(d.group) ?? 0))
+      .attr('y', d => y(d.value))
+      .attr('width', x1.bandwidth())
+      .attr('height', d => innerH - y(d.value))
+      .attr('fill', d => d.color)
+      .attr('rx', 2);
+
+    g.append('g')
+      .attr('transform', `translate(0,${innerH})`)
+      .call(d3.axisBottom(x0).tickSize(0).tickPadding(6))
+      .selectAll('text')
+      .attr('font-size', '9px')
+      .attr('transform', 'rotate(-30)')
+      .attr('text-anchor', 'end');
+
+    g.append('g')
+      .call(d3.axisLeft(y).ticks(5))
+      .selectAll('text').attr('font-size', '10px');
+
+    // Legend
+    groupNames.forEach((gn, gi) => {
+      svg.append('rect').attr('x', margin.left + gi * 100).attr('y', height - 12).attr('width', 10).attr('height', 10).attr('fill', GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]!).attr('rx', 2);
+      svg.append('text').attr('x', margin.left + gi * 100 + 14).attr('y', height - 3).attr('font-size', '10px').attr('fill', '#555').text(gn);
+    });
   }
 
-  requestAnimationFrame(() => {
-    renderAllGroupCharts();
-    // Add download buttons to per-group centrality chart panels
-    let gi = 0;
-    for (const [groupName] of cachedModels) {
-      for (let m = 1; m <= 3; m++) {
-        const chartEl = document.getElementById(`viz-cent-${m}-g${gi}`);
-        const miniPanel = chartEl?.closest('.panel') as HTMLElement | null;
-        if (miniPanel) addPanelDownloadButtons(miniPanel, { image: true, filename: `centrality-${groupName}-m${m}` });
-      }
-      gi++;
-    }
-  });
+  // Initial render
+  renderCardView();
 
-  // Wire shared measure selectors
+  // Wire toggle + shared controls
   setTimeout(() => {
+    document.getElementById('cent-toggle-card')?.addEventListener('click', () => {
+      if (currentView === 'card') return;
+      currentView = 'card';
+      document.getElementById('cent-toggle-card')!.classList.add('active');
+      document.getElementById('cent-toggle-combined')!.classList.remove('active');
+      renderCardView();
+    });
+    document.getElementById('cent-toggle-combined')?.addEventListener('click', () => {
+      if (currentView === 'combined') return;
+      currentView = 'combined';
+      document.getElementById('cent-toggle-combined')!.classList.add('active');
+      document.getElementById('cent-toggle-card')!.classList.remove('active');
+      renderCombinedView();
+    });
+
     for (let m = 1; m <= 3; m++) {
       document.getElementById(`measure-sel-${m}`)?.addEventListener('change', (e) => {
         const val = (e.target as HTMLSelectElement).value as CentralityMeasure;
         if (m === 1) state.selectedMeasure1 = val;
         else if (m === 2) state.selectedMeasure2 = val;
         else state.selectedMeasure3 = val;
-        let j = 0;
-        for (const [groupName] of cachedModels) {
-          const cent = cachedCents.get(groupName)!;
-          const el = document.getElementById(`viz-cent-${m}-g${j}`);
-          if (el) renderCentralityChart(el, cent, val);
-          j++;
+        if (currentView === 'card') {
+          let j = 0;
+          for (const [groupName] of cachedModels) {
+            const cent = cachedCents.get(groupName)!;
+            const el = document.getElementById(`viz-cent-${m}-g${j}`);
+            if (el) renderCentralityChart(el, cent, val);
+            j++;
+          }
+        } else {
+          renderCombinedView();
         }
       });
     }
     document.getElementById('centrality-loops')?.addEventListener('change', (e) => {
       state.centralityLoops = (e.target as HTMLInputElement).checked;
       saveState();
-      // Recompute centralities for all groups
       for (const [groupName, model] of cachedModels) {
         cachedCents.set(groupName, computeCentralities(model));
       }
-      renderAllGroupCharts();
+      if (currentView === 'card') renderAllGroupCharts();
+      else renderCombinedView();
     });
 
     document.getElementById('run-stability')?.addEventListener('click', () => {
@@ -1397,47 +1633,158 @@ function renderCentralitiesTabMulti(content: HTMLElement) {
 }
 
 // ─── Frequencies tab (multi-group) ───
-// (download buttons for frequency sections are not added here because they use
-// a shared section renderer — buttons are added inside addSection below)
 function renderFrequenciesTabMulti(content: HTMLElement) {
-  const n = cachedModels.size;
-  const cols = Math.min(n, 4);
+  // Toggle bar
+  const toggleBar = document.createElement('div');
+  toggleBar.className = 'panel';
+  toggleBar.style.padding = '10px 16px';
+  toggleBar.innerHTML = `
+    <div class="view-toggle">
+      <button class="toggle-btn active" id="freq-toggle-card">Card View</button>
+      <button class="toggle-btn" id="freq-toggle-combined">Combined</button>
+    </div>
+  `;
+  content.appendChild(toggleBar);
 
-  // Helper: create a row with a title and side-by-side panels per group
-  function addSection(title: string, idPrefix: string) {
-    const section = document.createElement('div');
-    section.className = 'panel';
-    section.style.marginBottom = '16px';
-    let headerHtml = `<div class="panel-title">${title}</div>`;
-    let gridHtml = `<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:12px">`;
-    let i = 0;
-    for (const [groupName] of cachedModels) {
-      const color = GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]!;
-      gridHtml += `<div>
-        <div style="font-size:12px;font-weight:600;color:${color};margin-bottom:4px;text-align:center">${groupName}</div>
-        <div id="${idPrefix}-g${i}" style="width:100%"></div>
-      </div>`;
-      i++;
+  const viewContainer = document.createElement('div');
+  viewContainer.id = 'freq-view-container';
+  content.appendChild(viewContainer);
+
+  let currentView: 'card' | 'combined' = 'card';
+
+  function renderCardView() {
+    viewContainer.innerHTML = '';
+    const n = cachedModels.size;
+    const cols = Math.min(n, 4);
+
+    function addSection(title: string, idPrefix: string) {
+      const section = document.createElement('div');
+      section.className = 'panel';
+      section.style.marginBottom = '16px';
+      let headerHtml = `<div class="panel-title">${title}</div>`;
+      let gridHtml = `<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:12px">`;
+      let i = 0;
+      for (const [groupName] of cachedModels) {
+        const color = GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]!;
+        gridHtml += `<div>
+          <div style="font-size:12px;font-weight:600;color:${color};margin-bottom:4px;text-align:center">${groupName}</div>
+          <div id="${idPrefix}-g${i}" style="width:100%"></div>
+        </div>`;
+        i++;
+      }
+      gridHtml += '</div>';
+      section.innerHTML = headerHtml + gridHtml;
+      addPanelDownloadButtons(section, { image: true, filename: `${idPrefix}-all-groups` });
+      viewContainer.appendChild(section);
     }
-    gridHtml += '</div>';
-    section.innerHTML = headerHtml + gridHtml;
-    addPanelDownloadButtons(section, { image: true, filename: `${idPrefix}-all-groups` });
-    content.appendChild(section);
+
+    addSection('State Frequencies', 'viz-freq');
+    addSection('Weight Distribution', 'viz-histogram');
+    addSection('Mosaic Plot', 'viz-mosaic');
+
+    requestAnimationFrame(() => {
+      let j = 0;
+      for (const [, model] of cachedModels) {
+        const freqEl = document.getElementById(`viz-freq-g${j}`);
+        const histEl = document.getElementById(`viz-histogram-g${j}`);
+        const mosaicEl = document.getElementById(`viz-mosaic-g${j}`);
+        if (freqEl) renderFrequencies(freqEl, model);
+        if (histEl) renderWeightHistogram(histEl, model);
+        if (mosaicEl) renderMosaic(mosaicEl, model);
+        j++;
+      }
+    });
   }
 
-  addSection('State Frequencies', 'viz-freq');
-  addSection('Weight Distribution', 'viz-histogram');
+  function renderCombinedView() {
+    viewContainer.innerHTML = '';
+    // Grouped bar chart for state frequencies
+    const freqPanel = document.createElement('div');
+    freqPanel.className = 'panel';
+    freqPanel.style.marginBottom = '16px';
+    freqPanel.innerHTML = `<div class="panel-title">State Frequencies — All Groups</div><div id="viz-freq-combined" style="width:100%;height:300px"></div>`;
+    addPanelDownloadButtons(freqPanel, { image: true, filename: 'freq-combined-all-groups' });
+    viewContainer.appendChild(freqPanel);
 
-  requestAnimationFrame(() => {
-    let j = 0;
-    for (const [groupName, model] of cachedModels) {
-      const freqEl = document.getElementById(`viz-freq-g${j}`);
-      const histEl = document.getElementById(`viz-histogram-g${j}`);
-      if (freqEl) renderFrequencies(freqEl, model);
-      if (histEl) renderWeightHistogram(histEl, model);
-      j++;
+    // Grouped bar chart for weight distribution stats
+    const statsPanel = document.createElement('div');
+    statsPanel.className = 'panel';
+    statsPanel.style.marginBottom = '16px';
+    statsPanel.innerHTML = `<div class="panel-title">Mean Edge Weights — All Groups</div><div id="viz-weights-combined" style="width:100%;height:300px"></div>`;
+    addPanelDownloadButtons(statsPanel, { image: true, filename: 'weights-combined-all-groups' });
+    viewContainer.appendChild(statsPanel);
+
+    requestAnimationFrame(() => {
+      const freqEl = document.getElementById('viz-freq-combined');
+      if (freqEl) renderGroupedFreqChart(freqEl);
+      const weightsEl = document.getElementById('viz-weights-combined');
+      if (weightsEl) renderGroupedWeightsChart(weightsEl);
+    });
+  }
+
+  function renderGroupedFreqChart(container: HTMLElement) {
+    // Compute state frequencies per group: sum of each column in the weight matrix
+    const groupNames = [...cachedModels.keys()];
+    const nodeLabels = [...cachedModels.values()][0]?.labels ?? [];
+    const nNodes = nodeLabels.length;
+    const nGroups = groupNames.length;
+
+    const data: { node: string; group: string; value: number; color: string }[] = [];
+    for (let gi = 0; gi < nGroups; gi++) {
+      const model = cachedModels.get(groupNames[gi]!)!;
+      for (let ni = 0; ni < nNodes; ni++) {
+        // State frequency: sum of outgoing weights for this node
+        let total = 0;
+        for (let j = 0; j < nNodes; j++) total += model.weights.get(ni, j);
+        data.push({ node: nodeLabels[ni]!, group: groupNames[gi]!, value: total, color: GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]! });
+      }
     }
-  });
+
+    renderGroupedBars(container, data, nodeLabels, groupNames, 'State Frequency');
+  }
+
+  function renderGroupedWeightsChart(container: HTMLElement) {
+    // Mean outgoing weight per node per group
+    const groupNames = [...cachedModels.keys()];
+    const nodeLabels = [...cachedModels.values()][0]?.labels ?? [];
+    const nNodes = nodeLabels.length;
+    const nGroups = groupNames.length;
+
+    const data: { node: string; group: string; value: number; color: string }[] = [];
+    for (let gi = 0; gi < nGroups; gi++) {
+      const model = cachedModels.get(groupNames[gi]!)!;
+      for (let ni = 0; ni < nNodes; ni++) {
+        let total = 0;
+        let count = 0;
+        for (let j = 0; j < nNodes; j++) {
+          const w = model.weights.get(ni, j);
+          if (w > 0) { total += w; count++; }
+        }
+        data.push({ node: nodeLabels[ni]!, group: groupNames[gi]!, value: count > 0 ? total / count : 0, color: GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]! });
+      }
+    }
+
+    renderGroupedBars(container, data, nodeLabels, groupNames, 'Mean Weight');
+  }
+
+  renderCardView();
+
+  setTimeout(() => {
+    document.getElementById('freq-toggle-card')?.addEventListener('click', () => {
+      if (currentView === 'card') return;
+      currentView = 'card';
+      document.getElementById('freq-toggle-card')!.classList.add('active');
+      document.getElementById('freq-toggle-combined')!.classList.remove('active');
+      renderCardView();
+    });
+    document.getElementById('freq-toggle-combined')?.addEventListener('click', () => {
+      if (currentView === 'combined') return;
+      currentView = 'combined';
+      document.getElementById('freq-toggle-combined')!.classList.add('active');
+      document.getElementById('freq-toggle-card')!.classList.remove('active');
+      renderCombinedView();
+    });
+  }, 0);
 }
 
 // ─── Sequences tab (multi-group) ───
@@ -1474,6 +1821,10 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
   controls.style.padding = '12px 16px';
   controls.innerHTML = `
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <div class="view-toggle">
+        <button class="toggle-btn active" id="comm-toggle-card">Card View</button>
+        <button class="toggle-btn" id="comm-toggle-combined">Combined</button>
+      </div>
       <div style="display:flex;align-items:center;gap:6px">
         <label style="font-size:13px;color:#555;font-weight:600">Method:</label>
         <select id="community-method" style="font-size:13px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
@@ -1487,41 +1838,180 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
   `;
   content.appendChild(controls);
 
-  // Each group as a full-width row with network + table side by side
+  const viewContainer = document.createElement('div');
+  viewContainer.id = 'comm-view-container';
+  content.appendChild(viewContainer);
+
   const h = groupNetworkHeight();
   const gs = groupNetworkSettings(state.networkSettings);
-  let i = 0;
-  for (const [groupName, model] of cachedModels) {
-    const groupRow = document.createElement('div');
-    groupRow.className = 'panel';
-    groupRow.style.cssText = 'margin-top:12px;padding:12px';
-    groupRow.innerHTML = `
-      <div class="panel-title" style="margin-bottom:8px;font-size:14px;color:${GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]}">${groupName}</div>
-      <div style="display:flex;gap:12px;align-items:flex-start">
-        <div style="flex:1 1 55%;min-height:${h}px">
-          <div id="viz-community-network-g${i}" style="width:100%;height:${h}px"></div>
+  let currentView: 'card' | 'combined' = 'card';
+
+  function renderCardView() {
+    viewContainer.innerHTML = '';
+    let i = 0;
+    for (const [groupName, model] of cachedModels) {
+      const groupRow = document.createElement('div');
+      groupRow.className = 'panel';
+      groupRow.style.cssText = 'margin-top:12px;padding:12px';
+      groupRow.innerHTML = `
+        <div class="panel-title" style="margin-bottom:8px;font-size:14px;color:${GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]}">${groupName}</div>
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <div style="flex:1 1 55%;min-height:${h}px">
+            <div id="viz-community-network-g${i}" style="width:100%;height:${h}px"></div>
+          </div>
+          <div id="community-results-g${i}" style="flex:1 1 40%;font-size:13px;color:#888;padding-top:8px">
+            ${cachedComms.get(groupName) ? '' : 'Click "Detect All" to analyze.'}
+          </div>
         </div>
-        <div id="community-results-g${i}" style="flex:1 1 40%;font-size:13px;color:#888;padding-top:8px">
-          Click "Detect All" to analyze.
-        </div>
-      </div>
-    `;
-    content.appendChild(groupRow);
-    i++;
+      `;
+      viewContainer.appendChild(groupRow);
+      i++;
+    }
+
+    requestAnimationFrame(() => {
+      let j = 0;
+      for (const [groupName, model] of cachedModels) {
+        const el = document.getElementById(`viz-community-network-g${j}`);
+        const comm = cachedComms.get(groupName);
+        if (el) renderNetwork(el, model, gs, comm ?? undefined);
+        // Show existing results if available
+        if (comm) showCommunityResults(j, model, comm);
+        j++;
+      }
+    });
   }
 
-  // Render plain networks initially
-  requestAnimationFrame(() => {
-    let j = 0;
-    for (const [, model] of cachedModels) {
-      const el = document.getElementById(`viz-community-network-g${j}`);
-      if (el) renderNetwork(el, model, gs);
-      j++;
-    }
-  });
+  function renderCombinedView() {
+    viewContainer.innerHTML = '';
 
-  // Wire detect-all button
+    // Combined canvas: all community-colored networks in one SVG
+    const n = cachedModels.size;
+    const cols = n <= 2 ? n : n <= 4 ? 2 : Math.ceil(Math.sqrt(n));
+    const rows = Math.ceil(n / cols);
+    const cellW = 500;
+    const cellH = Math.min(state.networkSettings.networkHeight, 400);
+    const labelH = 24;
+    const totalW = cols * cellW;
+    const totalH = rows * (cellH + labelH);
+
+    const canvasPanel = document.createElement('div');
+    canvasPanel.className = 'panel';
+    canvasPanel.style.marginTop = '12px';
+    canvasPanel.innerHTML = `<div class="panel-title">Combined Community Networks</div>`;
+    addPanelDownloadButtons(canvasPanel, { image: true, filename: 'combined-community-networks' });
+
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svgEl = document.createElementNS(svgNS, 'svg');
+    svgEl.setAttribute('viewBox', `0 0 ${totalW} ${totalH}`);
+    svgEl.setAttribute('width', '100%');
+    svgEl.style.minHeight = '300px';
+    svgEl.style.background = '#fff';
+    canvasPanel.appendChild(svgEl);
+    viewContainer.appendChild(canvasPanel);
+
+    requestAnimationFrame(() => {
+      let idx = 0;
+      for (const [groupName, model] of cachedModels) {
+        const col = idx % cols;
+        const row = Math.floor(idx / cols);
+        const x = col * cellW;
+        const y = row * (cellH + labelH);
+
+        const label = document.createElementNS(svgNS, 'text');
+        label.setAttribute('x', String(x + cellW / 2));
+        label.setAttribute('y', String(y + 16));
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('font-size', '13');
+        label.setAttribute('font-weight', '700');
+        label.setAttribute('fill', GROUP_CARD_COLORS[idx % GROUP_CARD_COLORS.length]!);
+        label.textContent = groupName;
+        svgEl.appendChild(label);
+
+        const gEl = document.createElementNS(svgNS, 'g') as SVGGElement;
+        gEl.setAttribute('transform', `translate(${x}, ${y + labelH})`);
+        svgEl.appendChild(gEl);
+
+        const comm = cachedComms.get(groupName);
+        renderNetworkIntoGroup(gEl, model, gs, cellW, cellH, comm ?? undefined);
+        idx++;
+      }
+    });
+
+    // Cross-group membership table
+    if (cachedComms.size > 0) {
+      const tablePanel = document.createElement('div');
+      tablePanel.className = 'panel';
+      tablePanel.style.marginTop = '16px';
+      tablePanel.innerHTML = `<div class="panel-title">Community Membership Comparison</div>`;
+
+      const groupNames = [...cachedModels.keys()];
+      const nodeLabels = [...cachedModels.values()][0]?.labels ?? [];
+      let html = '<table class="preview-table" style="font-size:12px"><thead><tr><th>State</th>';
+      for (const gn of groupNames) html += `<th>${gn}</th>`;
+      html += '</tr></thead><tbody>';
+      for (let s = 0; s < nodeLabels.length; s++) {
+        html += `<tr><td style="font-weight:600">${nodeLabels[s]}</td>`;
+        for (const gn of groupNames) {
+          const comm = cachedComms.get(gn);
+          if (comm?.assignments) {
+            const methodKey = Object.keys(comm.assignments)[0];
+            const assign = methodKey ? comm.assignments[methodKey] : undefined;
+            if (assign) {
+              const c = assign[s]!;
+              html += `<td style="font-weight:600;color:${COMMUNITY_COLORS[c % COMMUNITY_COLORS.length]}">C${c + 1}</td>`;
+            } else {
+              html += '<td>-</td>';
+            }
+          } else {
+            html += '<td>-</td>';
+          }
+        }
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      tablePanel.innerHTML += html;
+      addPanelDownloadButtons(tablePanel, { csv: true, filename: 'community-membership-comparison' });
+      viewContainer.appendChild(tablePanel);
+    }
+  }
+
+  function showCommunityResults(k: number, model: TNA, comm: CommunityResult | undefined) {
+    const resultsEl = document.getElementById(`community-results-g${k}`);
+    if (!resultsEl || !comm?.assignments) return;
+    const methodKey = Object.keys(comm.assignments)[0];
+    const assign: number[] | undefined = methodKey ? comm.assignments[methodKey] : undefined;
+    if (assign && assign.length > 0) {
+      const nComms = Math.max(...assign) + 1;
+      let html = `<div><strong style="font-size:13px">${nComms} communities</strong></div>`;
+      html += '<table class="preview-table" style="font-size:12px;margin-top:6px"><thead><tr><th>State</th><th>Community</th></tr></thead><tbody>';
+      for (let s = 0; s < model.labels.length; s++) {
+        const c = assign[s]!;
+        html += `<tr><td>${model.labels[s]}</td><td style="font-weight:600;color:${COMMUNITY_COLORS[c % COMMUNITY_COLORS.length]}">C${c + 1}</td></tr>`;
+      }
+      html += '</tbody></table>';
+      resultsEl.innerHTML = html;
+    }
+  }
+
+  renderCardView();
+
+  // Wire controls
   setTimeout(() => {
+    document.getElementById('comm-toggle-card')?.addEventListener('click', () => {
+      if (currentView === 'card') return;
+      currentView = 'card';
+      document.getElementById('comm-toggle-card')!.classList.add('active');
+      document.getElementById('comm-toggle-combined')!.classList.remove('active');
+      renderCardView();
+    });
+    document.getElementById('comm-toggle-combined')?.addEventListener('click', () => {
+      if (currentView === 'combined') return;
+      currentView = 'combined';
+      document.getElementById('comm-toggle-combined')!.classList.add('active');
+      document.getElementById('comm-toggle-card')!.classList.remove('active');
+      renderCombinedView();
+    });
+
     document.getElementById('community-method')?.addEventListener('change', () => {
       state.communityMethod = (document.getElementById('community-method') as HTMLSelectElement).value as CommunityMethod;
       saveState();
@@ -1531,12 +2021,14 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
       state.communityMethod = (document.getElementById('community-method') as HTMLSelectElement).value as CommunityMethod;
       state.showCommunities = true;
 
-      // Show loading for each group
-      let idx = 0;
-      for (const [groupName] of cachedModels) {
-        const resultsEl = document.getElementById(`community-results-g${idx}`);
-        if (resultsEl) resultsEl.innerHTML = '<div style="text-align:center;padding:12px;color:#888;font-size:13px"><div class="spinner" style="width:16px;height:16px;border-width:2px;margin:0 auto 8px"></div>Detecting...</div>';
-        idx++;
+      if (currentView === 'card') {
+        // Show loading for each group
+        let idx = 0;
+        for (const [groupName] of cachedModels) {
+          const resultsEl = document.getElementById(`community-results-g${idx}`);
+          if (resultsEl) resultsEl.innerHTML = '<div style="text-align:center;padding:12px;color:#888;font-size:13px"><div class="spinner" style="width:16px;height:16px;border-width:2px;margin:0 auto 8px"></div>Detecting...</div>';
+          idx++;
+        }
       }
 
       setTimeout(() => {
@@ -1546,33 +2038,20 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
             const comm = computeCommunities(model, state.communityMethod);
             cachedComms.set(groupName, comm);
 
-            const el = document.getElementById(`viz-community-network-g${k}`);
-            if (el && comm) renderNetwork(el, model, gs, comm);
-
-            const resultsEl = document.getElementById(`community-results-g${k}`);
-            if (resultsEl && comm?.assignments) {
-              const methodKey = Object.keys(comm.assignments)[0];
-              const assign: number[] | undefined = methodKey ? comm.assignments[methodKey] : undefined;
-              if (assign && assign.length > 0) {
-                const nComms = Math.max(...assign) + 1;
-                let html = `<div><strong style="font-size:13px">${nComms} communities</strong></div>`;
-                html += '<table class="preview-table" style="font-size:12px;margin-top:6px"><thead><tr><th>State</th><th>Community</th></tr></thead><tbody>';
-                for (let s = 0; s < model.labels.length; s++) {
-                  const c = assign[s]!;
-                  html += `<tr><td>${model.labels[s]}</td><td style="font-weight:600;color:${GROUP_CARD_COLORS[c % GROUP_CARD_COLORS.length]}">C${c + 1}</td></tr>`;
-                }
-                html += '</tbody></table>';
-                resultsEl.innerHTML = html;
-              } else {
-                resultsEl.innerHTML = '<div style="font-size:12px;color:#888">No communities detected.</div>';
-              }
+            if (currentView === 'card') {
+              const el = document.getElementById(`viz-community-network-g${k}`);
+              if (el && comm) renderNetwork(el, model, gs, comm);
+              showCommunityResults(k, model, comm);
             }
           } catch (err) {
-            const resultsEl = document.getElementById(`community-results-g${k}`);
-            if (resultsEl) resultsEl.innerHTML = `<span style="color:#dc3545;font-size:12px">Error: ${(err as Error).message}</span>`;
+            if (currentView === 'card') {
+              const resultsEl = document.getElementById(`community-results-g${k}`);
+              if (resultsEl) resultsEl.innerHTML = `<span style="color:#dc3545;font-size:12px">Error: ${(err as Error).message}</span>`;
+            }
           }
           k++;
         }
+        if (currentView === 'combined') renderCombinedView();
         saveState();
       }, 50);
     });

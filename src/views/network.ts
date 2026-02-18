@@ -8,7 +8,7 @@ import { showTooltip, hideTooltip } from '../main';
 import { NODE_COLORS, COMMUNITY_COLORS } from './colors';
 
 /** Format edge weight: integers shown without decimals, others as .XX */
-function fmtWeight(w: number): string {
+export function fmtWeight(w: number): string {
   if (Number.isInteger(w)) return String(w);
   return w.toFixed(2).replace(/^0\./, '.');
 }
@@ -31,7 +31,7 @@ interface EdgeDatum {
 //  Layout algorithms
 // ═══════════════════════════════════════════════════════════
 
-function rescalePositions(
+export function rescalePositions(
   positions: { x: number; y: number }[],
   width: number, height: number, padding: number,
 ) {
@@ -53,7 +53,7 @@ function rescalePositions(
   }
 }
 
-function circularLayout(
+export function circularLayout(
   n: number, cx: number, cy: number, radius: number,
 ): { x: number; y: number }[] {
   return Array.from({ length: n }, (_, i) => {
@@ -258,7 +258,7 @@ function spectralLayout(
 //  Edge path helpers
 // ═══════════════════════════════════════════════════════════
 
-function computeEdgePath(
+export function computeEdgePath(
   sx: number, sy: number, tx: number, ty: number,
   curvature: number, outerRadius: number, arrowSize: number,
 ) {
@@ -303,7 +303,7 @@ function computeEdgePath(
   };
 }
 
-function arrowPoly(
+export function arrowPoly(
   tipX: number, tipY: number, dx: number, dy: number, arrowSize: number,
 ): string {
   const halfW = arrowSize / 2;
@@ -332,6 +332,7 @@ function renderSelfLoop(
   cx: number, cy: number,
   outerRadius: number,
   getDashArray?: (weight: number) => string | null,
+  undirected = false,
 ) {
   const loopR = settings.nodeRadius * 0.7; // visible loop
   const margin = 3; // clear gap between donut ring and arc
@@ -386,21 +387,23 @@ function renderSelfLoop(
   if (selfDash) selfLoopPath.attr('stroke-dasharray', selfDash);
 
   // Arrow at end — use the actual SVG path to get the tangent direction
-  const pathEl = selfLoopPath.node()!;
-  const totalLen = pathEl.getTotalLength();
-  const nearEnd = pathEl.getPointAtLength(totalLen - 2);
-  const atEnd = pathEl.getPointAtLength(totalLen);
-  const adx = atEnd.x - nearEnd.x;
-  const ady = atEnd.y - nearEnd.y;
-  const al = Math.sqrt(adx * adx + ady * ady) || 1;
-  const selfArrowSize = settings.arrowSize;
-  const tipOffset = 4; // push arrow tip a few px ahead into the gap
-  const tipX = atEnd.x + (adx / al) * tipOffset;
-  const tipY = atEnd.y + (ady / al) * tipOffset;
-  arrowGroup.append('polygon')
-    .attr('points', arrowPoly(tipX, tipY, adx / al, ady / al, selfArrowSize))
-    .attr('fill', settings.arrowColor)
-    .attr('opacity', op);
+  if (!undirected) {
+    const pathEl = selfLoopPath.node()!;
+    const totalLen = pathEl.getTotalLength();
+    const nearEnd = pathEl.getPointAtLength(totalLen - 2);
+    const atEnd = pathEl.getPointAtLength(totalLen);
+    const adx = atEnd.x - nearEnd.x;
+    const ady = atEnd.y - nearEnd.y;
+    const al = Math.sqrt(adx * adx + ady * ady) || 1;
+    const selfArrowSize = settings.arrowSize;
+    const tipOffset = 4; // push arrow tip a few px ahead into the gap
+    const tipX = atEnd.x + (adx / al) * tipOffset;
+    const tipY = atEnd.y + (ady / al) * tipOffset;
+    arrowGroup.append('polygon')
+      .attr('points', arrowPoly(tipX, tipY, adx / al, ady / al, selfArrowSize))
+      .attr('fill', settings.arrowColor)
+      .attr('opacity', op);
+  }
 
   // Label on far side of loop (away from node)
   const labelX = loopCX + dirX * (loopR + 6);
@@ -482,19 +485,30 @@ function drawNetwork(
   }
 
   // ─── Build edges ───
+  const isUndirected = model.type === 'co-occurrence';
   const edges: EdgeDatum[] = [];
+  const seenPairs = new Set<string>();
   for (let i = 0; i < n; i++) {
     for (let j = 0; j < n; j++) {
       if (i === j) continue;
       const w = weights.get(i, j);
-      if (w > 0 && w >= settings.edgeThreshold) edges.push({ fromIdx: i, toIdx: j, weight: w });
+      if (w > 0 && w >= settings.edgeThreshold) {
+        if (isUndirected) {
+          const key = i < j ? `${i}-${j}` : `${j}-${i}`;
+          if (seenPairs.has(key)) continue;
+          seenPairs.add(key);
+        }
+        edges.push({ fromIdx: i, toIdx: j, weight: w });
+      }
     }
   }
 
   const bidir = new Set<string>();
-  for (const e of edges) {
-    if (edges.find(r => r.fromIdx === e.toIdx && r.toIdx === e.fromIdx)) {
-      bidir.add(`${e.fromIdx}-${e.toIdx}`);
+  if (!isUndirected) {
+    for (const e of edges) {
+      if (edges.find(r => r.fromIdx === e.toIdx && r.toIdx === e.fromIdx)) {
+        bidir.add(`${e.fromIdx}-${e.toIdx}`);
+      }
     }
   }
 
@@ -546,7 +560,7 @@ function drawNetwork(
     for (let i = 0; i < n; i++) {
       const w = weights.get(i, i);
       if (w > 0 && w >= settings.edgeThreshold) {
-        renderSelfLoop(selfLoopGroup, selfLoopArrowGroup, selfLoopLabelGroup, nodes[i]!, w, settings, widthScale, opacityScale, centX, centY, outerRadius, getDashArray);
+        renderSelfLoop(selfLoopGroup, selfLoopArrowGroup, selfLoopLabelGroup, nodes[i]!, w, settings, widthScale, opacityScale, centX, centY, outerRadius, getDashArray, isUndirected);
       }
     }
   }
@@ -557,8 +571,9 @@ function drawNetwork(
     const tgt = nodes[e.toIdx]!;
     const isBidir = bidir.has(`${e.fromIdx}-${e.toIdx}`);
     const curvature = isBidir ? settings.edgeCurvature : 0;
+    const effectiveArrow = isUndirected ? 0 : settings.arrowSize;
     const { path, tipX, tipY, tipDx, tipDy, labelX, labelY } = computeEdgePath(
-      src.x, src.y, tgt.x, tgt.y, curvature, outerRadius, settings.arrowSize,
+      src.x, src.y, tgt.x, tgt.y, curvature, outerRadius, effectiveArrow,
     );
     if (!path) continue;
 
@@ -578,7 +593,8 @@ function drawNetwork(
       edgePath
         .on('mouseover', function (event: MouseEvent) {
           d3.select(this).attr('stroke', '#e15759').attr('stroke-opacity', 0.85);
-          showTooltip(event, `<b>${src.id} → ${tgt.id}</b><br>Weight: ${e.weight.toFixed(4)}`);
+          const arrow = isUndirected ? '↔' : '→';
+          showTooltip(event, `<b>${src.id} ${arrow} ${tgt.id}</b><br>Weight: ${fmtWeight(e.weight)}`);
         })
         .on('mousemove', function (event: MouseEvent) {
           const tt = document.getElementById('tooltip')!;
@@ -591,10 +607,12 @@ function drawNetwork(
         });
     }
 
-    arrowGroup.append('polygon')
-      .attr('points', arrowPoly(tipX, tipY, tipDx, tipDy, settings.arrowSize))
-      .attr('fill', settings.arrowColor)
-      .attr('opacity', Math.min(op + 0.15, 1));
+    if (!isUndirected) {
+      arrowGroup.append('polygon')
+        .attr('points', arrowPoly(tipX, tipY, tipDx, tipDy, settings.arrowSize))
+        .attr('fill', settings.arrowColor)
+        .attr('opacity', Math.min(op + 0.15, 1));
+    }
 
     if (settings.showEdgeLabels) {
       edgeLabelGroup.append('text')

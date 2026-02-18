@@ -3,7 +3,7 @@
  * Manages app state and routes between views: welcome → preview → dashboard.
  */
 import type { TNA, GroupTNA, CentralityResult, CommunityResult, CentralityMeasure, CommunityMethod, SequenceData } from 'tnaj';
-import { tna, ftna, ctna, atna, centralities, prune, summary, AVAILABLE_MEASURES, AVAILABLE_METHODS, groupTna, groupFtna, groupCtna, groupAtna, isGroupTNA, clusterSequences } from 'tnaj';
+import { tna, ftna, ctna, atna, centralities, prune, summary, AVAILABLE_MEASURES, AVAILABLE_METHODS, groupTna, groupFtna, groupCtna, groupAtna, isGroupTNA, clusterSequences, importOnehot } from 'tnaj';
 import { detectCommunities } from './analysis/communities';
 import { renderWelcome } from './views/welcome';
 import { renderPreview } from './views/preview';
@@ -61,7 +61,7 @@ export interface NetworkSettings {
 }
 
 // Bump this whenever defaults change to force a localStorage reset
-export const SETTINGS_VERSION = 8;
+export const SETTINGS_VERSION = 9;
 
 export function defaultNetworkSettings(): NetworkSettings {
   return {
@@ -127,14 +127,17 @@ export interface AppState {
   rawData: string[][];
   headers: string[];
   sequenceData: SequenceData | null;
-  format: 'wide' | 'long';
+  format: 'wide' | 'long' | 'onehot';
   longIdCol: number;
   longTimeCol: number;
   longStateCol: number;
   longGroupCol: number;          // -1 = no grouping
+  onehotCols: string[];          // selected binary column names for one-hot import
   groupLabels: string[] | null;  // one per sequence, parallel to sequenceData
   activeGroup: string | null;    // selected group name, null = first group
   modelType: 'tna' | 'ftna' | 'ctna' | 'atna';
+  scaling: '' | 'minmax' | 'max' | 'rank';
+  atnaBeta: number;
   threshold: number;
   showCommunities: boolean;
   communityMethod: CommunityMethod;
@@ -160,9 +163,12 @@ export const state: AppState = {
   longTimeCol: 1,
   longStateCol: 2,
   longGroupCol: -1,
+  onehotCols: [],
   groupLabels: null,
   activeGroup: null,
   modelType: 'tna',
+  scaling: '',
+  atnaBeta: 0.1,
   threshold: 0,
   clusterK: 3,
   clusterDissimilarity: 'hamming',
@@ -186,7 +192,10 @@ export const groupBuilders = { tna: groupTna, ftna: groupFtna, ctna: groupCtna, 
 /** Build a single TNA from all sequences (ignoring group labels). */
 export function buildModel(): TNA {
   if (!state.sequenceData) throw new Error('No data loaded');
-  let model = builders[state.modelType](state.sequenceData);
+  const opts: Record<string, unknown> = {};
+  if (state.scaling) opts.scaling = state.scaling;
+  if (state.modelType === 'atna') opts.beta = state.atnaBeta;
+  let model = builders[state.modelType](state.sequenceData, opts as any);
   if (state.threshold > 0) {
     model = prune(model, state.threshold) as TNA;
   }
@@ -196,7 +205,10 @@ export function buildModel(): TNA {
 /** Build a GroupTNA on demand (for opt-in group analysis). */
 export function buildGroupModel(labels: string[]): GroupTNA {
   if (!state.sequenceData) throw new Error('No data loaded');
-  return groupBuilders[state.modelType](state.sequenceData, labels);
+  const opts: Record<string, unknown> = {};
+  if (state.scaling) opts.scaling = state.scaling;
+  if (state.modelType === 'atna') opts.beta = state.atnaBeta;
+  return groupBuilders[state.modelType](state.sequenceData, labels, opts as any);
 }
 
 /** Extract the active single-group TNA from a model (applies pruning for group models). */
@@ -239,7 +251,7 @@ export function computeSummary(model: TNA) {
   return summary(model);
 }
 
-export { AVAILABLE_MEASURES, AVAILABLE_METHODS, clusterSequences, prune };
+export { AVAILABLE_MEASURES, AVAILABLE_METHODS, clusterSequences, prune, importOnehot };
 
 // ═══════════════════════════════════════════════════════════
 //  State persistence
@@ -278,6 +290,8 @@ function loadState() {
     state.longStateCol = saved.longStateCol ?? 2;
     state.longGroupCol = saved.longGroupCol ?? -1;
     state.modelType = saved.modelType ?? 'tna';
+    state.scaling = (saved as any).scaling ?? '';
+    state.atnaBeta = (saved as any).atnaBeta ?? 0.1;
     state.threshold = saved.threshold ?? 0;
     state.clusterK = saved.clusterK ?? 3;
     state.clusterDissimilarity = saved.clusterDissimilarity ?? 'hamming';

@@ -11,15 +11,15 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "tnaj": "github:mohsaqr/tna-js",
-    "d3": "^7.9.0",
-    "papaparse": "^5.5.2",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
-    "jspdf": "^2.5.2",
-    "html2canvas": "^1.4.1",
     "@tauri-apps/api": "^2.5.0",
     "@tauri-apps/plugin-dialog": "^2.2.1",
-    "@tauri-apps/plugin-fs": "^2.2.0"
+    "@tauri-apps/plugin-fs": "^2.2.0",
+    "d3": "^7.9.0",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^2.5.2",
+    "papaparse": "^5.5.2",
+    "tnaj": "file:../tna-js",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.5.0",

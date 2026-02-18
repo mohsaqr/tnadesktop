@@ -7,7 +7,11 @@ import * as d3 from 'd3';
 import type { GroupTNA, TNA } from 'tnaj';
 import { summary } from 'tnaj';
 import { showTooltip, hideTooltip } from '../main';
+import type { NetworkSettings } from '../main';
+import { state } from '../main';
 import { addPanelDownloadButtons, downloadSvgFromElement, downloadPngFromElement } from './export';
+import { circularLayout, computeEdgePath, arrowPoly, fmtWeight } from './network';
+import { NODE_COLORS } from './colors';
 
 interface GroupMetrics {
   group: string;
@@ -112,24 +116,51 @@ export function renderCompareNetworksTab(
 
   grid.appendChild(chartGrid);
 
-  // Difference heatmap for a selected group pair
-  const heatPanel = document.createElement('div');
-  heatPanel.className = 'panel';
-  heatPanel.innerHTML = `
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
-      <div class="panel-title" style="margin-bottom:0;flex:0 0 auto">Weight Difference Heatmap</div>
-      <span class="panel-download-btns" style="flex:0 0 auto"><button class="panel-dl-btn" id="dl-heatmap-svg">SVG</button><button class="panel-dl-btn" id="dl-heatmap-png">PNG</button></span>
-      <select id="cmp-heat-g1" style="font-size:12px">
+  // Shared group pair selector (used by heatmap and diff network)
+  const pairPanel = document.createElement('div');
+  pairPanel.className = 'panel';
+  pairPanel.style.padding = '10px 16px';
+  pairPanel.innerHTML = `
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span style="font-size:13px;font-weight:600;color:#333">Compare:</span>
+      <select id="cmp-heat-g1" style="font-size:12px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
         ${groupNames.map((g, i) => `<option value="${g}" ${i === 0 ? 'selected' : ''}>${g}</option>`).join('')}
       </select>
       <span style="color:#888">vs</span>
-      <select id="cmp-heat-g2" style="font-size:12px">
+      <select id="cmp-heat-g2" style="font-size:12px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
         ${groupNames.map((g, i) => `<option value="${g}" ${i === 1 ? 'selected' : ''}>${g}</option>`).join('')}
       </select>
     </div>
+  `;
+  grid.appendChild(pairPanel);
+
+  // Side-by-side: heatmap and diff network
+  const diffRow = document.createElement('div');
+  diffRow.style.display = 'grid';
+  diffRow.style.gridTemplateColumns = '1fr 1fr';
+  diffRow.style.gap = '16px';
+
+  // Difference heatmap
+  const heatPanel = document.createElement('div');
+  heatPanel.className = 'panel';
+  heatPanel.innerHTML = `
+    <div class="panel-title">Weight Difference Heatmap</div>
     <div id="viz-cmp-heatmap" style="width:100%"></div>
   `;
-  grid.appendChild(heatPanel);
+  addPanelDownloadButtons(heatPanel, { image: true, filename: 'compare-heatmap' });
+  diffRow.appendChild(heatPanel);
+
+  // Difference network
+  const netPanel = document.createElement('div');
+  netPanel.className = 'panel';
+  netPanel.innerHTML = `
+    <div class="panel-title">Difference Network</div>
+    <div id="viz-cmp-diffnet" style="width:100%"></div>
+  `;
+  addPanelDownloadButtons(netPanel, { image: true, filename: 'compare-diff-network' });
+  diffRow.appendChild(netPanel);
+
+  grid.appendChild(diffRow);
 
   container.appendChild(grid);
 
@@ -144,28 +175,26 @@ export function renderCompareNetworksTab(
       fullModel.models[groupNames[0]!]!,
       fullModel.models[groupNames[1]!]!,
     );
+    renderDiffNetwork(
+      document.getElementById('viz-cmp-diffnet')!,
+      fullModel.models[groupNames[0]!]!,
+      fullModel.models[groupNames[1]!]!,
+    );
   });
 
-  // Wire heatmap download buttons + pair selectors
+  // Wire pair selectors
   setTimeout(() => {
-    document.getElementById('dl-heatmap-svg')?.addEventListener('click', () => {
-      const el = document.getElementById('viz-cmp-heatmap');
-      if (el) downloadSvgFromElement(el, 'compare-heatmap');
-    });
-    document.getElementById('dl-heatmap-png')?.addEventListener('click', () => {
-      const el = document.getElementById('viz-cmp-heatmap');
-      if (el) downloadPngFromElement(el, 'compare-heatmap');
-    });
-    const wireHeatmap = () => {
+    const wireUpdate = () => {
       const g1 = (document.getElementById('cmp-heat-g1') as HTMLSelectElement).value;
       const g2 = (document.getElementById('cmp-heat-g2') as HTMLSelectElement).value;
-      const el = document.getElementById('viz-cmp-heatmap');
-      if (el && g1 !== g2) {
-        renderDiffHeatmap(el, fullModel.models[g1]!, fullModel.models[g2]!);
-      }
+      if (g1 === g2) return;
+      const heatEl = document.getElementById('viz-cmp-heatmap');
+      const netEl = document.getElementById('viz-cmp-diffnet');
+      if (heatEl) renderDiffHeatmap(heatEl, fullModel.models[g1]!, fullModel.models[g2]!);
+      if (netEl) renderDiffNetwork(netEl, fullModel.models[g1]!, fullModel.models[g2]!);
     };
-    document.getElementById('cmp-heat-g1')?.addEventListener('change', wireHeatmap);
-    document.getElementById('cmp-heat-g2')?.addEventListener('change', wireHeatmap);
+    document.getElementById('cmp-heat-g1')?.addEventListener('change', wireUpdate);
+    document.getElementById('cmp-heat-g2')?.addEventListener('change', wireUpdate);
   }, 0);
 }
 
@@ -335,4 +364,175 @@ function renderDiffHeatmap(container: HTMLElement, modelA: TNA, modelB: TNA) {
       .attr('fill', '#555')
       .text(labels[i]!);
   }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Difference Network (green/red directed edges)
+// ═══════════════════════════════════════════════════════════
+
+const DIFF_POS = '#28a745';
+const DIFF_NEG = '#dc3545';
+
+function renderDiffNetwork(container: HTMLElement, modelA: TNA, modelB: TNA) {
+  const labels = modelA.labels;
+  const n = labels.length;
+  const threshold = state.networkSettings.edgeThreshold;
+
+  // Compute diff matrix
+  interface DiffEdge {
+    from: number;
+    to: number;
+    diff: number;
+  }
+  const edges: DiffEdge[] = [];
+  let maxAbs = 0;
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      const d = modelA.weights.get(i, j) - modelB.weights.get(i, j);
+      if (Math.abs(d) > threshold) {
+        edges.push({ from: i, to: j, diff: d });
+        if (Math.abs(d) > maxAbs) maxAbs = Math.abs(d);
+      }
+    }
+  }
+  if (maxAbs === 0) maxAbs = 1;
+
+  const rect = container.getBoundingClientRect();
+  const graphW = Math.max(rect.width, 350);
+  const graphH = Math.max(graphW * 0.85, 300);
+  const nodeRadius = 20;
+  const padding = nodeRadius + 30;
+
+  // Layout
+  const cx = graphW / 2;
+  const cy = graphH / 2;
+  const radius = Math.min(cx, cy) - padding;
+  const positions = circularLayout(n, cx, cy, radius);
+
+  d3.select(container).selectAll('*').remove();
+  const svg = d3.select(container)
+    .append('svg')
+    .attr('viewBox', `0 0 ${graphW} ${graphH}`)
+    .attr('width', '100%')
+    .attr('height', '100%')
+    .style('min-height', '280px');
+
+  const rimWidth = nodeRadius * 0.18;
+  const rimRadius = nodeRadius + rimWidth * 0.7;
+  const outerRadius = rimRadius + rimWidth / 2 + 2;
+  const arrowSize = 7;
+
+  const widthScale = d3.scaleLinear().domain([0, maxAbs]).range([0.8, 4]);
+  const opacityScale = d3.scaleLinear().domain([0, maxAbs]).range([0.4, 0.9]);
+
+  // Check bidirectional edges for curvature
+  const bidir = new Set<string>();
+  for (const e of edges) {
+    if (edges.find(r => r.from === e.to && r.to === e.from)) {
+      bidir.add(`${e.from}-${e.to}`);
+    }
+  }
+
+  const edgeGroup = svg.append('g');
+  const arrowGroup = svg.append('g');
+  const edgeLabelGroup = svg.append('g');
+  const nodeGroup = svg.append('g');
+
+  // Edges
+  for (const e of edges) {
+    const src = positions[e.from]!;
+    const tgt = positions[e.to]!;
+    const isBidir = bidir.has(`${e.from}-${e.to}`);
+    const curvature = isBidir ? 20 : 0;
+    const color = e.diff > 0 ? DIFF_POS : DIFF_NEG;
+    const absDiff = Math.abs(e.diff);
+    const op = opacityScale(absDiff);
+
+    const { path, tipX, tipY, tipDx, tipDy, labelX, labelY } = computeEdgePath(
+      src.x, src.y, tgt.x, tgt.y, curvature, outerRadius, arrowSize,
+    );
+    if (!path) continue;
+
+    const edgePath = edgeGroup.append('path')
+      .attr('d', path)
+      .attr('fill', 'none')
+      .attr('stroke', color)
+      .attr('stroke-width', widthScale(absDiff))
+      .attr('stroke-opacity', op)
+      .attr('stroke-linecap', 'round');
+
+    edgePath
+      .on('mouseover', function (event: MouseEvent) {
+        d3.select(this).attr('stroke-opacity', 1).attr('stroke-width', widthScale(absDiff) + 1);
+        showTooltip(event,
+          `<b>${labels[e.from]} → ${labels[e.to]}</b><br>` +
+          `A: ${modelA.weights.get(e.from, e.to).toFixed(4)}<br>` +
+          `B: ${modelB.weights.get(e.from, e.to).toFixed(4)}<br>` +
+          `Diff: <span style="color:${color};font-weight:600">${e.diff > 0 ? '+' : ''}${e.diff.toFixed(4)}</span>`);
+      })
+      .on('mousemove', function (event: MouseEvent) {
+        const tt = document.getElementById('tooltip')!;
+        tt.style.left = event.clientX + 12 + 'px';
+        tt.style.top = event.clientY - 10 + 'px';
+      })
+      .on('mouseout', function () {
+        d3.select(this).attr('stroke-opacity', op).attr('stroke-width', widthScale(absDiff));
+        hideTooltip();
+      });
+
+    arrowGroup.append('polygon')
+      .attr('points', arrowPoly(tipX, tipY, tipDx, tipDy, arrowSize))
+      .attr('fill', color)
+      .attr('opacity', Math.min(op + 0.15, 1));
+
+    // Edge label: signed diff
+    edgeLabelGroup.append('text')
+      .attr('x', labelX)
+      .attr('y', labelY)
+      .attr('text-anchor', 'middle')
+      .attr('dy', '0.3em')
+      .attr('font-size', '8px')
+      .attr('fill', color)
+      .attr('font-weight', '600')
+      .attr('pointer-events', 'none')
+      .style('paint-order', 'stroke')
+      .style('stroke', '#ffffff')
+      .style('stroke-width', '3px')
+      .style('stroke-linejoin', 'round')
+      .text((e.diff > 0 ? '+' : '') + fmtWeight(e.diff));
+  }
+
+  // Nodes
+  const nodeEnter = nodeGroup.selectAll('g.node')
+    .data(labels.map((id, i) => ({ id, idx: i, x: positions[i]!.x, y: positions[i]!.y })))
+    .enter()
+    .append('g')
+    .attr('class', 'node')
+    .attr('transform', d => `translate(${d.x},${d.y})`);
+
+  nodeEnter.append('circle')
+    .attr('r', nodeRadius)
+    .attr('fill', (_d, i) => NODE_COLORS[i % NODE_COLORS.length]!)
+    .attr('stroke', '#999')
+    .attr('stroke-width', 1.5);
+
+  nodeEnter.append('text')
+    .attr('dy', '0.35em')
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '9px')
+    .attr('fill', '#000')
+    .attr('pointer-events', 'none')
+    .style('paint-order', 'stroke')
+    .style('stroke', '#fff')
+    .style('stroke-width', '3px')
+    .style('stroke-linejoin', 'round')
+    .text(d => d.id);
+
+  // Legend
+  const legendY = graphH - 24;
+  svg.append('rect').attr('x', 10).attr('y', legendY).attr('width', 14).attr('height', 4).attr('fill', DIFF_POS).attr('rx', 2);
+  svg.append('text').attr('x', 28).attr('y', legendY + 4).attr('font-size', '10px').attr('fill', '#555').text('A > B');
+  svg.append('rect').attr('x', 80).attr('y', legendY).attr('width', 14).attr('height', 4).attr('fill', DIFF_NEG).attr('rx', 2);
+  svg.append('text').attr('x', 98).attr('y', legendY + 4).attr('font-size', '10px').attr('fill', '#555').text('A < B');
 }

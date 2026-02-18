@@ -11,6 +11,7 @@ import { state, saveState, buildGroupModel, computeCentralities, groupNetworkSet
 import { setGroupAnalysisData, clearGroupAnalysisData, isGroupAnalysisActive, getGroupAnalysisSource, getActiveGroupModels, getActiveGroupCents, updateGroupTabVisibility, updateTabContent } from './dashboard';
 import { renderNetwork, renderNetworkIntoGroup } from './network';
 import { renderCentralityChart } from './centralities';
+import { renderClusterMosaic } from './mosaic';
 import { addPanelDownloadButtons, downloadSvgFromElement, downloadPngFromElement } from './export';
 import * as d3 from 'd3';
 
@@ -89,6 +90,13 @@ function renderActiveGroupView(
   `;
   wrapper.appendChild(summary);
 
+  // Mosaic: State frequency × Group
+  const mosaicPanel = document.createElement('div');
+  mosaicPanel.className = 'panel';
+  mosaicPanel.style.cssText = 'margin-top:12px;padding:12px 16px';
+  wrapper.appendChild(mosaicPanel);
+  addPanelDownloadButtons(mosaicPanel, { image: true, filename: 'state-frequency-mosaic' });
+
   // View container (switches between card grid and combined canvas)
   const viewContainer = document.createElement('div');
   viewContainer.id = 'group-view-container';
@@ -97,6 +105,12 @@ function renderActiveGroupView(
   // Initial render: card view
   renderGroupGrid(viewContainer, models, cents, networkSettings);
   container.appendChild(wrapper);
+
+  // Render mosaic after DOM insertion
+  requestAnimationFrame(() => {
+    const srcLabel = source === 'clustering' ? 'Cluster' : 'Group';
+    renderClusterMosaic(mosaicPanel, models, srcLabel);
+  });
 
   // Wire toggle + clear buttons
   setTimeout(() => {

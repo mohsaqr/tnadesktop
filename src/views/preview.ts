@@ -1,7 +1,7 @@
 /**
  * Data preview screen: shows parsed data table and format selection.
  */
-import { state, render } from '../main';
+import { state, render, importOnehot } from '../main';
 import { wideToSequences, longToSequences, guessColumns } from '../data';
 
 export function renderPreview(container: HTMLElement) {
@@ -49,6 +49,7 @@ export function renderPreview(container: HTMLElement) {
     <select id="format-select">
       <option value="wide" ${state.format === 'wide' ? 'selected' : ''}>Wide (rows = sequences, cols = time steps)</option>
       <option value="long" ${state.format === 'long' ? 'selected' : ''}>Long (ID, time, state columns)</option>
+      <option value="onehot" ${state.format === 'onehot' ? 'selected' : ''}>One-Hot (binary 0/1 columns)</option>
     </select>
   `;
   screen.appendChild(formatDiv);
@@ -87,6 +88,42 @@ export function renderPreview(container: HTMLElement) {
   `;
   screen.appendChild(longCols);
 
+  // One-hot column selector (checkboxes for binary columns)
+  const onehotDiv = document.createElement('div');
+  onehotDiv.className = 'format-selector';
+  onehotDiv.id = 'onehot-cols';
+  onehotDiv.style.display = state.format === 'onehot' ? 'flex' : 'none';
+  onehotDiv.style.flexWrap = 'wrap';
+  onehotDiv.style.gap = '8px';
+  onehotDiv.style.alignItems = 'center';
+
+  // Detect binary columns (all values are 0 or 1)
+  const binaryCols: number[] = [];
+  for (let c = 0; c < state.headers.length; c++) {
+    const sample = state.rawData.slice(0, 50);
+    const allBinary = sample.every(row => {
+      const v = (row[c] ?? '').trim();
+      return v === '0' || v === '1' || v === '';
+    });
+    if (allBinary) binaryCols.push(c);
+  }
+
+  let onehotHtml = '<label style="font-weight:600;width:100%">Select binary state columns:</label>';
+  if (binaryCols.length === 0) {
+    onehotHtml += '<span style="color:#888;font-size:12px">No binary (0/1) columns detected.</span>';
+  } else {
+    for (const c of binaryCols) {
+      const checked = state.onehotCols.includes(state.headers[c]!) ? 'checked' : '';
+      onehotHtml += `<label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer">
+        <input type="checkbox" class="onehot-col-check" data-col="${state.headers[c]}" ${checked}>
+        ${escHtml(state.headers[c]!)}
+      </label>`;
+    }
+    onehotHtml += `<button id="onehot-select-all" style="font-size:11px;padding:2px 8px;margin-left:8px;cursor:pointer">Select All</button>`;
+  }
+  onehotDiv.innerHTML = onehotHtml;
+  screen.appendChild(onehotDiv);
+
   // Table
   const tableWrap = document.createElement('div');
   tableWrap.className = 'preview-table-wrap';
@@ -121,8 +158,16 @@ export function renderPreview(container: HTMLElement) {
 
   // Events
   document.getElementById('format-select')!.addEventListener('change', (e) => {
-    state.format = (e.target as HTMLSelectElement).value as 'wide' | 'long';
+    state.format = (e.target as HTMLSelectElement).value as 'wide' | 'long' | 'onehot';
     document.getElementById('long-cols')!.style.display = state.format === 'long' ? 'flex' : 'none';
+    document.getElementById('onehot-cols')!.style.display = state.format === 'onehot' ? 'flex' : 'none';
+  });
+
+  // One-hot: select-all button
+  document.getElementById('onehot-select-all')?.addEventListener('click', () => {
+    const checks = document.querySelectorAll('.onehot-col-check') as NodeListOf<HTMLInputElement>;
+    const allChecked = Array.from(checks).every(c => c.checked);
+    checks.forEach(c => { c.checked = !allChecked; });
   });
 
   document.getElementById('back-btn')!.addEventListener('click', () => {
@@ -136,6 +181,29 @@ export function renderPreview(container: HTMLElement) {
         state.sequenceData = wideToSequences(state.rawData);
         state.groupLabels = null;
         state.longGroupCol = -1;
+      } else if (state.format === 'onehot') {
+        // Gather selected binary columns
+        const checks = document.querySelectorAll('.onehot-col-check') as NodeListOf<HTMLInputElement>;
+        const selectedCols: string[] = [];
+        checks.forEach(c => { if (c.checked) selectedCols.push(c.dataset.col!); });
+        if (selectedCols.length < 2) {
+          alert('Select at least 2 binary columns for one-hot analysis.');
+          return;
+        }
+        state.onehotCols = selectedCols;
+        // Convert rawData rows into record objects for importOnehot
+        const records: Record<string, number>[] = state.rawData.map(row => {
+          const rec: Record<string, number> = {};
+          for (let c = 0; c < state.headers.length; c++) {
+            rec[state.headers[c]!] = parseInt(row[c] ?? '0', 10) || 0;
+          }
+          return rec;
+        });
+        state.sequenceData = importOnehot(records, selectedCols);
+        state.groupLabels = null;
+        state.longGroupCol = -1;
+        // Default to CTNA for co-occurrence data
+        state.modelType = 'ctna';
       } else {
         const idCol = parseInt((document.getElementById('long-id') as HTMLSelectElement).value);
         const timeCol = parseInt((document.getElementById('long-time') as HTMLSelectElement).value);
