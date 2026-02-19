@@ -114,6 +114,106 @@ export function renderFrequencies(container: HTMLElement, model: TNA) {
     .call(d3.axisBottom(x).ticks(5).tickSize(3));
 }
 
+/** Multi-group frequency line chart: one line per group, x=states, y=count. */
+export function renderFrequencyLines(
+  container: HTMLElement,
+  groupData: { groupName: string; freqs: { label: string; count: number }[]; color: string }[],
+  nodeLabels: string[],
+) {
+  const rect = container.getBoundingClientRect();
+  const width = Math.max(rect.width, 400);
+  const height = 300;
+  const margin = { top: 10, right: 20, bottom: 50, left: 60 };
+  const innerW = width - margin.left - margin.right;
+  const innerH = height - margin.top - margin.bottom;
+
+  d3.select(container).selectAll('*').remove();
+  const svg = d3.select(container).append('svg').attr('width', width).attr('height', height);
+  const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+
+  const x = d3.scaleBand().domain(nodeLabels).range([0, innerW]).padding(0.3);
+  const maxVal = Math.max(...groupData.flatMap(gd => gd.freqs.map(f => f.count)), 1);
+  const y = d3.scaleLinear().domain([0, maxVal * 1.1]).range([innerH, 0]);
+
+  // Grid lines
+  g.selectAll('.grid-line')
+    .data(y.ticks(5))
+    .enter()
+    .append('line')
+    .attr('x1', 0).attr('x2', innerW)
+    .attr('y1', d => y(d)).attr('y2', d => y(d))
+    .attr('stroke', '#eee').attr('stroke-dasharray', '2,2');
+
+  // Lines and dots for each group
+  for (const gd of groupData) {
+    const lineData = nodeLabels.map(label => {
+      const f = gd.freqs.find(fr => fr.label === label);
+      return { label, count: f?.count ?? 0 };
+    });
+
+    const line = d3.line<{ label: string; count: number }>()
+      .x(d => (x(d.label) ?? 0) + x.bandwidth() / 2)
+      .y(d => y(d.count));
+
+    g.append('path')
+      .datum(lineData)
+      .attr('d', line)
+      .attr('fill', 'none')
+      .attr('stroke', gd.color)
+      .attr('stroke-width', 2)
+      .attr('opacity', 0.8);
+
+    g.selectAll(null)
+      .data(lineData)
+      .enter()
+      .append('circle')
+      .attr('cx', d => (x(d.label) ?? 0) + x.bandwidth() / 2)
+      .attr('cy', d => y(d.count))
+      .attr('r', 4)
+      .attr('fill', gd.color)
+      .attr('stroke', '#fff')
+      .attr('stroke-width', 1)
+      .on('mouseover', function (event: MouseEvent, d) {
+        d3.select(this).attr('r', 6);
+        showTooltip(event, `<b>${d.label}</b><br>${gd.groupName}: ${d.count}`);
+      })
+      .on('mousemove', function (event: MouseEvent) {
+        const tt = document.getElementById('tooltip')!;
+        tt.style.left = event.clientX + 12 + 'px';
+        tt.style.top = event.clientY - 10 + 'px';
+      })
+      .on('mouseout', function () {
+        d3.select(this).attr('r', 4);
+        hideTooltip();
+      });
+  }
+
+  // Axes
+  g.append('g')
+    .attr('transform', `translate(0,${innerH})`)
+    .call(d3.axisBottom(x).tickSize(0).tickPadding(6))
+    .selectAll('text')
+    .attr('font-size', '9px')
+    .attr('transform', 'rotate(-30)')
+    .attr('text-anchor', 'end');
+
+  g.append('g')
+    .call(d3.axisLeft(y).ticks(5))
+    .selectAll('text').attr('font-size', '10px');
+
+  // Legend
+  groupData.forEach((gd, gi) => {
+    svg.append('line')
+      .attr('x1', margin.left + gi * 100).attr('y1', height - 6)
+      .attr('x2', margin.left + gi * 100 + 16).attr('y2', height - 6)
+      .attr('stroke', gd.color).attr('stroke-width', 3);
+    svg.append('text')
+      .attr('x', margin.left + gi * 100 + 20).attr('y', height - 2)
+      .attr('font-size', '10px').attr('fill', '#555')
+      .text(gd.groupName);
+  });
+}
+
 /** Histogram of transition weight values. */
 export function renderWeightHistogram(container: HTMLElement, model: TNA) {
   const n = model.labels.length;

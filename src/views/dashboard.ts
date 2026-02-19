@@ -7,10 +7,10 @@ import type { NetworkSettings } from '../main';
 import { state, render, saveState, buildModel, buildGroupModel, computeCentralities, computeCommunities, computeSummary, groupNetworkSettings, AVAILABLE_MEASURES, AVAILABLE_METHODS, prune } from '../main';
 import { renderNetwork, renderNetworkIntoGroup, fmtNum, clearLayoutCache } from './network';
 import { renderCentralityChart } from './centralities';
-import { renderFrequencies, renderWeightHistogram, countStateFrequencies } from './frequencies';
+import { renderFrequencies, renderWeightHistogram, countStateFrequencies, renderFrequencyLines } from './frequencies';
 import { COMMUNITY_COLORS } from './colors';
 
-import { renderSequences, renderDistribution } from './sequences';
+import { renderSequences, renderDistribution, renderDistributionLines, renderCombinedDistribution, renderCombinedSequences } from './sequences';
 import { showExportDialog, addPanelDownloadButtons, addTabExportBar } from './export';
 import { renderBetweennessNetwork, renderBetweennessTable } from './betweenness';
 import { renderCliquesTab } from './cliques';
@@ -21,7 +21,7 @@ import { bootstrapTna } from '../analysis/bootstrap';
 import type { BootstrapOptions, BootstrapResult } from '../analysis/bootstrap';
 import { renderPatternsTab } from './patterns';
 import { renderIndicesTab, renderIdxHistView, renderIdxSummaryView } from './indices';
-import { renderClusteringSetup, renderGroupSetup, renderGroupGrid, renderCombinedCanvas } from './clustering';
+import { renderClusteringSetup, renderGroupSetup, renderGroupGrid, renderCombinedCanvas, buildColumnGroups } from './clustering';
 import { renderMosaic, renderClusterMosaic, chiSquareTest } from './mosaic';
 import { renderCompareNetworksTab } from './compare-networks';
 import { estimateCS } from '../analysis/stability';
@@ -236,7 +236,13 @@ function switchMode(newMode: Mode) {
     } else {
       // clustering, group, group_onehot
       const groupsActive = isGroupAnalysisActive();
-      state.activeSubTab = groupsActive ? 'network' : 'setup';
+      // Auto-activate group analysis if group labels exist but groups not yet built
+      if (!groupsActive && (newMode === 'group' || newMode === 'group_onehot') && state.groupLabels && state.groupLabels.length > 0) {
+        buildColumnGroups(state.networkSettings);
+        state.activeSubTab = 'network';
+      } else {
+        state.activeSubTab = groupsActive ? 'network' : 'setup';
+      }
     }
     if (dashboard) dashboard.classList.remove('data-mode');
     updateNavActive();
@@ -1181,6 +1187,10 @@ function wireNavEvents() {
         state.activeMode = mode;
         state.activeSubTab = subtab;
         state.activeSecondaryTab = '';  // Reset secondary tab on subtab change
+        // Auto-activate group analysis if group labels exist but groups not yet built
+        if (!isGroupAnalysisActive() && (mode === 'group' || mode === 'group_onehot') && state.groupLabels && state.groupLabels.length > 0) {
+          buildColumnGroups(state.networkSettings);
+        }
         const dashboard = document.getElementById('dashboard');
         if (dashboard) dashboard.classList.remove('data-mode');
         updateNavActive();
@@ -2548,15 +2558,63 @@ function renderSeqDistView(content: HTMLElement) {
 
   createViewToggle(content,
     (fig) => {
-      const panel = document.createElement('div');
-      panel.className = 'panel';
-      panel.innerHTML = `<div class="panel-title">State Distribution Over Time</div><div id="viz-dist" style="width:100%"></div>`;
-      addPanelDownloadButtons(panel, { image: true, filename: 'state-distribution' });
-      fig.appendChild(panel);
-      requestAnimationFrame(() => {
-        const el = document.getElementById('viz-dist');
-        if (el) renderDistribution(el, state.sequenceData!, cachedModel!);
-      });
+      // Stacked / Line sub-toggle
+      const toggleBar = document.createElement('div');
+      toggleBar.style.marginBottom = '8px';
+      toggleBar.innerHTML = `<div class="view-toggle"><button class="toggle-btn active" id="dist-toggle-stacked">Stacked</button><button class="toggle-btn" id="dist-toggle-line">Line</button></div>`;
+      fig.appendChild(toggleBar);
+
+      const viewContainer = document.createElement('div');
+      fig.appendChild(viewContainer);
+
+      let currentView: 'stacked' | 'line' = 'stacked';
+
+      function renderStackedView() {
+        viewContainer.innerHTML = '';
+        const panel = document.createElement('div');
+        panel.className = 'panel';
+        panel.innerHTML = `<div class="panel-title">State Distribution Over Time</div><div id="viz-dist" style="width:100%"></div>`;
+        addPanelDownloadButtons(panel, { image: true, filename: 'state-distribution' });
+        viewContainer.appendChild(panel);
+        requestAnimationFrame(() => {
+          const el = document.getElementById('viz-dist');
+          if (el) renderDistribution(el, state.sequenceData!, cachedModel!);
+        });
+      }
+
+      function renderLineView() {
+        viewContainer.innerHTML = '';
+        const panel = document.createElement('div');
+        panel.className = 'panel';
+        panel.innerHTML = `<div class="panel-title">State Distribution Over Time — Line</div><div id="viz-dist-line" style="width:100%"></div>`;
+        addPanelDownloadButtons(panel, { image: true, filename: 'state-distribution-line' });
+        viewContainer.appendChild(panel);
+        requestAnimationFrame(() => {
+          const el = document.getElementById('viz-dist-line');
+          if (el) renderDistributionLines(el, state.sequenceData!, cachedModel!);
+        });
+      }
+
+      renderStackedView();
+
+      setTimeout(() => {
+        const stackedBtn = document.getElementById('dist-toggle-stacked');
+        const lineBtn = document.getElementById('dist-toggle-line');
+        stackedBtn?.addEventListener('click', () => {
+          if (currentView === 'stacked') return;
+          currentView = 'stacked';
+          stackedBtn?.classList.add('active');
+          lineBtn?.classList.remove('active');
+          renderStackedView();
+        });
+        lineBtn?.addEventListener('click', () => {
+          if (currentView === 'line') return;
+          currentView = 'line';
+          lineBtn?.classList.add('active');
+          stackedBtn?.classList.remove('active');
+          renderLineView();
+        });
+      }, 0);
     },
     (tbl) => {
       // State counts per step table
@@ -3146,57 +3204,70 @@ function renderCentBetweennessViewMulti(content: HTMLElement) {
 }
 
 function renderCentStabilityViewMulti(content: HTMLElement) {
-  const runBtn = document.createElement('div');
-  runBtn.className = 'panel';
-  runBtn.style.padding = '12px 16px';
-  runBtn.innerHTML = `<button id="run-stability-multi" class="btn-primary" style="font-size:13px;padding:6px 16px">Run Stability Analysis (All Groups)</button>`;
-  content.appendChild(runBtn);
+  createViewToggle(content,
+    (fig) => {
+      const topPanel = document.createElement('div');
+      topPanel.className = 'panel';
+      topPanel.style.padding = '12px 16px';
+      topPanel.innerHTML = `
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:4px">
+          <div class="panel-title" style="margin-bottom:0">Centrality Stability (CS Coefficients)</div>
+          <button id="run-stability-multi" class="btn-primary" style="font-size:11px;padding:4px 12px">Run Stability Analysis (All Groups)</button>
+        </div>
+      `;
+      fig.appendChild(topPanel);
 
-  let i = 0;
-  for (const [groupName] of cachedModels) {
-    const groupRow = document.createElement('div');
-    groupRow.className = 'panel';
-    groupRow.style.cssText = 'margin-top:12px;padding:12px';
-    groupRow.innerHTML = `
-      <div class="panel-title" style="margin-bottom:8px;font-size:14px;color:${GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]}">${groupName}</div>
-      <div id="stability-results-g${i}" style="color:#888;font-size:12px">Click the button above to run stability analysis.</div>
-    `;
-    content.appendChild(groupRow);
-    i++;
-  }
+      const resultsContainer = document.createElement('div');
+      resultsContainer.id = 'stability-multi-results';
+      fig.appendChild(resultsContainer);
 
-  setTimeout(() => {
-    document.getElementById('run-stability-multi')?.addEventListener('click', () => {
-      let j = 0;
-      for (const [groupName] of cachedModels) {
-        const el = document.getElementById(`stability-results-g${j}`);
-        if (el) el.innerHTML = '<div style="display:flex;align-items:center;gap:8px"><div class="spinner" style="width:16px;height:16px;border-width:2px"></div><span>Running...</span></div>';
-        j++;
-      }
       setTimeout(() => {
-        let k = 0;
-        for (const [groupName, model] of cachedModels) {
-          const el = document.getElementById(`stability-results-g${k}`);
-          if (el) {
-            try {
-              const result = estimateCS(model, { iter: 500, seed: 42 });
-              let html = '<table class="preview-table" style="font-size:11px"><thead><tr><th>Measure</th><th>CS</th><th>Interp.</th></tr></thead><tbody>';
-              for (const [measure, cs] of Object.entries(result.csCoefficients)) {
-                const interp = cs >= 0.5 ? 'Good' : cs >= 0.25 ? 'Moderate' : 'Unstable';
-                const clr = cs >= 0.5 ? '#28a745' : cs >= 0.25 ? '#ffc107' : '#dc3545';
-                html += `<tr><td>${measure}</td><td>${cs.toFixed(2)}</td><td style="color:${clr};font-weight:600">${interp}</td></tr>`;
+        document.getElementById('run-stability-multi')?.addEventListener('click', () => {
+          resultsContainer.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:16px"><div class="spinner" style="width:16px;height:16px;border-width:2px"></div><span>Running stability analysis for all groups...</span></div>';
+          setTimeout(() => {
+            resultsContainer.innerHTML = '';
+            let k = 0;
+            for (const [groupName, model] of cachedModels) {
+              const idx = k;
+              const groupRow = document.createElement('div');
+              groupRow.className = 'panel';
+              groupRow.style.cssText = 'margin-top:12px;padding:12px';
+              const color = GROUP_CARD_COLORS[idx % GROUP_CARD_COLORS.length]!;
+              try {
+                const result = estimateCS(model, { iter: 500, seed: 42 });
+                let html = `<div class="panel-title" style="margin-bottom:8px;font-size:14px;color:${color}">${groupName}</div>`;
+                html += '<table class="preview-table" style="font-size:11px;margin-bottom:8px"><thead><tr><th>Measure</th><th>CS</th><th>Interp.</th></tr></thead><tbody>';
+                for (const [measure, cs] of Object.entries(result.csCoefficients)) {
+                  const interp = cs >= 0.5 ? 'Good' : cs >= 0.25 ? 'Moderate' : 'Unstable';
+                  const clr = cs >= 0.5 ? '#28a745' : cs >= 0.25 ? '#ffc107' : '#dc3545';
+                  html += `<tr><td>${measure}</td><td>${cs.toFixed(2)}</td><td style="color:${clr};font-weight:600">${interp}</td></tr>`;
+                }
+                html += '</tbody></table>';
+                html += `<div id="viz-cs-chart-g${idx}" style="width:100%;height:220px"></div>`;
+                groupRow.innerHTML = html;
+                resultsContainer.appendChild(groupRow);
+                requestAnimationFrame(() => {
+                  const chartEl = document.getElementById(`viz-cs-chart-g${idx}`);
+                  if (chartEl) renderCSChart(chartEl, result);
+                });
+              } catch (err) {
+                groupRow.innerHTML = `<div class="panel-title" style="margin-bottom:8px;font-size:14px;color:${color}">${groupName}</div><span style="color:#dc3545">Error: ${(err as Error).message}</span>`;
+                resultsContainer.appendChild(groupRow);
               }
-              html += '</tbody></table>';
-              el.innerHTML = html;
-            } catch (err) {
-              el.innerHTML = `<span style="color:#dc3545">Error: ${(err as Error).message}</span>`;
+              k++;
             }
-          }
-          k++;
-        }
-      }, 50);
-    });
-  }, 0);
+          }, 50);
+        });
+      }, 0);
+    },
+    (tbl) => {
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+      panel.innerHTML = '<div class="panel-title">CS Coefficients — All Groups</div><div style="color:#888;font-size:13px;padding:12px">Run stability analysis in the Figure view to see CS coefficients here.</div>';
+      tbl.appendChild(panel);
+    },
+    'cent-multi-stab',
+  );
 }
 
 // ─── Frequencies tab (multi-group) ───
@@ -3225,25 +3296,104 @@ function renderFreqStateViewMulti(content: HTMLElement) {
 
   createViewToggle(content,
     (fig) => {
-      const panel = document.createElement('div');
-      panel.className = 'panel';
-      panel.innerHTML = `<div class="panel-title">State Frequencies — All Groups</div><div id="viz-freq-combined" style="width:100%;height:300px"></div>`;
-      addPanelDownloadButtons(panel, { image: true, filename: 'freq-combined-all-groups' });
-      fig.appendChild(panel);
-      requestAnimationFrame(() => {
-        const el = document.getElementById('viz-freq-combined');
-        if (el) {
-          const { counts, nodeLabels, groupNames } = countStates();
-          const data: { node: string; group: string; value: number; color: string }[] = [];
-          for (let gi = 0; gi < groupNames.length; gi++) {
-            const sc = counts.get(groupNames[gi]!)!;
-            for (const label of nodeLabels) {
-              data.push({ node: label, group: groupNames[gi]!, value: sc.get(label) ?? 0, color: GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]! });
-            }
-          }
-          renderGroupedBars(el, data, nodeLabels, groupNames, 'State Frequency');
+      // Card / Bar / Line toggle
+      const toggleBar = document.createElement('div');
+      toggleBar.style.marginBottom = '8px';
+      toggleBar.innerHTML = `<div class="view-toggle"><button class="toggle-btn" id="freq-toggle-card">Card View</button><button class="toggle-btn active" id="freq-toggle-bar">Bar</button><button class="toggle-btn" id="freq-toggle-line">Line</button></div>`;
+      fig.appendChild(toggleBar);
+
+      const viewContainer = document.createElement('div');
+      viewContainer.id = 'freq-view-container';
+      fig.appendChild(viewContainer);
+
+      let currentView: 'card' | 'bar' | 'line' = 'bar';
+
+      function renderCardView() {
+        viewContainer.innerHTML = '';
+        const grid = createMultiGroupGrid(viewContainer);
+        let i = 0;
+        for (const [groupName, model] of cachedModels) {
+          const card = createGroupCard(grid, groupName, i);
+          card.innerHTML = `<div id="viz-freq-card-g${i}" style="width:100%"></div>`;
+          i++;
         }
-      });
+        requestAnimationFrame(() => {
+          let j = 0;
+          for (const [, model] of cachedModels) {
+            const el = document.getElementById(`viz-freq-card-g${j}`);
+            if (el) renderFrequencies(el, model);
+            j++;
+          }
+        });
+      }
+
+      function renderBarView() {
+        viewContainer.innerHTML = '';
+        const panel = document.createElement('div');
+        panel.className = 'panel';
+        panel.innerHTML = `<div class="panel-title">State Frequencies — All Groups</div><div id="viz-freq-combined" style="width:100%;height:300px"></div>`;
+        addPanelDownloadButtons(panel, { image: true, filename: 'freq-combined-all-groups' });
+        viewContainer.appendChild(panel);
+        requestAnimationFrame(() => {
+          const el = document.getElementById('viz-freq-combined');
+          if (el) {
+            const { counts, nodeLabels, groupNames } = countStates();
+            const data: { node: string; group: string; value: number; color: string }[] = [];
+            for (let gi = 0; gi < groupNames.length; gi++) {
+              const sc = counts.get(groupNames[gi]!)!;
+              for (const label of nodeLabels) {
+                data.push({ node: label, group: groupNames[gi]!, value: sc.get(label) ?? 0, color: GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]! });
+              }
+            }
+            renderGroupedBars(el, data, nodeLabels, groupNames, 'State Frequency');
+          }
+        });
+      }
+
+      function renderLineView() {
+        viewContainer.innerHTML = '';
+        const panel = document.createElement('div');
+        panel.className = 'panel';
+        panel.innerHTML = `<div class="panel-title">State Frequencies — Line Chart</div><div id="viz-freq-lines" style="width:100%;height:300px"></div>`;
+        addPanelDownloadButtons(panel, { image: true, filename: 'freq-line-all-groups' });
+        viewContainer.appendChild(panel);
+        requestAnimationFrame(() => {
+          const el = document.getElementById('viz-freq-lines');
+          if (el) {
+            const { counts, nodeLabels, groupNames } = countStates();
+            const groupData = groupNames.map((gn, gi) => {
+              const sc = counts.get(gn)!;
+              return {
+                groupName: gn,
+                freqs: nodeLabels.map(label => ({ label, count: sc.get(label) ?? 0 })),
+                color: GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]!,
+              };
+            });
+            renderFrequencyLines(el, groupData, nodeLabels);
+          }
+        });
+      }
+
+      function renderActive() {
+        if (currentView === 'card') renderCardView();
+        else if (currentView === 'bar') renderBarView();
+        else renderLineView();
+      }
+
+      renderBarView();
+
+      setTimeout(() => {
+        const cardBtn = document.getElementById('freq-toggle-card');
+        const barBtn = document.getElementById('freq-toggle-bar');
+        const lineBtn = document.getElementById('freq-toggle-line');
+        const setActive = (active: string) => {
+          [cardBtn, barBtn, lineBtn].forEach(b => b?.classList.remove('active'));
+          document.getElementById(`freq-toggle-${active}`)?.classList.add('active');
+        };
+        cardBtn?.addEventListener('click', () => { if (currentView === 'card') return; currentView = 'card'; setActive('card'); renderCardView(); });
+        barBtn?.addEventListener('click', () => { if (currentView === 'bar') return; currentView = 'bar'; setActive('bar'); renderBarView(); });
+        lineBtn?.addEventListener('click', () => { if (currentView === 'line') return; currentView = 'line'; setActive('line'); renderLineView(); });
+      }, 0);
     },
     (tbl) => {
       const panel = document.createElement('div');
@@ -3416,39 +3566,157 @@ function renderFreqMosaicViewMulti(content: HTMLElement) {
 // ─── Sequences tab (multi-group) ───
 // ─── Sequences sub-views (multi-group) ───
 function renderSeqDistViewMulti(content: HTMLElement) {
-  const grid = createMultiGroupGrid(content);
-  let i = 0;
-  for (const [groupName, model] of cachedModels) {
-    const card = createGroupCard(grid, groupName, i);
-    card.innerHTML = `<div id="viz-dist-g${i}" style="width:100%"></div>`;
-    i++;
-  }
-  requestAnimationFrame(() => {
-    let j = 0;
-    for (const [, model] of cachedModels) {
-      const el = document.getElementById(`viz-dist-g${j}`);
-      if (el && model.data) renderDistribution(el, model.data, model);
-      j++;
+  // Cards / Combined toggle
+  const toggleBar = document.createElement('div');
+  toggleBar.style.cssText = 'margin-bottom:8px';
+  toggleBar.innerHTML = `<div class="view-toggle"><button class="toggle-btn active" id="seqdist-toggle-cards">Cards</button><button class="toggle-btn" id="seqdist-toggle-combined">Combined</button></div>`;
+  content.appendChild(toggleBar);
+
+  const viewContainer = document.createElement('div');
+  content.appendChild(viewContainer);
+
+  let currentView: 'cards' | 'combined' = 'cards';
+
+  function renderCardsView() {
+    viewContainer.innerHTML = '';
+    const grid = createMultiGroupGrid(viewContainer);
+    let i = 0;
+    for (const [groupName, model] of cachedModels) {
+      const card = createGroupCard(grid, groupName, i);
+      card.innerHTML = `<div id="viz-dist-g${i}" style="width:100%"></div>`;
+      i++;
     }
-  });
+    requestAnimationFrame(() => {
+      let j = 0;
+      for (const [, model] of cachedModels) {
+        const el = document.getElementById(`viz-dist-g${j}`);
+        if (el && model.data) renderDistribution(el, model.data, model);
+        j++;
+      }
+    });
+  }
+
+  function renderCombinedView() {
+    viewContainer.innerHTML = '';
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+    panel.style.padding = '12px';
+    panel.innerHTML = `<div class="panel-title">State Distribution — Combined</div><div id="viz-dist-combined" style="width:100%"></div>`;
+    addPanelDownloadButtons(panel, { image: true, filename: 'distribution-combined-all-groups' });
+    viewContainer.appendChild(panel);
+    requestAnimationFrame(() => {
+      const el = document.getElementById('viz-dist-combined');
+      if (el) {
+        const groups: { name: string; data: import('tnaj').SequenceData; model: TNA; color: string }[] = [];
+        let gi = 0;
+        for (const [groupName, model] of cachedModels) {
+          if (model.data) {
+            groups.push({ name: groupName, data: model.data, model, color: GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]! });
+          }
+          gi++;
+        }
+        if (groups.length > 0) renderCombinedDistribution(el, groups);
+      }
+    });
+  }
+
+  renderCardsView();
+
+  setTimeout(() => {
+    const cardsBtn = document.getElementById('seqdist-toggle-cards');
+    const combinedBtn = document.getElementById('seqdist-toggle-combined');
+    cardsBtn?.addEventListener('click', () => {
+      if (currentView === 'cards') return;
+      currentView = 'cards';
+      cardsBtn?.classList.add('active');
+      combinedBtn?.classList.remove('active');
+      renderCardsView();
+    });
+    combinedBtn?.addEventListener('click', () => {
+      if (currentView === 'combined') return;
+      currentView = 'combined';
+      combinedBtn?.classList.add('active');
+      cardsBtn?.classList.remove('active');
+      renderCombinedView();
+    });
+  }, 0);
 }
 
 function renderSeqIndexViewMulti(content: HTMLElement) {
-  const grid = createMultiGroupGrid(content);
-  let i = 0;
-  for (const [groupName, model] of cachedModels) {
-    const card = createGroupCard(grid, groupName, i);
-    card.innerHTML = `<div style="overflow-x:auto"><div id="viz-seq-g${i}" style="width:100%"></div></div>`;
-    i++;
-  }
-  requestAnimationFrame(() => {
-    let j = 0;
-    for (const [, model] of cachedModels) {
-      const el = document.getElementById(`viz-seq-g${j}`);
-      if (el && model.data) renderSequences(el, model.data, model);
-      j++;
+  // Cards / Combined toggle
+  const toggleBar = document.createElement('div');
+  toggleBar.style.cssText = 'margin-bottom:8px';
+  toggleBar.innerHTML = `<div class="view-toggle"><button class="toggle-btn active" id="seqidx-toggle-cards">Cards</button><button class="toggle-btn" id="seqidx-toggle-combined">Combined</button></div>`;
+  content.appendChild(toggleBar);
+
+  const viewContainer = document.createElement('div');
+  content.appendChild(viewContainer);
+
+  let currentView: 'cards' | 'combined' = 'cards';
+
+  function renderCardsView() {
+    viewContainer.innerHTML = '';
+    const grid = createMultiGroupGrid(viewContainer);
+    let i = 0;
+    for (const [groupName, model] of cachedModels) {
+      const card = createGroupCard(grid, groupName, i);
+      card.innerHTML = `<div style="overflow-x:auto"><div id="viz-seq-g${i}" style="width:100%"></div></div>`;
+      i++;
     }
-  });
+    requestAnimationFrame(() => {
+      let j = 0;
+      for (const [, model] of cachedModels) {
+        const el = document.getElementById(`viz-seq-g${j}`);
+        if (el && model.data) renderSequences(el, model.data, model);
+        j++;
+      }
+    });
+  }
+
+  function renderCombinedView() {
+    viewContainer.innerHTML = '';
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+    panel.style.padding = '12px';
+    panel.innerHTML = `<div class="panel-title">Sequence Index — Combined</div><div id="viz-seq-combined" style="width:100%"></div>`;
+    addPanelDownloadButtons(panel, { image: true, filename: 'sequence-index-combined-all-groups' });
+    viewContainer.appendChild(panel);
+    requestAnimationFrame(() => {
+      const el = document.getElementById('viz-seq-combined');
+      if (el) {
+        const groups: { name: string; data: import('tnaj').SequenceData; model: TNA; color: string }[] = [];
+        let gi = 0;
+        for (const [groupName, model] of cachedModels) {
+          if (model.data) {
+            groups.push({ name: groupName, data: model.data, model, color: GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]! });
+          }
+          gi++;
+        }
+        if (groups.length > 0) renderCombinedSequences(el, groups);
+      }
+    });
+  }
+
+  renderCardsView();
+
+  setTimeout(() => {
+    const cardsBtn = document.getElementById('seqidx-toggle-cards');
+    const combinedBtn = document.getElementById('seqidx-toggle-combined');
+    cardsBtn?.addEventListener('click', () => {
+      if (currentView === 'cards') return;
+      currentView = 'cards';
+      cardsBtn?.classList.add('active');
+      combinedBtn?.classList.remove('active');
+      renderCardsView();
+    });
+    combinedBtn?.addEventListener('click', () => {
+      if (currentView === 'combined') return;
+      currentView = 'combined';
+      combinedBtn?.classList.add('active');
+      cardsBtn?.classList.remove('active');
+      renderCombinedView();
+    });
+  }, 0);
 }
 
 // ─── Indices sub-views (multi-group) ───

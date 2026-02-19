@@ -189,7 +189,8 @@ export function renderGroupSetup(
   }, 0);
 }
 
-function activateColumnGroups(_networkSettings: NetworkSettings) {
+/** Build group models from column labels without navigating. */
+export function buildColumnGroups(networkSettings: NetworkSettings) {
   if (!state.sequenceData || !state.groupLabels) return;
 
   const groupModel = buildGroupModel(state.groupLabels);
@@ -204,6 +205,10 @@ function activateColumnGroups(_networkSettings: NetworkSettings) {
   }
 
   setGroupAnalysisData(models, cents, groupModel, state.groupLabels, 'column');
+}
+
+export function activateColumnGroups(_networkSettings: NetworkSettings) {
+  buildColumnGroups(_networkSettings);
 
   // Navigate to network subtab and enable all subtabs
   state.activeSubTab = 'network';
