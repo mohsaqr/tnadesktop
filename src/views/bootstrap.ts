@@ -6,7 +6,7 @@ import type { NetworkSettings } from '../main';
 import { showTooltip, hideTooltip } from '../main';
 import { bootstrapTna } from '../analysis/bootstrap';
 import type { BootstrapResult, BootstrapOptions } from '../analysis/bootstrap';
-import { renderNetwork } from './network';
+import { renderNetwork, fmtNum } from './network';
 import { addPanelDownloadButtons } from './export';
 import { createViewToggle } from './dashboard';
 
@@ -130,10 +130,10 @@ export function renderBootstrapResults(
         const rowStyle = e.significant ? 'background:#d4edda' : '';
         tableHtml += `<tr style="${rowStyle}">`;
         tableHtml += `<td>${e.from}</td><td>${e.to}</td>`;
-        tableHtml += `<td>${e.weight.toFixed(4)}</td>`;
-        tableHtml += `<td>${e.pValue.toFixed(4)}</td>`;
-        tableHtml += `<td>${e.ciLower.toFixed(4)}</td>`;
-        tableHtml += `<td>${e.ciUpper.toFixed(4)}</td>`;
+        tableHtml += `<td>${fmtNum(e.weight)}</td>`;
+        tableHtml += `<td>${fmtNum(e.pValue)}</td>`;
+        tableHtml += `<td>${fmtNum(e.ciLower)}</td>`;
+        tableHtml += `<td>${fmtNum(e.ciUpper)}</td>`;
         tableHtml += `<td style="text-align:center">${e.significant ? 'Yes' : ''}</td>`;
         tableHtml += '</tr>';
       }

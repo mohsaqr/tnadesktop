@@ -401,3 +401,82 @@ export function longToSequences(
   }
   return { sequences, groups: groupLabels };
 }
+
+// ═══════════════════════════════════════════════════════════
+//  Edge list parsing (SNA mode)
+// ═══════════════════════════════════════════════════════════
+
+export interface EdgeListResult {
+  matrix: number[][];
+  labels: string[];
+}
+
+/** Column name patterns for guessing edge list columns. */
+const FROM_PATTERNS = /^(from|source|sender|origin|start|node1|node_1|src)$/i;
+const TO_PATTERNS = /^(to|target|receiver|destination|end|node2|node_2|dst|dest)$/i;
+const WEIGHT_PATTERNS = /^(weight|value|strength|count|freq|frequency|w|score)$/i;
+
+/**
+ * Guess which columns are From, To, Weight from header names.
+ * Returns { fromCol, toCol, weightCol } with -1 for weight if not found.
+ */
+export function guessEdgeListColumns(headers: string[]): { fromCol: number; toCol: number; weightCol: number } {
+  let fromCol = -1, toCol = -1, weightCol = -1;
+
+  for (let i = 0; i < headers.length; i++) {
+    const h = headers[i]!;
+    if (fromCol === -1 && FROM_PATTERNS.test(h)) fromCol = i;
+    else if (toCol === -1 && TO_PATTERNS.test(h)) toCol = i;
+    else if (weightCol === -1 && WEIGHT_PATTERNS.test(h)) weightCol = i;
+  }
+
+  // Fallback: assign first two unused columns as from/to
+  const used = new Set([fromCol, toCol, weightCol].filter(x => x >= 0));
+  if (fromCol === -1) { fromCol = findUnused(headers.length, used); used.add(fromCol); }
+  if (toCol === -1) { toCol = findUnused(headers.length, used); used.add(toCol); }
+  // weightCol can stay -1 (= unweighted)
+
+  return { fromCol, toCol, weightCol };
+}
+
+/**
+ * Convert edge list rows into a weight matrix.
+ * @param rows - Data rows (excluding header)
+ * @param fromCol - Index of the "from" column
+ * @param toCol - Index of the "to" column
+ * @param weightCol - Index of the "weight" column (-1 = unweighted, all edges = 1)
+ * @param directed - If false, symmetrize the matrix
+ */
+export function edgeListToMatrix(
+  rows: string[][], fromCol: number, toCol: number, weightCol: number, directed: boolean,
+): EdgeListResult {
+  // Collect unique node names
+  const nodeSet = new Set<string>();
+  for (const row of rows) {
+    const from = (row[fromCol] ?? '').trim();
+    const to = (row[toCol] ?? '').trim();
+    if (from) nodeSet.add(from);
+    if (to) nodeSet.add(to);
+  }
+  const labels = [...nodeSet].sort();
+  const idx = new Map(labels.map((l, i) => [l, i]));
+  const n = labels.length;
+  const matrix: number[][] = Array.from({ length: n }, () => new Array(n).fill(0) as number[]);
+
+  for (const row of rows) {
+    const from = (row[fromCol] ?? '').trim();
+    const to = (row[toCol] ?? '').trim();
+    if (!from || !to) continue;
+    const i = idx.get(from);
+    const j = idx.get(to);
+    if (i === undefined || j === undefined) continue;
+
+    const w = weightCol >= 0 ? (parseFloat((row[weightCol] ?? '').trim()) || 1) : 1;
+    matrix[i]![j]! += w;
+    if (!directed && i !== j) {
+      matrix[j]![i]! += w;
+    }
+  }
+
+  return { matrix, labels };
+}

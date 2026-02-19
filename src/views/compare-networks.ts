@@ -10,7 +10,7 @@ import { showTooltip, hideTooltip } from '../main';
 import type { NetworkSettings } from '../main';
 import { state } from '../main';
 import { addPanelDownloadButtons, downloadSvgFromElement, downloadPngFromElement } from './export';
-import { circularLayout, computeEdgePath, arrowPoly, fmtWeight } from './network';
+import { circularLayout, computeEdgePath, arrowPoly, fmtWeight, fmtNum } from './network';
 import { NODE_COLORS } from './colors';
 import { createViewToggle } from './dashboard';
 
@@ -67,10 +67,10 @@ export function renderCompareNetworksTab(
   const metrics = groupNames.map(g => computeMetrics(fullModel.models[g]!, g));
 
   const metricDefs = [
-    { key: 'density', label: 'Density', fmt: (v: number) => v.toFixed(3) },
-    { key: 'meanWeight', label: 'Mean Weight', fmt: (v: number) => v.toFixed(4) },
+    { key: 'density', label: 'Density', fmt: (v: number) => fmtNum(v, 3) },
+    { key: 'meanWeight', label: 'Mean Weight', fmt: (v: number) => fmtNum(v) },
     { key: 'nEdges', label: 'Number of Edges', fmt: (v: number) => String(v) },
-    { key: 'reciprocity', label: 'Reciprocity', fmt: (v: number) => v.toFixed(3) },
+    { key: 'reciprocity', label: 'Reciprocity', fmt: (v: number) => fmtNum(v, 3) },
   ];
 
   createViewToggle(container,
@@ -174,10 +174,10 @@ export function renderCompareNetworksTab(
         tableHtml += `<td style="font-weight:600">${m.group}</td>`;
         tableHtml += `<td>${m.nStates}</td>`;
         tableHtml += `<td>${m.nEdges}</td>`;
-        tableHtml += `<td>${m.density.toFixed(3)}</td>`;
-        tableHtml += `<td>${m.meanWeight.toFixed(4)}</td>`;
-        tableHtml += `<td>${m.maxWeight.toFixed(4)}</td>`;
-        tableHtml += `<td>${m.reciprocity.toFixed(3)}</td>`;
+        tableHtml += `<td>${fmtNum(m.density, 3)}</td>`;
+        tableHtml += `<td>${fmtNum(m.meanWeight)}</td>`;
+        tableHtml += `<td>${fmtNum(m.maxWeight)}</td>`;
+        tableHtml += `<td>${fmtNum(m.reciprocity, 3)}</td>`;
         tableHtml += `<td>${m.hasSelfLoops ? 'Yes' : 'No'}</td>`;
         tableHtml += '</tr>';
       }
@@ -309,9 +309,9 @@ function renderDiffHeatmap(container: HTMLElement, modelA: TNA, modelB: TNA) {
           d3.select(this).attr('stroke', '#333').attr('stroke-width', 2);
           showTooltip(event,
             `<b>${labels[i]} → ${labels[j]}</b><br>` +
-            `A: ${modelA.weights.get(i, j).toFixed(4)}<br>` +
-            `B: ${modelB.weights.get(i, j).toFixed(4)}<br>` +
-            `Diff: ${val.toFixed(4)}`);
+            `A: ${fmtNum(modelA.weights.get(i, j))}<br>` +
+            `B: ${fmtNum(modelB.weights.get(i, j))}<br>` +
+            `Diff: ${fmtNum(val)}`);
         })
         .on('mousemove', function (event: MouseEvent) {
           const tt = document.getElementById('tooltip')!;
@@ -332,7 +332,7 @@ function renderDiffHeatmap(container: HTMLElement, modelA: TNA, modelB: TNA) {
           .attr('font-size', '8px')
           .attr('fill', Math.abs(val) > maxAbs * 0.6 ? '#fff' : '#333')
           .attr('pointer-events', 'none')
-          .text(val.toFixed(3));
+          .text(fmtNum(val, 3));
       }
     }
   }
@@ -442,7 +442,7 @@ function renderDiffNetwork(container: HTMLElement, modelA: TNA, modelB: TNA) {
     const op = opacityScale(absDiff);
 
     const { path, tipX, tipY, tipDx, tipDy, labelX, labelY } = computeEdgePath(
-      src.x, src.y, tgt.x, tgt.y, curvature, outerRadius, arrowSize,
+      src.x, src.y, tgt.x, tgt.y, curvature, outerRadius, outerRadius, arrowSize,
     );
     if (!path) continue;
 
@@ -459,9 +459,9 @@ function renderDiffNetwork(container: HTMLElement, modelA: TNA, modelB: TNA) {
         d3.select(this).attr('stroke-opacity', 1).attr('stroke-width', widthScale(absDiff) + 1);
         showTooltip(event,
           `<b>${labels[e.from]} → ${labels[e.to]}</b><br>` +
-          `A: ${modelA.weights.get(e.from, e.to).toFixed(4)}<br>` +
-          `B: ${modelB.weights.get(e.from, e.to).toFixed(4)}<br>` +
-          `Diff: <span style="color:${color};font-weight:600">${e.diff > 0 ? '+' : ''}${e.diff.toFixed(4)}</span>`);
+          `A: ${fmtNum(modelA.weights.get(e.from, e.to))}<br>` +
+          `B: ${fmtNum(modelB.weights.get(e.from, e.to))}<br>` +
+          `Diff: <span style="color:${color};font-weight:600">${e.diff > 0 ? '+' : ''}${fmtNum(e.diff)}</span>`);
       })
       .on('mousemove', function (event: MouseEvent) {
         const tt = document.getElementById('tooltip')!;

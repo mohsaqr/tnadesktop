@@ -8,6 +8,7 @@ import type { GroupTNA, CompareRow } from 'tnaj';
 import { compareSequences } from 'tnaj';
 import { showTooltip, hideTooltip } from '../main';
 import { addPanelDownloadButtons } from './export';
+import { fmtNum } from './network';
 import { createViewToggle } from './dashboard';
 
 export function renderCompareSequencesTab(
@@ -190,11 +191,11 @@ function renderCompareResults(
           const freq = row.frequencies[g2] ?? 0;
           const prop = row.proportions[g2] ?? 0;
           tableHtml += `<td style="text-align:right">${freq}</td>`;
-          tableHtml += `<td style="text-align:right">${prop.toFixed(3)}</td>`;
+          tableHtml += `<td style="text-align:right">${fmtNum(prop, 3)}</td>`;
         }
         if (hasPValue) {
-          tableHtml += `<td style="text-align:right">${row.effectSize !== undefined ? row.effectSize.toFixed(3) : 'N/A'}</td>`;
-          tableHtml += `<td style="text-align:right">${row.pValue !== undefined ? row.pValue.toFixed(4) : 'N/A'}</td>`;
+          tableHtml += `<td style="text-align:right">${row.effectSize !== undefined ? fmtNum(row.effectSize, 3) : 'N/A'}</td>`;
+          tableHtml += `<td style="text-align:right">${row.pValue !== undefined ? fmtNum(row.pValue) : 'N/A'}</td>`;
         }
         tableHtml += '</tr>';
       }

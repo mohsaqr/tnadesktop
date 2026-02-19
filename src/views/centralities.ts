@@ -4,6 +4,7 @@
 import * as d3 from 'd3';
 import type { CentralityResult, CentralityMeasure } from 'tnaj';
 import { showTooltip, hideTooltip } from '../main';
+import { fmtNum } from './network';
 import { NODE_COLORS } from './colors';
 
 export function renderCentralityChart(
@@ -59,7 +60,7 @@ export function renderCentralityChart(
     .attr('rx', 4)
     .on('mouseover', function (event: MouseEvent, d) {
       d3.select(this).attr('opacity', 0.8);
-      showTooltip(event, `<b>${d.label}</b><br>${measure}: ${d.value.toFixed(4)}`);
+      showTooltip(event, `<b>${d.label}</b><br>${measure}: ${fmtNum(d.value)}`);
     })
     .on('mousemove', function (event: MouseEvent) {
       const tt = document.getElementById('tooltip')!;
@@ -80,7 +81,7 @@ export function renderCentralityChart(
     .attr('dy', '0.35em')
     .attr('font-size', '11px')
     .attr('fill', '#666')
-    .text(d => d.value.toFixed(3));
+    .text(d => fmtNum(d.value, 3));
 
   g.append('g')
     .attr('class', 'axis')

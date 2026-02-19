@@ -2,15 +2,23 @@
  * Network graph visualization with configurable layout, edges, and self-loops.
  */
 import * as d3 from 'd3';
-import type { TNA, CommunityResult } from 'tnaj';
+import type { TNA, CommunityResult, CentralityResult } from 'tnaj';
 import type { NetworkSettings } from '../main';
 import { showTooltip, hideTooltip } from '../main';
 import { NODE_COLORS, COMMUNITY_COLORS } from './colors';
+import { cytoscapeLayout } from './cytoscape-layouts';
+import type { CytoscapeLayoutName } from './cytoscape-layouts';
 
 /** Format edge weight: integers shown without decimals, others as .XX */
 export function fmtWeight(w: number): string {
   if (Number.isInteger(w)) return String(w);
   return w.toFixed(2).replace(/^0\./, '.');
+}
+
+/** Format a number with up to `digits` decimal places, stripping trailing zeros. */
+export function fmtNum(v: number, digits = 4): string {
+  if (Number.isInteger(v)) return String(v);
+  return parseFloat(v.toFixed(digits)).toString();
 }
 
 interface NodeDatum {
@@ -19,6 +27,7 @@ interface NodeDatum {
   color: string;
   x: number;
   y: number;
+  radius: number;
 }
 
 interface EdgeDatum {
@@ -30,6 +39,17 @@ interface EdgeDatum {
 // ═══════════════════════════════════════════════════════════
 //  Layout algorithms
 // ═══════════════════════════════════════════════════════════
+
+/** Simple seeded PRNG (mulberry32) for deterministic layouts. */
+function seededRandom(seed: number): () => number {
+  let s = seed | 0;
+  return () => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 export function rescalePositions(
   positions: { x: number; y: number }[],
@@ -64,7 +84,7 @@ export function circularLayout(
 
 function springLayout(
   n: number, weights: { get(i: number, j: number): number },
-  width: number, height: number, padding: number,
+  width: number, height: number, padding: number, seed = 42,
 ): { x: number; y: number }[] {
   // Build links from weight matrix
   const links: { source: number; target: number; weight: number }[] = [];
@@ -76,7 +96,15 @@ function springLayout(
     }
   }
 
-  const nodes = Array.from({ length: n }, (_, i) => ({ index: i, x: 0, y: 0 }));
+  // Seed initial positions in a circle with jitter so spring layout is deterministic
+  const rng = seededRandom(seed);
+  const cx = width / 2;
+  const cy = height / 2;
+  const initRadius = Math.min(width, height) / 4;
+  const nodes = Array.from({ length: n }, (_, i) => {
+    const angle = (2 * Math.PI * i) / n;
+    return { index: i, x: cx + initRadius * Math.cos(angle) + (rng() - 0.5) * 2, y: cy + initRadius * Math.sin(angle) + (rng() - 0.5) * 2 };
+  });
 
   const sim = d3.forceSimulation(nodes)
     .force('link', d3.forceLink(links).id((_d, i) => i).distance(100).strength((d: any) => d.weight))
@@ -164,7 +192,7 @@ function kamadaKawaiLayout(
 
 function spectralLayout(
   n: number, weights: { get(i: number, j: number): number },
-  width: number, height: number, padding: number,
+  width: number, height: number, padding: number, seed = 42,
 ): { x: number; y: number }[] {
   if (n <= 2) {
     const pos = circularLayout(n, width / 2, height / 2, Math.min(width, height) / 2 - padding);
@@ -193,8 +221,9 @@ function spectralLayout(
 
   // Power iteration to find smallest non-trivial eigenvectors
   // We use inverse power iteration on L + shift to avoid the zero eigenvalue
+  const rng = seededRandom(seed);
   function randomVec(): number[] {
-    const v = Array.from({ length: n }, () => Math.random() - 0.5);
+    const v = Array.from({ length: n }, () => rng() - 0.5);
     const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
     return v.map(x => x / norm);
   }
@@ -254,13 +283,433 @@ function spectralLayout(
   return pos;
 }
 
+// ─── Fruchterman-Reingold (Gephi-style) ───
+
+function fruchtermanReingoldLayout(
+  n: number, weights: { get(i: number, j: number): number },
+  width: number, height: number, padding: number, seed = 42,
+): { x: number; y: number }[] {
+  if (n <= 1) return [{ x: width / 2, y: height / 2 }];
+
+  const area = width * height;
+  const k = Math.sqrt(area / n);       // ideal edge length
+  const gravity = 0.05;                // pull disconnected components toward center
+  const iterations = 500;
+
+  // Build adjacency list for speed
+  const edges: { i: number; j: number; w: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const w = weights.get(i, j) + weights.get(j, i);
+      if (w > 0) edges.push({ i, j, w });
+    }
+  }
+
+  // Seed from circular layout for determinism
+  const rng = seededRandom(seed);
+  const pos = Array.from({ length: n }, (_, i) => {
+    const angle = (2 * Math.PI * i) / n;
+    const r = Math.min(width, height) * 0.3;
+    return {
+      x: width / 2 + r * Math.cos(angle) + (rng() - 0.5) * 2,
+      y: height / 2 + r * Math.sin(angle) + (rng() - 0.5) * 2,
+    };
+  });
+
+  let temperature = Math.min(width, height) * 0.1;
+  const cooling = temperature / (iterations + 1);
+
+  const dispX = new Float64Array(n);
+  const dispY = new Float64Array(n);
+
+  for (let iter = 0; iter < iterations; iter++) {
+    dispX.fill(0);
+    dispY.fill(0);
+
+    // Repulsive forces between all node pairs
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        let dx = pos[i]!.x - pos[j]!.x;
+        let dy = pos[i]!.y - pos[j]!.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const force = (k * k) / dist;  // repulsive: k²/d
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        dispX[i]! += fx;  dispY[i]! += fy;
+        dispX[j]! -= fx;  dispY[j]! -= fy;
+      }
+    }
+
+    // Attractive forces along edges
+    for (const edge of edges) {
+      const dx = pos[edge.i]!.x - pos[edge.j]!.x;
+      const dy = pos[edge.i]!.y - pos[edge.j]!.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const force = (dist * dist) / k * Math.min(edge.w, 3);  // attractive: d²/k, capped weight
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      dispX[edge.i]! -= fx;  dispY[edge.i]! -= fy;
+      dispX[edge.j]! += fx;  dispY[edge.j]! += fy;
+    }
+
+    // Gravity toward center
+    const cx = width / 2, cy = height / 2;
+    for (let i = 0; i < n; i++) {
+      const dx = pos[i]!.x - cx;
+      const dy = pos[i]!.y - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      dispX[i]! -= gravity * dx;
+      dispY[i]! -= gravity * dy;
+    }
+
+    // Apply displacement capped by temperature
+    for (let i = 0; i < n; i++) {
+      const dx = dispX[i]!;
+      const dy = dispY[i]!;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const cap = Math.min(dist, temperature) / dist;
+      pos[i]!.x += dx * cap;
+      pos[i]!.y += dy * cap;
+    }
+
+    temperature -= cooling;
+    if (temperature < 0.01) break;
+  }
+
+  rescalePositions(pos, width, height, padding);
+  return pos;
+}
+
+// ─── ForceAtlas2 (Gephi's signature layout) ───
+
+function forceAtlas2Layout(
+  n: number, weights: { get(i: number, j: number): number },
+  width: number, height: number, padding: number, seed = 42,
+): { x: number; y: number }[] {
+  if (n <= 1) return [{ x: width / 2, y: height / 2 }];
+
+  const linLog = true;                 // LinLog mode: better community separation
+  const scalingRatio = 2.0;
+  const gravity = 1.0;
+  const jitterTolerance = 1.0;
+  const iterations = 600;
+
+  // Build adjacency
+  const edges: { i: number; j: number; w: number }[] = [];
+  const degree = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      const w = weights.get(i, j);
+      if (w > 0) {
+        if (i < j) edges.push({ i, j, w });
+        degree[i]! += w;
+      }
+    }
+  }
+
+  // Seed from circular layout
+  const rng = seededRandom(seed);
+  const pos = Array.from({ length: n }, (_, i) => {
+    const angle = (2 * Math.PI * i) / n;
+    const r = Math.min(width, height) * 0.25;
+    return {
+      x: width / 2 + r * Math.cos(angle) + (rng() - 0.5),
+      y: height / 2 + r * Math.sin(angle) + (rng() - 0.5),
+    };
+  });
+
+  // Velocities for adaptive step size
+  const vx = new Float64Array(n);
+  const vy = new Float64Array(n);
+  const forceX = new Float64Array(n);
+  const forceY = new Float64Array(n);
+  const prevForceX = new Float64Array(n);
+  const prevForceY = new Float64Array(n);
+
+  for (let iter = 0; iter < iterations; iter++) {
+    forceX.fill(0);
+    forceY.fill(0);
+
+    // Repulsive forces (degree+1 scaling, as in ForceAtlas2)
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const dx = pos[i]!.x - pos[j]!.x;
+        const dy = pos[i]!.y - pos[j]!.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        // repulsion proportional to (deg+1)(deg+1)/distance
+        const repulsion = scalingRatio * (degree[i]! + 1) * (degree[j]! + 1) / dist;
+        const fx = (dx / dist) * repulsion;
+        const fy = (dy / dist) * repulsion;
+        forceX[i]! += fx;  forceY[i]! += fy;
+        forceX[j]! -= fx;  forceY[j]! -= fy;
+      }
+    }
+
+    // Attractive forces
+    for (const edge of edges) {
+      const dx = pos[edge.i]!.x - pos[edge.j]!.x;
+      const dy = pos[edge.i]!.y - pos[edge.j]!.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      let attraction: number;
+      if (linLog) {
+        // LinLog: attraction = log(1+d) * w
+        attraction = Math.log(1 + dist) * edge.w;
+      } else {
+        attraction = dist * edge.w;
+      }
+      const fx = (dx / dist) * attraction;
+      const fy = (dy / dist) * attraction;
+      forceX[edge.i]! -= fx;  forceY[edge.i]! -= fy;
+      forceX[edge.j]! += fx;  forceY[edge.j]! += fy;
+    }
+
+    // Gravity (strong gravity: proportional to degree+1)
+    const cx = width / 2, cy = height / 2;
+    for (let i = 0; i < n; i++) {
+      const dx = pos[i]!.x - cx;
+      const dy = pos[i]!.y - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const g = gravity * (degree[i]! + 1);
+      forceX[i]! -= g * dx / dist;
+      forceY[i]! -= g * dy / dist;
+    }
+
+    // Adaptive step size per node (ForceAtlas2 "swing" and "traction")
+    let totalSwing = 0;
+    let totalTraction = 0;
+    for (let i = 0; i < n; i++) {
+      const swingI = Math.sqrt(
+        (forceX[i]! - prevForceX[i]!) ** 2 + (forceY[i]! - prevForceY[i]!) ** 2,
+      );
+      const tractionI = Math.sqrt(
+        (forceX[i]! + prevForceX[i]!) ** 2 + (forceY[i]! + prevForceY[i]!) ** 2,
+      ) / 2;
+      totalSwing += (degree[i]! + 1) * swingI;
+      totalTraction += (degree[i]! + 1) * tractionI;
+    }
+
+    const globalSpeed = totalSwing > 0
+      ? jitterTolerance * jitterTolerance * totalTraction / totalSwing
+      : 1;
+    const clampedSpeed = Math.min(globalSpeed, 10);
+
+    for (let i = 0; i < n; i++) {
+      const swingI = Math.sqrt(
+        (forceX[i]! - prevForceX[i]!) ** 2 + (forceY[i]! - prevForceY[i]!) ** 2,
+      );
+      const nodeSpeed = clampedSpeed / (1 + clampedSpeed * Math.sqrt(swingI));
+      const cappedSpeed = Math.min(nodeSpeed, 10);
+      pos[i]!.x += forceX[i]! * cappedSpeed;
+      pos[i]!.y += forceY[i]! * cappedSpeed;
+    }
+
+    // Save forces for next iteration
+    prevForceX.set(forceX);
+    prevForceY.set(forceY);
+  }
+
+  rescalePositions(pos, width, height, padding);
+  return pos;
+}
+
+// ─── FR + Circular Shell (Gephi-style) ───
+
+function frShellLayout(
+  n: number, weights: { get(i: number, j: number): number },
+  width: number, height: number, padding: number, seed = 42,
+): { x: number; y: number }[] {
+  if (n <= 1) return [{ x: width / 2, y: height / 2 }];
+
+  // Compute weighted degree for each node
+  const degree = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      degree[i] += weights.get(i, j) + weights.get(j, i);
+    }
+  }
+
+  // Determine core vs shell: nodes with degree above 25th percentile are core
+  const sorted = Array.from(degree).sort((a, b) => a - b);
+  const threshold = sorted[Math.floor(n * 0.25)] ?? 0;
+  const isCore: boolean[] = Array.from(degree, d => d > threshold);
+  const coreIdx: number[] = [];
+  const shellIdx: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (isCore[i]) coreIdx.push(i);
+    else shellIdx.push(i);
+  }
+
+  // If all nodes are core or all are shell, fall back to full FR
+  if (shellIdx.length === 0 || coreIdx.length === 0) {
+    return fruchtermanReingoldLayout(n, weights, width, height, padding, seed);
+  }
+
+  // --- Step 1: Run FR on core nodes only ---
+  const coreN = coreIdx.length;
+  const coreArea = width * height * 0.55; // use ~55% of area for the core
+  const coreK = Math.sqrt(coreArea / coreN);
+  const gravity = 0.08;
+  const iterations = 500;
+
+  const coreEdges: { i: number; j: number; w: number }[] = [];
+  const coreMap = new Map<number, number>(); // original idx → core local idx
+  coreIdx.forEach((orig, local) => coreMap.set(orig, local));
+  for (let a = 0; a < coreN; a++) {
+    for (let b = a + 1; b < coreN; b++) {
+      const w = weights.get(coreIdx[a]!, coreIdx[b]!) + weights.get(coreIdx[b]!, coreIdx[a]!);
+      if (w > 0) coreEdges.push({ i: a, j: b, w });
+    }
+  }
+
+  const rng = seededRandom(seed);
+  const corePos = Array.from({ length: coreN }, (_, i) => {
+    const angle = (2 * Math.PI * i) / coreN;
+    const r = Math.min(width, height) * 0.2;
+    return {
+      x: width / 2 + r * Math.cos(angle) + (rng() - 0.5) * 2,
+      y: height / 2 + r * Math.sin(angle) + (rng() - 0.5) * 2,
+    };
+  });
+
+  let temperature = Math.min(width, height) * 0.1;
+  const cooling = temperature / (iterations + 1);
+  const dispX = new Float64Array(coreN);
+  const dispY = new Float64Array(coreN);
+
+  for (let iter = 0; iter < iterations; iter++) {
+    dispX.fill(0);
+    dispY.fill(0);
+
+    for (let i = 0; i < coreN; i++) {
+      for (let j = i + 1; j < coreN; j++) {
+        const dx = corePos[i]!.x - corePos[j]!.x;
+        const dy = corePos[i]!.y - corePos[j]!.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const force = (coreK * coreK) / dist;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        dispX[i]! += fx; dispY[i]! += fy;
+        dispX[j]! -= fx; dispY[j]! -= fy;
+      }
+    }
+
+    for (const edge of coreEdges) {
+      const dx = corePos[edge.i]!.x - corePos[edge.j]!.x;
+      const dy = corePos[edge.i]!.y - corePos[edge.j]!.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const force = (dist * dist) / coreK * Math.min(edge.w, 3);
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      dispX[edge.i]! -= fx; dispY[edge.i]! -= fy;
+      dispX[edge.j]! += fx; dispY[edge.j]! += fy;
+    }
+
+    const cx = width / 2, cy = height / 2;
+    for (let i = 0; i < coreN; i++) {
+      dispX[i]! -= gravity * (corePos[i]!.x - cx);
+      dispY[i]! -= gravity * (corePos[i]!.y - cy);
+    }
+
+    for (let i = 0; i < coreN; i++) {
+      const dx = dispX[i]!;
+      const dy = dispY[i]!;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const cap = Math.min(dist, temperature) / dist;
+      corePos[i]!.x += dx * cap;
+      corePos[i]!.y += dy * cap;
+    }
+
+    temperature -= cooling;
+    if (temperature < 0.01) break;
+  }
+
+  // --- Step 2: Arrange shell nodes in a circle around the core ---
+  // Compute bounding radius of core
+  const cx = width / 2, cy = height / 2;
+  let maxCoreDist = 0;
+  for (const p of corePos) {
+    const d = Math.sqrt((p.x - cx) ** 2 + (p.y - cy) ** 2);
+    if (d > maxCoreDist) maxCoreDist = d;
+  }
+  const shellRadius = maxCoreDist + Math.min(width, height) * 0.18;
+
+  // Sort shell nodes by their strongest connection to core (for visual coherence)
+  const shellSorted = shellIdx.slice().sort((a, b) => {
+    let bestA = -1, bestB = -1, bestAw = 0, bestBw = 0;
+    for (const ci of coreIdx) {
+      const wa = weights.get(a, ci) + weights.get(ci, a);
+      const wb = weights.get(b, ci) + weights.get(ci, b);
+      if (wa > bestAw) { bestAw = wa; bestA = coreMap.get(ci)!; }
+      if (wb > bestBw) { bestBw = wb; bestB = coreMap.get(ci)!; }
+    }
+    // Sort by angle of their best-connected core node
+    const angleA = bestA >= 0 ? Math.atan2(corePos[bestA]!.y - cy, corePos[bestA]!.x - cx) : 0;
+    const angleB = bestB >= 0 ? Math.atan2(corePos[bestB]!.y - cy, corePos[bestB]!.x - cx) : 0;
+    return angleA - angleB;
+  });
+
+  // --- Step 3: Assemble final positions ---
+  const pos: { x: number; y: number }[] = Array(n);
+  for (let i = 0; i < coreN; i++) {
+    pos[coreIdx[i]!] = corePos[i]!;
+  }
+  for (let i = 0; i < shellSorted.length; i++) {
+    const angle = (2 * Math.PI * i) / shellSorted.length - Math.PI / 2;
+    pos[shellSorted[i]!] = {
+      x: cx + shellRadius * Math.cos(angle),
+      y: cy + shellRadius * Math.sin(angle),
+    };
+  }
+
+  rescalePositions(pos, width, height, padding);
+  return pos;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Node shape path helpers
+// ═══════════════════════════════════════════════════════════
+
+/** Generate an SVG path `d` string for the given shape centered at (0,0). */
+export function shapePathD(shape: string, r: number): string {
+  switch (shape) {
+    case 'square': {
+      const h = r * 0.88;
+      return `M${-h},${-h}L${h},${-h}L${h},${h}L${-h},${h}Z`;
+    }
+    case 'diamond': {
+      const h = r * 1.1;
+      return `M0,${-h}L${h},0L0,${h}L${-h},0Z`;
+    }
+    case 'triangle': {
+      // Equilateral triangle pointing up
+      const h = r * 1.15;
+      const half = h * Math.sqrt(3) / 2;
+      return `M0,${-h}L${half},${h / 2}L${-half},${h / 2}Z`;
+    }
+    case 'hexagon': {
+      const pts: string[] = [];
+      for (let i = 0; i < 6; i++) {
+        const a = (Math.PI / 3) * i - Math.PI / 2;
+        pts.push(`${r * Math.cos(a)},${r * Math.sin(a)}`);
+      }
+      return `M${pts[0]}L${pts[1]}L${pts[2]}L${pts[3]}L${pts[4]}L${pts[5]}Z`;
+    }
+    case 'circle':
+    default:
+      // Two-arc full circle
+      return `M0,${-r}A${r},${r} 0 1,1 0,${r}A${r},${r} 0 1,1 0,${-r}Z`;
+  }
+}
+
 // ═══════════════════════════════════════════════════════════
 //  Edge path helpers
 // ═══════════════════════════════════════════════════════════
 
 export function computeEdgePath(
   sx: number, sy: number, tx: number, ty: number,
-  curvature: number, outerRadius: number, arrowSize: number,
+  curvature: number, sourceOuterRadius: number, targetOuterRadius: number, arrowSize: number,
 ) {
   const dx = tx - sx;
   const dy = ty - sy;
@@ -278,8 +727,8 @@ export function computeEdgePath(
   const sdx = mx - sx;
   const sdy = my - sy;
   const slen = Math.sqrt(sdx * sdx + sdy * sdy);
-  const startX = sx + (sdx / slen) * outerRadius;
-  const startY = sy + (sdy / slen) * outerRadius;
+  const startX = sx + (sdx / slen) * sourceOuterRadius;
+  const startY = sy + (sdy / slen) * sourceOuterRadius;
 
   const edx = tx - mx;
   const edy = ty - my;
@@ -288,10 +737,10 @@ export function computeEdgePath(
   const euy = edy / elen;
 
   // Arrow tip sits at the outer radius; edge path ends at the arrow base
-  const tipX = tx - eux * outerRadius;
-  const tipY = ty - euy * outerRadius;
-  const endX = tx - eux * (outerRadius + arrowSize);
-  const endY = ty - euy * (outerRadius + arrowSize);
+  const tipX = tx - eux * targetOuterRadius;
+  const tipY = ty - euy * targetOuterRadius;
+  const endX = tx - eux * (targetOuterRadius + arrowSize);
+  const endY = ty - euy * (targetOuterRadius + arrowSize);
 
   const t = 0.55;
   const labelX = (1 - t) * (1 - t) * startX + 2 * (1 - t) * t * mx + t * t * endX;
@@ -333,8 +782,9 @@ function renderSelfLoop(
   outerRadius: number,
   getDashArray?: (weight: number) => string | null,
   undirected = false,
+  actualRadius?: number,
 ) {
-  const loopR = settings.nodeRadius * 0.7; // visible loop
+  const loopR = (actualRadius ?? settings.nodeRadius) * 0.7; // visible loop
   const margin = 3; // clear gap between donut ring and arc
 
   // Direction outward from graph center
@@ -426,6 +876,68 @@ function renderSelfLoop(
 }
 
 // ═══════════════════════════════════════════════════════════
+//  Layout position cache
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Cache normalized (0-1) positions so that visual-only setting changes
+ * (colors, sizes, shapes, labels) don't re-run expensive layout algorithms.
+ * Positions are recomputed only when layout-relevant params change.
+ */
+let cachedLayoutKey = '';
+let cachedNormPositions: { x: number; y: number }[] = [];
+
+function layoutCacheKey(
+  model: TNA, layoutName: string, seed: number,
+): string {
+  // Include labels + a weight fingerprint so model changes invalidate cache
+  const wSample: number[] = [];
+  const n = model.labels.length;
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      wSample.push(model.weights.get(i, j));
+    }
+  }
+  return `${layoutName}|${seed}|${model.labels.join(',')}|${wSample.join(',')}`;
+}
+
+/** Normalize positions to 0-1 range for caching. */
+function normalizePositions(positions: { x: number; y: number }[]): { x: number; y: number }[] {
+  if (positions.length === 0) return [];
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of positions) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+  return positions.map(p => ({
+    x: (p.x - minX) / rangeX,
+    y: (p.y - minY) / rangeY,
+  }));
+}
+
+/** Denormalize cached 0-1 positions to fit the current canvas dimensions. */
+function denormalizePositions(
+  norm: { x: number; y: number }[], width: number, height: number, padding: number,
+): { x: number; y: number }[] {
+  const usableW = width - 2 * padding;
+  const usableH = height - 2 * padding;
+  return norm.map(p => ({
+    x: padding + p.x * usableW,
+    y: padding + p.y * usableH,
+  }));
+}
+
+/** Clear the layout cache (e.g. when model changes externally). */
+export function clearLayoutCache() {
+  cachedLayoutKey = '';
+  cachedNormPositions = [];
+}
+
+// ═══════════════════════════════════════════════════════════
 //  Core drawing (shared between renderNetwork and renderNetworkIntoGroup)
 // ═══════════════════════════════════════════════════════════
 
@@ -437,32 +949,89 @@ function drawNetwork(
   graphHeight: number,
   comm?: CommunityResult,
   enableTooltips = true,
+  centData?: CentralityResult,
 ) {
   const n = model.labels.length;
   const weights = model.weights;
   const nodeRadius = settings.nodeRadius;
-  const selfLoopExtent = settings.showSelfLoops ? (nodeRadius * 0.7 * 2 + 6) : 0;
-  const padding = nodeRadius + Math.max(settings.graphPadding, selfLoopExtent);
 
-  // ─── Layout ───
+  // ─── Pre-compute per-node radii (needed for padding before layout) ───
+  let nodeRadii: number[] | null = null;
+  if (settings.nodeSizeBy && centData) {
+    const vals = centData.measures[settings.nodeSizeBy as keyof typeof centData.measures] as Float64Array | undefined;
+    if (vals && vals.length === n) {
+      const minV = Math.min(...Array.from(vals));
+      const maxV = Math.max(...Array.from(vals));
+      const range = maxV - minV || 1;
+      nodeRadii = Array.from(vals, v =>
+        settings.nodeSizeMin + ((v - minV) / range) * (settings.nodeSizeMax - settings.nodeSizeMin),
+      );
+    }
+  }
+  const maxNodeRadius = nodeRadii ? Math.max(...nodeRadii) : nodeRadius;
+  const selfLoopExtent = settings.showSelfLoops ? (maxNodeRadius * 0.7 * 2 + 6) : 0;
+  const padding = maxNodeRadius + Math.max(settings.graphPadding, selfLoopExtent);
+
+  // ─── Layout (with position caching) ───
+  const layoutSeed = settings.layoutSeed ?? 42;
+  const key = layoutCacheKey(model, settings.layout, layoutSeed);
   let positions: { x: number; y: number }[];
-  switch (settings.layout) {
-    case 'spring':
-      positions = springLayout(n, weights, graphWidth, graphHeight, padding);
-      break;
-    case 'kamada_kawai':
-      positions = kamadaKawaiLayout(n, weights, graphWidth, graphHeight, padding);
-      break;
-    case 'spectral':
-      positions = spectralLayout(n, weights, graphWidth, graphHeight, padding);
-      break;
-    case 'circular':
-    default: {
-      const cx = graphWidth / 2;
-      const cy = graphHeight / 2;
-      const radius = Math.min(cx, cy) - padding;
-      positions = circularLayout(n, cx, cy, radius);
-      break;
+
+  if (key === cachedLayoutKey && cachedNormPositions.length === n) {
+    // Reuse cached positions — just rescale to current dimensions/padding
+    positions = denormalizePositions(cachedNormPositions, graphWidth, graphHeight, padding);
+  } else {
+    // Compute fresh layout
+    const cyLayouts: CytoscapeLayoutName[] = ['concentric', 'fcose', 'dagre', 'cola', 'euler', 'avsdf'];
+    if (cyLayouts.includes(settings.layout as CytoscapeLayoutName)) {
+      positions = cytoscapeLayout(
+        settings.layout as CytoscapeLayoutName,
+        n, weights, graphWidth, graphHeight, padding, layoutSeed,
+      );
+    } else {
+      switch (settings.layout) {
+        case 'spring':
+          positions = springLayout(n, weights, graphWidth, graphHeight, padding, layoutSeed);
+          break;
+        case 'kamada_kawai':
+          positions = kamadaKawaiLayout(n, weights, graphWidth, graphHeight, padding);
+          break;
+        case 'spectral':
+          positions = spectralLayout(n, weights, graphWidth, graphHeight, padding, layoutSeed);
+          break;
+        case 'fruchterman_reingold':
+          positions = fruchtermanReingoldLayout(n, weights, graphWidth, graphHeight, padding, layoutSeed);
+          break;
+        case 'forceatlas2':
+          positions = forceAtlas2Layout(n, weights, graphWidth, graphHeight, padding, layoutSeed);
+          break;
+        case 'fr_shell':
+          positions = frShellLayout(n, weights, graphWidth, graphHeight, padding, layoutSeed);
+          break;
+        case 'circular':
+        default: {
+          const cx = graphWidth / 2;
+          const cy = graphHeight / 2;
+          const radius = Math.min(cx, cy) - padding;
+          positions = circularLayout(n, cx, cy, radius);
+          break;
+        }
+      }
+    }
+    // Cache the normalized positions for future visual-only updates
+    cachedNormPositions = normalizePositions(positions);
+    cachedLayoutKey = key;
+  }
+
+  // Apply spacing: scale positions from centroid
+  const spacing = settings.layoutSpacing ?? 1.0;
+  if (spacing !== 1.0 && n > 1) {
+    let cx = 0, cy = 0;
+    for (const p of positions) { cx += p.x; cy += p.y; }
+    cx /= n; cy /= n;
+    for (const p of positions) {
+      p.x = cx + (p.x - cx) * spacing;
+      p.y = cy + (p.y - cy) * spacing;
     }
   }
 
@@ -473,6 +1042,7 @@ function drawNetwork(
       color: customColor ?? NODE_COLORS[i % NODE_COLORS.length]!,
       x: positions[i]!.x,
       y: positions[i]!.y,
+      radius: nodeRadii ? nodeRadii[i]! : nodeRadius,
     };
   });
 
@@ -512,9 +1082,17 @@ function drawNetwork(
     }
   }
 
-  const rimWidth = nodeRadius * 0.18;
-  const rimRadius = nodeRadius + rimWidth * 0.7;
-  const outerRadius = rimRadius + rimWidth / 2 + Math.max(settings.pieBorderWidth, 0) / 2 + 1;
+  // Per-node geometry helpers (supports variable radii)
+  function nodeRimWidth(r: number) { return r * 0.18; }
+  function nodeRimRadius(r: number) { return r + nodeRimWidth(r) * 0.7; }
+  function nodeOuterRadius(r: number) {
+    const rw = nodeRimWidth(r);
+    return nodeRimRadius(r) + rw / 2 + Math.max(settings.pieBorderWidth, 0) / 2 + 1;
+  }
+  // Keep constants for self-loop/padding using the base nodeRadius
+  const rimWidth = nodeRimWidth(nodeRadius);
+  const rimRadius = nodeRimRadius(nodeRadius);
+  const outerRadius = nodeOuterRadius(nodeRadius);
 
   const maxW = Math.max(...edges.map(e => e.weight), 1e-6);
   const widthScale = d3.scaleLinear().domain([0, maxW]).range([settings.edgeWidthMin, settings.edgeWidthMax]);
@@ -544,92 +1122,104 @@ function drawNetwork(
     return null;
   }
 
-  // ─── Layer groups ───
+  // ─── Layer groups (order = z-order: edges → arrows → nodes → labels on top) ───
   const edgeGroup = rootGroup.append('g');
   const arrowGroup = rootGroup.append('g');
-  const edgeLabelGroup = rootGroup.append('g');
-  const nodeGroup = rootGroup.append('g');
   const selfLoopGroup = rootGroup.append('g');
   const selfLoopArrowGroup = rootGroup.append('g');
+  const nodeGroup = rootGroup.append('g');
+  const edgeLabelGroup = rootGroup.append('g');
   const selfLoopLabelGroup = rootGroup.append('g');
 
-  // ─── Self-loops ───
-  if (settings.showSelfLoops) {
-    const centX = nodes.reduce((s, nd) => s + nd.x, 0) / nodes.length;
-    const centY = nodes.reduce((s, nd) => s + nd.y, 0) / nodes.length;
-    for (let i = 0; i < n; i++) {
-      const w = weights.get(i, i);
-      if (w > 0 && w >= settings.edgeThreshold) {
-        renderSelfLoop(selfLoopGroup, selfLoopArrowGroup, selfLoopLabelGroup, nodes[i]!, w, settings, widthScale, opacityScale, centX, centY, outerRadius, getDashArray, isUndirected);
+  // ─── Reusable edge drawing (called on initial render + node drag) ───
+  function drawEdges() {
+    edgeGroup.selectAll('*').remove();
+    arrowGroup.selectAll('*').remove();
+    edgeLabelGroup.selectAll('*').remove();
+    selfLoopGroup.selectAll('*').remove();
+    selfLoopArrowGroup.selectAll('*').remove();
+    selfLoopLabelGroup.selectAll('*').remove();
+
+    // Self-loops
+    if (settings.showSelfLoops) {
+      const centX = nodes.reduce((s, nd) => s + nd.x, 0) / nodes.length;
+      const centY = nodes.reduce((s, nd) => s + nd.y, 0) / nodes.length;
+      for (let i = 0; i < n; i++) {
+        const w = weights.get(i, i);
+        if (w > 0 && w >= settings.edgeThreshold) {
+          renderSelfLoop(selfLoopGroup, selfLoopArrowGroup, selfLoopLabelGroup, nodes[i]!, w, settings, widthScale, opacityScale, centX, centY, nodeOuterRadius(nodes[i]!.radius), getDashArray, isUndirected, nodes[i]!.radius);
+        }
+      }
+    }
+
+    // Edges
+    for (const e of edges) {
+      const src = nodes[e.fromIdx]!;
+      const tgt = nodes[e.toIdx]!;
+      const isBidir = bidir.has(`${e.fromIdx}-${e.toIdx}`);
+      const curvature = isBidir ? settings.edgeCurvature : 0;
+      const effectiveArrow = isUndirected ? 0 : settings.arrowSize;
+      const { path, tipX, tipY, tipDx, tipDy, labelX, labelY } = computeEdgePath(
+        src.x, src.y, tgt.x, tgt.y, curvature, nodeOuterRadius(src.radius), nodeOuterRadius(tgt.radius), effectiveArrow,
+      );
+      if (!path) continue;
+
+      const op = opacityScale(e.weight);
+
+      const edgePath = edgeGroup.append('path')
+        .attr('d', path)
+        .attr('fill', 'none')
+        .attr('stroke', settings.edgeColor)
+        .attr('stroke-width', widthScale(e.weight))
+        .attr('stroke-opacity', op)
+        .attr('stroke-linecap', 'round');
+      const dash = getDashArray(e.weight);
+      if (dash) edgePath.attr('stroke-dasharray', dash);
+
+      if (enableTooltips) {
+        edgePath
+          .on('mouseover', function (event: MouseEvent) {
+            d3.select(this).attr('stroke', '#e15759').attr('stroke-opacity', 0.85);
+            const arrow = isUndirected ? '↔' : '→';
+            showTooltip(event, `<b>${src.id} ${arrow} ${tgt.id}</b><br>Weight: ${fmtWeight(e.weight)}`);
+          })
+          .on('mousemove', function (event: MouseEvent) {
+            const tt = document.getElementById('tooltip')!;
+            tt.style.left = event.clientX + 12 + 'px';
+            tt.style.top = event.clientY - 10 + 'px';
+          })
+          .on('mouseout', function () {
+            d3.select(this).attr('stroke', settings.edgeColor).attr('stroke-opacity', op);
+            hideTooltip();
+          });
+      }
+
+      if (!isUndirected) {
+        arrowGroup.append('polygon')
+          .attr('points', arrowPoly(tipX, tipY, tipDx, tipDy, settings.arrowSize))
+          .attr('fill', settings.arrowColor)
+          .attr('opacity', Math.min(op + 0.15, 1));
+      }
+
+      if (settings.showEdgeLabels) {
+        edgeLabelGroup.append('text')
+          .attr('x', labelX)
+          .attr('y', labelY)
+          .attr('text-anchor', 'middle')
+          .attr('dy', '0.3em')
+          .attr('font-size', `${settings.edgeLabelSize}px`)
+          .attr('fill', settings.edgeLabelColor)
+          .attr('pointer-events', 'none')
+          .style('paint-order', 'stroke')
+          .style('stroke', '#ffffff')
+          .style('stroke-width', '3px')
+          .style('stroke-linejoin', 'round')
+          .text(fmtWeight(e.weight));
       }
     }
   }
 
-  // ─── Edges ───
-  for (const e of edges) {
-    const src = nodes[e.fromIdx]!;
-    const tgt = nodes[e.toIdx]!;
-    const isBidir = bidir.has(`${e.fromIdx}-${e.toIdx}`);
-    const curvature = isBidir ? settings.edgeCurvature : 0;
-    const effectiveArrow = isUndirected ? 0 : settings.arrowSize;
-    const { path, tipX, tipY, tipDx, tipDy, labelX, labelY } = computeEdgePath(
-      src.x, src.y, tgt.x, tgt.y, curvature, outerRadius, effectiveArrow,
-    );
-    if (!path) continue;
-
-    const op = opacityScale(e.weight);
-
-    const edgePath = edgeGroup.append('path')
-      .attr('d', path)
-      .attr('fill', 'none')
-      .attr('stroke', settings.edgeColor)
-      .attr('stroke-width', widthScale(e.weight))
-      .attr('stroke-opacity', op)
-      .attr('stroke-linecap', 'round');
-    const dash = getDashArray(e.weight);
-    if (dash) edgePath.attr('stroke-dasharray', dash);
-
-    if (enableTooltips) {
-      edgePath
-        .on('mouseover', function (event: MouseEvent) {
-          d3.select(this).attr('stroke', '#e15759').attr('stroke-opacity', 0.85);
-          const arrow = isUndirected ? '↔' : '→';
-          showTooltip(event, `<b>${src.id} ${arrow} ${tgt.id}</b><br>Weight: ${fmtWeight(e.weight)}`);
-        })
-        .on('mousemove', function (event: MouseEvent) {
-          const tt = document.getElementById('tooltip')!;
-          tt.style.left = event.clientX + 12 + 'px';
-          tt.style.top = event.clientY - 10 + 'px';
-        })
-        .on('mouseout', function () {
-          d3.select(this).attr('stroke', settings.edgeColor).attr('stroke-opacity', op);
-          hideTooltip();
-        });
-    }
-
-    if (!isUndirected) {
-      arrowGroup.append('polygon')
-        .attr('points', arrowPoly(tipX, tipY, tipDx, tipDy, settings.arrowSize))
-        .attr('fill', settings.arrowColor)
-        .attr('opacity', Math.min(op + 0.15, 1));
-    }
-
-    if (settings.showEdgeLabels) {
-      edgeLabelGroup.append('text')
-        .attr('x', labelX)
-        .attr('y', labelY)
-        .attr('text-anchor', 'middle')
-        .attr('dy', '0.3em')
-        .attr('font-size', `${settings.edgeLabelSize}px`)
-        .attr('fill', settings.edgeLabelColor)
-        .attr('pointer-events', 'none')
-        .style('paint-order', 'stroke')
-        .style('stroke', '#ffffff')
-        .style('stroke-width', '3px')
-        .style('stroke-linejoin', 'round')
-        .text(fmtWeight(e.weight));
-    }
-  }
+  drawEdges();
 
   // ─── Nodes ───
   const nodeEnter = nodeGroup.selectAll('g.node')
@@ -641,54 +1231,55 @@ function drawNetwork(
 
   nodeEnter.append('circle')
     .attr('class', 'node-rim-bg')
-    .attr('r', rimRadius)
+    .attr('r', d => nodeRimRadius(d.radius))
     .attr('fill', 'none')
     .attr('stroke', '#e0e0e0')
-    .attr('stroke-width', rimWidth);
+    .attr('stroke-width', d => nodeRimWidth(d.radius));
 
   nodeEnter.append('path')
     .attr('class', 'node-rim-arc')
     .attr('fill', 'none')
     .attr('stroke', d => d.color)
-    .attr('stroke-width', rimWidth)
+    .attr('stroke-width', d => nodeRimWidth(d.radius))
     .attr('stroke-linecap', 'butt')
     .attr('d', d => {
+      const rr = nodeRimRadius(d.radius);
       const frac = model.inits[d.idx]!;
       if (frac <= 0) return '';
       if (frac >= 0.9999) {
         return [
-          `M 0 ${-rimRadius}`,
-          `A ${rimRadius} ${rimRadius} 0 1 1 0 ${rimRadius}`,
-          `A ${rimRadius} ${rimRadius} 0 1 1 0 ${-rimRadius}`,
+          `M 0 ${-rr}`,
+          `A ${rr} ${rr} 0 1 1 0 ${rr}`,
+          `A ${rr} ${rr} 0 1 1 0 ${-rr}`,
         ].join(' ');
       }
       const angle = frac * 2 * Math.PI;
       const startX = 0;
-      const startY = -rimRadius;
-      const endX = rimRadius * Math.sin(angle);
-      const endY = -rimRadius * Math.cos(angle);
+      const startY = -rr;
+      const endX = rr * Math.sin(angle);
+      const endY = -rr * Math.cos(angle);
       const largeArc = angle > Math.PI ? 1 : 0;
-      return `M ${startX} ${startY} A ${rimRadius} ${rimRadius} 0 ${largeArc} 1 ${endX} ${endY}`;
+      return `M ${startX} ${startY} A ${rr} ${rr} 0 ${largeArc} 1 ${endX} ${endY}`;
     });
 
   if (settings.pieBorderWidth > 0) {
     nodeEnter.append('circle')
       .attr('class', 'node-rim-border-outer')
-      .attr('r', rimRadius + rimWidth / 2)
+      .attr('r', d => { const rr = nodeRimRadius(d.radius); const rw = nodeRimWidth(d.radius); return rr + rw / 2; })
       .attr('fill', 'none')
       .attr('stroke', settings.pieBorderColor)
       .attr('stroke-width', settings.pieBorderWidth);
     nodeEnter.append('circle')
       .attr('class', 'node-rim-border-inner')
-      .attr('r', rimRadius - rimWidth / 2)
+      .attr('r', d => { const rr = nodeRimRadius(d.radius); const rw = nodeRimWidth(d.radius); return rr - rw / 2; })
       .attr('fill', 'none')
       .attr('stroke', settings.pieBorderColor)
       .attr('stroke-width', settings.pieBorderWidth);
   }
 
-  nodeEnter.append('circle')
+  nodeEnter.append('path')
     .attr('class', 'node-main')
-    .attr('r', nodeRadius)
+    .attr('d', d => shapePathD(settings.nodeShape, d.radius))
     .attr('fill', d => d.color)
     .attr('stroke', settings.nodeBorderColor)
     .attr('stroke-width', settings.nodeBorderWidth);
@@ -728,6 +1319,26 @@ function drawNetwork(
         hideTooltip();
       });
   }
+
+  // ─── Node drag ───
+  if (enableTooltips) {
+    const drag = d3.drag<SVGGElement, NodeDatum>()
+      .on('start', function () {
+        d3.select(this).raise().style('cursor', 'grabbing');
+        hideTooltip();
+      })
+      .on('drag', function (event, d) {
+        d.x = event.x;
+        d.y = event.y;
+        d3.select(this).attr('transform', `translate(${d.x},${d.y})`);
+        drawEdges();
+      })
+      .on('end', function () {
+        d3.select(this).style('cursor', null);
+      });
+    nodeEnter.call(drag);
+    nodeEnter.style('cursor', 'grab');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -735,7 +1346,7 @@ function drawNetwork(
 // ═══════════════════════════════════════════════════════════
 
 export function renderNetwork(
-  container: HTMLElement, model: TNA, settings: NetworkSettings, comm?: CommunityResult,
+  container: HTMLElement, model: TNA, settings: NetworkSettings, comm?: CommunityResult, centData?: CentralityResult,
 ) {
   const rect = container.getBoundingClientRect();
   const graphWidth = Math.max(rect.width, 400);
@@ -747,10 +1358,23 @@ export function renderNetwork(
     .attr('viewBox', `0 0 ${graphWidth} ${graphHeight}`)
     .attr('width', '100%')
     .attr('height', '100%')
-    .style('min-height', '300px');
+    .style('min-height', '300px')
+    .style('cursor', 'grab');
 
   const rootGroup = svg.append('g') as d3.Selection<SVGGElement, unknown, null, undefined>;
-  drawNetwork(rootGroup, model, settings, graphWidth, graphHeight, comm, true);
+  drawNetwork(rootGroup, model, settings, graphWidth, graphHeight, comm, true, centData);
+
+  // Pan & zoom
+  const zoom = d3.zoom<SVGSVGElement, unknown>()
+    .scaleExtent([0.2, 8])
+    .on('zoom', (event) => {
+      rootGroup.attr('transform', event.transform);
+    });
+  svg.call(zoom);
+  // Double-click resets zoom
+  svg.on('dblclick.zoom', () => {
+    svg.transition().duration(300).call(zoom.transform, d3.zoomIdentity);
+  });
 }
 
 /**
@@ -760,8 +1384,8 @@ export function renderNetwork(
  */
 export function renderNetworkIntoGroup(
   gEl: SVGGElement, model: TNA, settings: NetworkSettings,
-  width: number, height: number, comm?: CommunityResult,
+  width: number, height: number, comm?: CommunityResult, centData?: CentralityResult,
 ) {
   const g = d3.select(gEl) as d3.Selection<SVGGElement, unknown, null, undefined>;
-  drawNetwork(g, model, settings, width, height, comm, false);
+  drawNetwork(g, model, settings, width, height, comm, false, centData);
 }

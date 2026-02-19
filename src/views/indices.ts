@@ -6,6 +6,7 @@ import type { TNA } from 'tnaj';
 import { computeSequenceIndices, summarizeIndices } from '../analysis/indices';
 import type { SequenceIndex, IndicesSummary } from '../analysis/indices';
 import { addPanelDownloadButtons } from './export';
+import { fmtNum } from './network';
 import { createViewToggle } from './dashboard';
 
 const metricDefs: { key: keyof SequenceIndex; label: string }[] = [
@@ -188,11 +189,11 @@ export function renderIdxHistView(
         detailHtml += `<td>${idx.id + 1}</td>`;
         detailHtml += `<td>${idx.length}</td>`;
         detailHtml += `<td>${idx.nUniqueStates}</td>`;
-        detailHtml += `<td>${idx.entropy.toFixed(3)}</td>`;
-        detailHtml += `<td>${idx.normalizedEntropy.toFixed(3)}</td>`;
+        detailHtml += `<td>${fmtNum(idx.entropy, 3)}</td>`;
+        detailHtml += `<td>${fmtNum(idx.normalizedEntropy, 3)}</td>`;
         detailHtml += `<td>${idx.complexity}</td>`;
-        detailHtml += `<td>${idx.turbulence.toFixed(3)}</td>`;
-        detailHtml += `<td>${idx.selfLoopRate.toFixed(3)}</td>`;
+        detailHtml += `<td>${fmtNum(idx.turbulence, 3)}</td>`;
+        detailHtml += `<td>${fmtNum(idx.selfLoopRate, 3)}</td>`;
         detailHtml += '</tr>';
       }
       if (indices.length > maxShow) {
@@ -235,11 +236,11 @@ export function renderIdxSummaryView(
   for (const s of summaries) {
     summaryHtml += '<tr>';
     summaryHtml += `<td style="font-weight:600">${s.metric}</td>`;
-    summaryHtml += `<td>${s.mean.toFixed(3)}</td>`;
-    summaryHtml += `<td>${s.sd.toFixed(3)}</td>`;
-    summaryHtml += `<td>${s.median.toFixed(3)}</td>`;
-    summaryHtml += `<td>${s.min.toFixed(3)}</td>`;
-    summaryHtml += `<td>${s.max.toFixed(3)}</td>`;
+    summaryHtml += `<td>${fmtNum(s.mean, 3)}</td>`;
+    summaryHtml += `<td>${fmtNum(s.sd, 3)}</td>`;
+    summaryHtml += `<td>${fmtNum(s.median, 3)}</td>`;
+    summaryHtml += `<td>${fmtNum(s.min, 3)}</td>`;
+    summaryHtml += `<td>${fmtNum(s.max, 3)}</td>`;
     summaryHtml += '</tr>';
   }
   summaryHtml += '</tbody></table>';
@@ -260,11 +261,11 @@ function renderSummaryTable(tbl: HTMLElement, indices: SequenceIndex[], summarie
   for (const s of summaries) {
     summaryHtml += '<tr>';
     summaryHtml += `<td style="font-weight:600">${s.metric}</td>`;
-    summaryHtml += `<td>${s.mean.toFixed(3)}</td>`;
-    summaryHtml += `<td>${s.sd.toFixed(3)}</td>`;
-    summaryHtml += `<td>${s.median.toFixed(3)}</td>`;
-    summaryHtml += `<td>${s.min.toFixed(3)}</td>`;
-    summaryHtml += `<td>${s.max.toFixed(3)}</td>`;
+    summaryHtml += `<td>${fmtNum(s.mean, 3)}</td>`;
+    summaryHtml += `<td>${fmtNum(s.sd, 3)}</td>`;
+    summaryHtml += `<td>${fmtNum(s.median, 3)}</td>`;
+    summaryHtml += `<td>${fmtNum(s.min, 3)}</td>`;
+    summaryHtml += `<td>${fmtNum(s.max, 3)}</td>`;
     summaryHtml += '</tr>';
   }
   summaryHtml += '</tbody></table>';
@@ -290,11 +291,11 @@ function renderSummaryTable(tbl: HTMLElement, indices: SequenceIndex[], summarie
     detailHtml += `<td>${idx.id + 1}</td>`;
     detailHtml += `<td>${idx.length}</td>`;
     detailHtml += `<td>${idx.nUniqueStates}</td>`;
-    detailHtml += `<td>${idx.entropy.toFixed(3)}</td>`;
-    detailHtml += `<td>${idx.normalizedEntropy.toFixed(3)}</td>`;
+    detailHtml += `<td>${fmtNum(idx.entropy, 3)}</td>`;
+    detailHtml += `<td>${fmtNum(idx.normalizedEntropy, 3)}</td>`;
     detailHtml += `<td>${idx.complexity}</td>`;
-    detailHtml += `<td>${idx.turbulence.toFixed(3)}</td>`;
-    detailHtml += `<td>${idx.selfLoopRate.toFixed(3)}</td>`;
+    detailHtml += `<td>${fmtNum(idx.turbulence, 3)}</td>`;
+    detailHtml += `<td>${fmtNum(idx.selfLoopRate, 3)}</td>`;
     detailHtml += '</tr>';
   }
   if (indices.length > maxShow) {

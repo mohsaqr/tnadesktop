@@ -5,32 +5,35 @@ import type { TNA, GroupTNA, CentralityResult, CommunityResult, CentralityMeasur
 import { betweennessNetwork } from 'tnaj';
 import type { NetworkSettings } from '../main';
 import { state, render, saveState, buildModel, buildGroupModel, computeCentralities, computeCommunities, computeSummary, groupNetworkSettings, AVAILABLE_MEASURES, AVAILABLE_METHODS, prune } from '../main';
-import { renderNetwork, renderNetworkIntoGroup } from './network';
+import { renderNetwork, renderNetworkIntoGroup, fmtNum, clearLayoutCache } from './network';
 import { renderCentralityChart } from './centralities';
-import { renderFrequencies, renderWeightHistogram } from './frequencies';
+import { renderFrequencies, renderWeightHistogram, countStateFrequencies } from './frequencies';
 import { COMMUNITY_COLORS } from './colors';
 
 import { renderSequences, renderDistribution } from './sequences';
-import { showExportDialog, addPanelDownloadButtons } from './export';
-import { renderBetweennessTab } from './betweenness';
+import { showExportDialog, addPanelDownloadButtons, addTabExportBar } from './export';
+import { renderBetweennessNetwork, renderBetweennessTable } from './betweenness';
 import { renderCliquesTab } from './cliques';
 import { renderPermutationTab } from './permutation';
 import { renderCompareSequencesTab } from './compare-sequences';
 import { renderBootstrapTab, renderBootstrapResults } from './bootstrap';
 import { bootstrapTna } from '../analysis/bootstrap';
-import type { BootstrapOptions } from '../analysis/bootstrap';
+import type { BootstrapOptions, BootstrapResult } from '../analysis/bootstrap';
 import { renderPatternsTab } from './patterns';
 import { renderIndicesTab, renderIdxHistView, renderIdxSummaryView } from './indices';
 import { renderClusteringSetup, renderGroupSetup, renderGroupGrid, renderCombinedCanvas } from './clustering';
 import { renderMosaic, renderClusterMosaic, chiSquareTest } from './mosaic';
 import { renderCompareNetworksTab } from './compare-networks';
 import { estimateCS } from '../analysis/stability';
+import { computeGraphMetrics } from '../analysis/graph-metrics';
 import type { StabilityResult } from '../analysis/stability';
 import { NODE_COLORS } from './colors';
+
+const ALL_MEASURES: string[] = [...AVAILABLE_MEASURES, 'PageRank'];
 import { renderLoadPanel } from './load-data';
 import * as d3 from 'd3';
 
-type Mode = 'data' | 'single' | 'clustering' | 'group' | 'onehot' | 'group_onehot';
+type Mode = 'data' | 'single' | 'clustering' | 'group' | 'onehot' | 'group_onehot' | 'sna';
 
 interface SubTabDef { id: string; label: string }
 
@@ -85,6 +88,14 @@ const GROUP_ONEHOT_TABS: SubTabDef[] = [
   { id: 'compare-networks', label: 'Compare Networks' },
 ];
 
+const SNA_TABS: SubTabDef[] = [
+  { id: 'network', label: 'Network Graph' },
+  { id: 'summary', label: 'Network Summary' },
+  { id: 'centralities', label: 'Centrality Measures' },
+  { id: 'communities', label: 'Community Detection' },
+  { id: 'cliques', label: 'Network Cliques' },
+];
+
 // ─── Secondary tab definitions ───
 const SECONDARY_TABS: Record<string, { id: string; label: string }[]> = {
   frequencies: [
@@ -121,6 +132,10 @@ let cachedComms: Map<string, CommunityResult | undefined> = new Map();
 // ─── Bootstrap model caches (populated when bootstrap runs, for live network updates) ───
 let cachedBootModel: TNA | null = null;
 let cachedBootModels: Map<string, TNA> = new Map();
+let cachedBootResults: Map<string, BootstrapResult> = new Map();
+
+// ─── Visited tabs tracker (for export report) ───
+const visitedTabs = new Set<string>();
 
 // ─── Group-analysis caches (populated by clustering or column-group activation) ───
 let activeGroupModels: Map<string, TNA> = new Map();
@@ -179,6 +194,7 @@ function getSubTabs(): SubTabDef[] {
     case 'single': return SINGLE_TABS;
     case 'onehot': return ONEHOT_TABS;
     case 'group_onehot': return GROUP_ONEHOT_TABS;
+    case 'sna': return SNA_TABS;
     default: return GROUP_TABS;
   }
 }
@@ -190,7 +206,7 @@ export function updateSubTabStates() {
   if (!nav) return;
   nav.querySelectorAll('.top-nav-dropdown').forEach(dd => {
     const mode = dd.getAttribute('data-navmode');
-    if (mode === 'single' || mode === 'onehot') return; // single-model modes don't need group gating
+    if (mode === 'single' || mode === 'onehot' || mode === 'sna') return; // single-model modes don't need group gating
     dd.querySelectorAll('.nav-menu-item').forEach(item => {
       const btn = item as HTMLButtonElement;
       if (btn.dataset.subtab !== 'setup') {
@@ -215,7 +231,7 @@ function switchMode(newMode: Mode) {
     updateNavActive();
     renderDataView();
   } else {
-    if (newMode === 'single' || newMode === 'onehot') {
+    if (newMode === 'single' || newMode === 'onehot' || newMode === 'sna') {
       state.activeSubTab = 'network';
     } else {
       // clustering, group, group_onehot
@@ -244,13 +260,13 @@ function updateNetworkOnly() {
   const mode = state.activeMode;
   const sub = state.activeSubTab;
   const secId = state.activeSecondaryTab;
-  const isMulti = mode !== 'single' && mode !== 'onehot';
+  const isMulti = mode !== 'single' && mode !== 'onehot' && mode !== 'sna';
   const s = state.networkSettings;
 
-  // ── Single / One-hot Network tab ──
+  // ── Single / One-hot / SNA Network tab ──
   if (!isMulti && sub === 'network') {
     const el = document.getElementById('viz-network');
-    if (el) renderNetwork(el, cachedModel, s);
+    if (el) renderNetwork(el, cachedModel, s, undefined, cachedCent ?? undefined);
     return;
   }
 
@@ -280,16 +296,21 @@ function updateNetworkOnly() {
   // ── Communities tab ──
   if (sub === 'communities') {
     if (isMulti && isGroupAnalysisActive() && cachedModels.size > 0) {
-      const gs = groupNetworkSettings(s);
-      let i = 0;
-      for (const [groupName, model] of cachedModels) {
-        const el = document.getElementById(`viz-community-network-g${i}`);
-        if (el) renderNetwork(el, model, gs, cachedComms.get(groupName) ?? undefined);
-        i++;
+      const fns = (window as any).__commMultiFns;
+      if (fns && fns.getCurrentView() === 'combined') {
+        fns.renderCombinedView();
+      } else {
+        const gs = groupNetworkSettings(s);
+        let i = 0;
+        for (const [groupName, model] of cachedModels) {
+          const el = document.getElementById(`viz-community-network-g${i}`);
+          if (el) renderNetwork(el, model, gs, cachedComms.get(groupName) ?? undefined);
+          i++;
+        }
       }
     } else if (!isMulti) {
       const el = document.getElementById('viz-community-network');
-      if (el) renderNetwork(el, cachedModel, s, cachedComm ?? undefined);
+      if (el) renderNetwork(el, cachedModel, s, cachedComm ?? undefined, cachedCent ?? undefined);
     }
     return;
   }
@@ -301,15 +322,33 @@ function updateNetworkOnly() {
       const el = document.getElementById('viz-boot-network');
       if (el) renderNetwork(el, cachedBootModel, bootSettings);
     } else if (isMulti && cachedBootModels.size > 0) {
-      const gs = { ...groupNetworkSettings(s), edgeThreshold: 0 };
-      let k = 0;
-      for (const [groupName] of cachedModels) {
-        const bm = cachedBootModels.get(groupName);
-        if (bm) {
-          const el = document.getElementById(`viz-boot-network-g${k}`);
-          if (el) renderNetwork(el, bm, gs);
+      const fns = (window as any).__bootMultiFns;
+      if (fns && fns.getCurrentView() === 'combined') {
+        // Re-render combined canvas with current settings
+        fns.renderBootCombinedView();
+      } else {
+        // Card view: re-render individual networks
+        const gs = { ...groupNetworkSettings(s), edgeThreshold: 0 };
+        let k = 0;
+        for (const [groupName] of cachedModels) {
+          const bm = cachedBootModels.get(groupName);
+          if (bm) {
+            const el = document.getElementById(`viz-boot-network-g${k}`);
+            if (el) renderNetwork(el, bm, gs);
+          }
+          k++;
         }
-        k++;
+      }
+    }
+    return;
+  }
+
+  // ── Cliques tab ──
+  if (sub === 'cliques') {
+    const clqFns = (window as any).__clqRenderFns;
+    if (clqFns) {
+      for (const fn of Object.values(clqFns)) {
+        if (typeof fn === 'function') (fn as (s: NetworkSettings) => void)(s);
       }
     }
     return;
@@ -365,15 +404,21 @@ export function renderDashboard(container: HTMLElement) {
 
   const s = state.networkSettings;
   const isOnehotMode = state.activeMode === 'onehot' || state.activeMode === 'group_onehot';
+  const isSnaMode = state.activeMode === 'sna';
+  const disableModelType = isOnehotMode || isSnaMode;
+  const modelTypeTitle = isSnaMode ? 'Model type is determined by directed/undirected setting' : (isOnehotMode ? 'Locked to CTNA for one-hot data' : '');
 
   sidebar.innerHTML = `
     <button class="sidebar-toggle" id="sidebar-toggle" title="Collapse sidebar">&#9664;</button>
     <div class="sidebar-content" id="sidebar-content">
+    <div class="section-title">Summary</div>
+    <div class="summary-card" id="model-summary"></div>
+
     <div class="section-title">Controls</div>
 
-    <div class="control-group" id="model-type-wrap">
+    <div class="control-group" id="model-type-wrap" ${isSnaMode ? 'style="display:none"' : ''}>
       <label>Model Type</label>
-      <select id="model-type" ${isOnehotMode ? 'disabled title="Locked to CTNA for one-hot data"' : ''}>
+      <select id="model-type" ${disableModelType ? `disabled title="${modelTypeTitle}"` : ''}>
         <option value="tna" ${state.modelType === 'tna' ? 'selected' : ''}>TNA (Relative)</option>
         <option value="ftna" ${state.modelType === 'ftna' ? 'selected' : ''}>FTNA (Frequency)</option>
         <option value="ctna" ${state.modelType === 'ctna' ? 'selected' : ''}>CTNA (Co-occurrence)</option>
@@ -391,7 +436,7 @@ export function renderDashboard(container: HTMLElement) {
       </select>
     </div>
 
-    <div class="control-group" id="atna-beta-wrap" style="display:${state.modelType === 'atna' ? 'block' : 'none'}">
+    <div class="control-group" id="atna-beta-wrap" style="display:${state.modelType === 'atna' && !isSnaMode ? 'block' : 'none'}">
       <label>ATNA Beta (decay)</label>
       <div class="slider-row">
         <input type="range" id="atna-beta" min="0.01" max="2.0" step="0.01" value="${state.atnaBeta}">
@@ -414,9 +459,9 @@ export function renderDashboard(container: HTMLElement) {
     </div>
 
     <!-- Network Appearance (collapsible) -->
-    <div class="collapsible-section collapsed" id="section-appearance">
+    <div class="collapsible-section" id="section-appearance">
       <div class="section-header" data-section="section-appearance">
-        <span class="chevron">&#9656;</span> Network Appearance
+        <span class="chevron">&#9662;</span> Network Appearance
       </div>
       <div class="section-body">
 
@@ -427,10 +472,35 @@ export function renderDashboard(container: HTMLElement) {
             <label>Algorithm</label>
             <select id="ns-layout">
               <option value="circular" ${s.layout === 'circular' ? 'selected' : ''}>Circular</option>
-              <option value="spring" ${s.layout === 'spring' ? 'selected' : ''}>Spring (Force)</option>
+              <option value="concentric" ${s.layout === 'concentric' ? 'selected' : ''}>Concentric</option>
+              <option value="fruchterman_reingold" ${s.layout === 'fruchterman_reingold' ? 'selected' : ''}>Fruchterman-Reingold</option>
+              <option value="forceatlas2" ${s.layout === 'forceatlas2' ? 'selected' : ''}>ForceAtlas2</option>
+              <option value="fr_shell" ${s.layout === 'fr_shell' ? 'selected' : ''}>FR + Shell</option>
+              <option value="fcose" ${s.layout === 'fcose' ? 'selected' : ''}>fCoSE</option>
+              <option value="spring" ${s.layout === 'spring' ? 'selected' : ''}>Spring (D3 Force)</option>
               <option value="kamada_kawai" ${s.layout === 'kamada_kawai' ? 'selected' : ''}>Kamada-Kawai</option>
+              <option value="dagre" ${s.layout === 'dagre' ? 'selected' : ''}>Dagre (Hierarchical)</option>
+
+              <option value="cola" ${s.layout === 'cola' ? 'selected' : ''}>Cola (Constraint)</option>
+              <option value="euler" ${s.layout === 'euler' ? 'selected' : ''}>Euler (Force)</option>
+              <option value="avsdf" ${s.layout === 'avsdf' ? 'selected' : ''}>AVSDF (Circular)</option>
               <option value="spectral" ${s.layout === 'spectral' ? 'selected' : ''}>Spectral</option>
             </select>
+          </div>
+          <div class="control-group">
+            <label>Seed</label>
+            <div style="display:flex;align-items:center;gap:6px">
+              <input type="number" id="ns-layoutSeed" min="0" max="99999" step="1" value="${s.layoutSeed}" style="width:70px;font-size:11px;padding:2px 4px">
+              <button id="ns-randomize-seed" class="btn-primary" style="font-size:10px;padding:3px 8px">Randomize</button>
+              <button id="ns-reset-layout" style="font-size:10px;padding:3px 8px;cursor:pointer;border:1px solid var(--border);border-radius:4px;background:#f5f5f5;color:var(--text-muted)">Reset</button>
+            </div>
+          </div>
+          <div class="control-group">
+            <label>Node Spacing</label>
+            <div class="slider-row">
+              <input type="range" id="ns-layoutSpacing" min="0.3" max="3.0" step="0.05" value="${s.layoutSpacing}">
+              <span class="slider-value" id="ns-layoutSpacing-val">${s.layoutSpacing.toFixed(2)}</span>
+            </div>
           </div>
           <div class="control-group">
             <label>Graph Padding</label>
@@ -451,11 +521,33 @@ export function renderDashboard(container: HTMLElement) {
         <!-- Nodes sub-section -->
         <div class="sub-section">
           <div class="sub-section-title">Nodes</div>
-          <div class="control-group">
+          <div class="control-group" id="ns-nodeRadius-wrap" ${s.nodeSizeBy ? 'style="display:none"' : ''}>
             <label>Radius</label>
             <div class="slider-row">
               <input type="range" id="ns-nodeRadius" min="6" max="100" step="1" value="${s.nodeRadius}">
               <span class="slider-value" id="ns-nodeRadius-val">${s.nodeRadius}</span>
+            </div>
+          </div>
+          <div class="control-group">
+            <label>Size by</label>
+            <select id="ns-nodeSizeBy">
+              <option value="" ${!s.nodeSizeBy ? 'selected' : ''}>None (uniform)</option>
+            </select>
+          </div>
+          <div id="ns-nodeSizeRange-wrap" ${!s.nodeSizeBy ? 'style="display:none"' : ''}>
+            <div class="control-group">
+              <label>Min Radius</label>
+              <div class="slider-row">
+                <input type="range" id="ns-nodeSizeMin" min="3" max="40" step="1" value="${s.nodeSizeMin}">
+                <span class="slider-value" id="ns-nodeSizeMin-val">${s.nodeSizeMin}</span>
+              </div>
+            </div>
+            <div class="control-group">
+              <label>Max Radius</label>
+              <div class="slider-row">
+                <input type="range" id="ns-nodeSizeMax" min="10" max="80" step="1" value="${s.nodeSizeMax}">
+                <span class="slider-value" id="ns-nodeSizeMax-val">${s.nodeSizeMax}</span>
+              </div>
             </div>
           </div>
           <div class="control-group">
@@ -528,6 +620,16 @@ export function renderDashboard(container: HTMLElement) {
               <label>Pie Border Color</label>
               <input type="color" id="ns-pieBorderColor" value="${s.pieBorderColor}">
             </div>
+          </div>
+          <div class="control-group">
+            <label>Shape</label>
+            <select id="ns-nodeShape">
+              <option value="circle" ${s.nodeShape === 'circle' ? 'selected' : ''}>Circle</option>
+              <option value="square" ${s.nodeShape === 'square' ? 'selected' : ''}>Square</option>
+              <option value="diamond" ${s.nodeShape === 'diamond' ? 'selected' : ''}>Diamond</option>
+              <option value="triangle" ${s.nodeShape === 'triangle' ? 'selected' : ''}>Triangle</option>
+              <option value="hexagon" ${s.nodeShape === 'hexagon' ? 'selected' : ''}>Hexagon</option>
+            </select>
           </div>
         </div>
 
@@ -648,8 +750,6 @@ export function renderDashboard(container: HTMLElement) {
       </div>
     </div>
 
-    <div class="section-title">Model Summary</div>
-    <div class="summary-card" id="model-summary"></div>
     </div>
   `;
   dashboard.appendChild(sidebar);
@@ -737,6 +837,16 @@ export function renderDashboard(container: HTMLElement) {
 
   // ─── Network appearance events ───
   wireSlider('ns-graphPadding', 'graphPadding', parseFloat);
+  // Node spacing slider (show 2 decimal places)
+  const spacingSlider = document.getElementById('ns-layoutSpacing') as HTMLInputElement | null;
+  if (spacingSlider) {
+    spacingSlider.addEventListener('input', () => {
+      state.networkSettings.layoutSpacing = parseFloat(spacingSlider.value);
+      const valEl = document.getElementById('ns-layoutSpacing-val');
+      if (valEl) valEl.textContent = parseFloat(spacingSlider.value).toFixed(2);
+      debouncedNetworkUpdate();
+    });
+  }
   wireSlider('ns-nodeRadius', 'nodeRadius', parseFloat);
   wireSlider('ns-nodeBorderWidth', 'nodeBorderWidth', parseFloat);
   wireSlider('ns-nodeLabelSize', 'nodeLabelSize', parseFloat);
@@ -786,8 +896,54 @@ export function renderDashboard(container: HTMLElement) {
 
   document.getElementById('ns-layout')!.addEventListener('change', (e) => {
     state.networkSettings.layout = (e.target as HTMLSelectElement).value as NetworkSettings['layout'];
+    clearLayoutCache();
     debouncedNetworkUpdate();
   });
+
+  // Layout seed
+  const seedInput = document.getElementById('ns-layoutSeed') as HTMLInputElement | null;
+  if (seedInput) {
+    seedInput.addEventListener('change', () => {
+      state.networkSettings.layoutSeed = parseInt(seedInput.value) || 42;
+      clearLayoutCache();
+      debouncedNetworkUpdate();
+    });
+  }
+  document.getElementById('ns-randomize-seed')?.addEventListener('click', () => {
+    const newSeed = Math.floor(Math.random() * 100000);
+    state.networkSettings.layoutSeed = newSeed;
+    if (seedInput) seedInput.value = String(newSeed);
+    clearLayoutCache();
+    debouncedNetworkUpdate();
+  });
+  document.getElementById('ns-reset-layout')?.addEventListener('click', () => {
+    clearLayoutCache();
+    debouncedNetworkUpdate();
+  });
+
+  // Node size by centrality
+  const nodeSizeBySelect = document.getElementById('ns-nodeSizeBy') as HTMLSelectElement | null;
+  if (nodeSizeBySelect) {
+    nodeSizeBySelect.addEventListener('change', () => {
+      state.networkSettings.nodeSizeBy = nodeSizeBySelect.value;
+      const rangeWrap = document.getElementById('ns-nodeSizeRange-wrap');
+      const radiusWrap = document.getElementById('ns-nodeRadius-wrap');
+      if (rangeWrap) rangeWrap.style.display = nodeSizeBySelect.value ? '' : 'none';
+      if (radiusWrap) radiusWrap.style.display = nodeSizeBySelect.value ? 'none' : '';
+      debouncedNetworkUpdate();
+    });
+  }
+  wireSlider('ns-nodeSizeMin', 'nodeSizeMin', parseFloat);
+  wireSlider('ns-nodeSizeMax', 'nodeSizeMax', parseFloat);
+
+  // Node shape
+  const nodeShapeSelect = document.getElementById('ns-nodeShape') as HTMLSelectElement | null;
+  if (nodeShapeSelect) {
+    nodeShapeSelect.addEventListener('change', () => {
+      state.networkSettings.nodeShape = nodeShapeSelect.value as NetworkSettings['nodeShape'];
+      debouncedNetworkUpdate();
+    });
+  }
 
   document.getElementById('reset-node-colors')!.addEventListener('click', () => {
     state.networkSettings.nodeColors = {};
@@ -806,6 +962,22 @@ export function renderDashboard(container: HTMLElement) {
 }
 
 // ─── Wiring helpers ───
+function populateNodeSizeByDropdown(cent: CentralityResult | null) {
+  const sel = document.getElementById('ns-nodeSizeBy') as HTMLSelectElement | null;
+  if (!sel) return;
+  const current = state.networkSettings.nodeSizeBy;
+  sel.innerHTML = '<option value="">None (uniform)</option>';
+  if (cent) {
+    for (const key of Object.keys(cent.measures)) {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = key;
+      if (key === current) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  }
+}
+
 function wireSlider(id: string, prop: keyof NetworkSettings, parse: (v: string) => number) {
   const el = document.getElementById(id) as HTMLInputElement | null;
   if (!el) return;
@@ -901,6 +1073,15 @@ function buildTopNav(nav: HTMLElement) {
   items.appendChild(buildNavDropdown('onehot', 'One-Hot', ONEHOT_TABS, !hasData || !isOnehotData));
   items.appendChild(buildNavDropdown('group_onehot', 'Group One-Hot', GROUP_ONEHOT_TABS, !hasData || state.format !== 'group_onehot' || !hasGroups));
 
+  // Separator before SNA mode
+  const sep3 = document.createElement('span');
+  sep3.className = 'top-nav-sep';
+  items.appendChild(sep3);
+
+  // SNA (edge list / generated network)
+  const isSnaData = state.format === 'edgelist';
+  items.appendChild(buildNavDropdown('sna', 'SNA', SNA_TABS, !isSnaData));
+
   nav.appendChild(items);
 
   const right = document.createElement('div');
@@ -941,7 +1122,7 @@ function buildNavDropdown(mode: string, label: string, tabs: SubTabDef[], disabl
     item.textContent = tab.label;
     item.dataset.subtab = tab.id;
     if (state.activeMode === mode && state.activeSubTab === tab.id) item.classList.add('active');
-    if (mode !== 'single' && mode !== 'onehot' && tab.id !== 'setup' && !groupsActive) {
+    if (mode !== 'single' && mode !== 'onehot' && mode !== 'sna' && tab.id !== 'setup' && !groupsActive) {
       item.disabled = true;
     }
     menu.appendChild(item);
@@ -971,13 +1152,16 @@ function wireNavEvents() {
     trigger.addEventListener('click', (e) => {
       e.stopPropagation();
       if (trigger.disabled) {
-        // When disabled one-hot/group-onehot dropdown is clicked, navigate to data mode
+        // When disabled dropdown is clicked, navigate to data mode
         // with the format pre-selected so the user can load appropriate data
         if (ddMode === 'onehot') {
           state.format = 'onehot';
           switchMode('data');
         } else if (ddMode === 'group_onehot') {
           state.format = 'group_onehot';
+          switchMode('data');
+        } else if (ddMode === 'sna') {
+          state.format = 'edgelist';
           switchMode('data');
         }
         return;
@@ -1061,21 +1245,25 @@ function updateNavActive() {
   const hasData = !!state.sequenceData;
   const hasGroups = !!state.groupLabels;
   const isOnehotData = state.format === 'onehot' || state.format === 'group_onehot';
+  const isSnaData = state.format === 'edgelist';
   nav.querySelectorAll('.top-nav-dropdown').forEach(dd => {
     const mode = dd.getAttribute('data-navmode');
     const trigger = dd.querySelector('.top-nav-btn') as HTMLButtonElement;
     if (mode === 'single') {
-      trigger.disabled = !hasData || isOnehotData;
+      trigger.disabled = !hasData || isOnehotData || isSnaData;
     } else if (mode === 'clustering') {
-      trigger.disabled = !hasData || isOnehotData;
+      trigger.disabled = !hasData || isOnehotData || isSnaData;
     } else if (mode === 'group') {
-      trigger.disabled = !hasData || !hasGroups || isOnehotData;
+      trigger.disabled = !hasData || !hasGroups || isOnehotData || isSnaData;
     } else if (mode === 'onehot') {
       trigger.disabled = !hasData || !isOnehotData;
       trigger.title = trigger.disabled ? 'Load one-hot encoded data to analyze co-occurrence networks' : '';
     } else if (mode === 'group_onehot') {
       trigger.disabled = !hasData || state.format !== 'group_onehot' || !hasGroups;
       trigger.title = trigger.disabled ? 'Load group one-hot data for group co-occurrence analysis' : '';
+    } else if (mode === 'sna') {
+      trigger.disabled = !isSnaData;
+      trigger.title = trigger.disabled ? 'Load edge list data or generate a network for SNA' : '';
     }
   });
   const exportBtn = document.getElementById('export-btn') as HTMLButtonElement;
@@ -1102,6 +1290,7 @@ function updateAll() {
     cachedFullModel = model;
     cachedModel = model;
     cachedCent = computeCentralities(model);
+    populateNodeSizeByDropdown(cachedCent);
     cachedComm = undefined; // communities are computed on-demand in the tab
 
     // Hide group dropdown — no longer used in sidebar
@@ -1116,6 +1305,10 @@ function updateAll() {
     // Clear bootstrap model caches (will be repopulated when bootstrap is re-run)
     cachedBootModel = null;
     cachedBootModels.clear();
+    cachedBootResults.clear();
+
+    // Reset visited tabs tracker
+    visitedTabs.clear();
 
     // If group analysis is active, rebuild group models with current settings
     if (isGroupAnalysisActive() && activeGroupLabels) {
@@ -1145,9 +1338,9 @@ function updateAll() {
         groupSummary,
         row('States', s.nStates),
         row('Edges', s.nEdges),
-        row('Density', (s.density as number).toFixed(3)),
-        row('Mean Wt', (s.meanWeight as number).toFixed(4)),
-        row('Max Wt', (s.maxWeight as number).toFixed(4)),
+        row('Density', fmtNum(s.density as number, 3)),
+        row('Mean Wt', fmtNum(s.meanWeight as number)),
+        row('Max Wt', fmtNum(s.maxWeight as number)),
         row('Self-loops', s.hasSelfLoops ? 'Yes' : 'No'),
       ].join('');
     }
@@ -1167,6 +1360,79 @@ function updateAll() {
         <button class="dismiss" onclick="this.parentElement.remove()">×</button></div>`;
     }
   }
+}
+
+/**
+ * Cycle through tabs, render each, and capture panels as images.
+ * @param onlyVisited  If true, only capture tabs the user has already viewed.
+ * @param onProgress   Optional callback with (current, total) for progress UI.
+ */
+export async function captureAllTabs(
+  onlyVisited = false,
+  onProgress?: (current: number, total: number) => void,
+): Promise<{ section: string; title: string; dataUrl: string }[]> {
+  const html2canvas = (await import('html2canvas')).default;
+  const results: { section: string; title: string; dataUrl: string }[] = [];
+
+  const savedSubTab = state.activeSubTab;
+  const savedSecTab = state.activeSecondaryTab;
+
+  const tabs = getSubTabs().filter(t => t.id !== 'setup');
+
+  // Build list of (tab, sec) pairs to visit
+  const pairs: { tab: SubTabDef; sec: { id: string; label: string } }[] = [];
+  for (const tab of tabs) {
+    const secDefs = SECONDARY_TABS[tab.id];
+    const secList = secDefs || [{ id: '_none', label: '' }];
+    for (const sec of secList) {
+      const key = secDefs ? `${tab.id}:${sec.id}` : tab.id;
+      if (onlyVisited && !visitedTabs.has(key)) continue;
+      pairs.push({ tab, sec });
+    }
+  }
+
+  for (let pi = 0; pi < pairs.length; pi++) {
+    const { tab, sec } = pairs[pi]!;
+    const secDefs = SECONDARY_TABS[tab.id];
+
+    if (onProgress) onProgress(pi + 1, pairs.length);
+
+    state.activeSubTab = tab.id;
+    if (secDefs) state.activeSecondaryTab = sec.id;
+
+    updateTabContent();
+    // Wait for requestAnimationFrame callbacks + D3 rendering to complete
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 500))));
+
+    const tabContent = document.getElementById('tab-content');
+    if (!tabContent) continue;
+
+    const sectionLabel = secDefs && sec.label ? `${tab.label} — ${sec.label}` : tab.label;
+
+    const panels = tabContent.querySelectorAll('.panel');
+    for (const panel of panels) {
+      const el = panel as HTMLElement;
+      // Skip panels that are just toggle bars or controls (no visual content)
+      const hasVisual = el.querySelector('svg, canvas, table, img');
+      const titleEl = el.querySelector('.panel-title');
+      const title = titleEl ? (titleEl as HTMLElement).innerText.replace(/SVG|PNG|CSV/g, '').trim() : '';
+      if (!hasVisual && !title) continue;
+      if (!hasVisual) continue;
+
+      try {
+        const canvas = await html2canvas(el, { backgroundColor: '#fff', scale: 1.5 });
+        results.push({ section: sectionLabel, title, dataUrl: canvas.toDataURL('image/jpeg', 0.85) });
+      } catch {
+        // skip panels that fail to capture
+      }
+    }
+  }
+
+  state.activeSubTab = savedSubTab;
+  state.activeSecondaryTab = savedSecTab;
+  updateTabContent();
+
+  return results;
 }
 
 export function updateTabContent(model?: any, cent?: any, comm?: any) {
@@ -1189,12 +1455,28 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
   }
 
   content.innerHTML = '';
+  // Clear stale clique render references when switching tabs
+  (window as any).__clqRenderFns = {};
 
   const mode = state.activeMode;
+
+  // Fallback: if activeSubTab is not in the current tab list, reset to 'network'
+  const validTabs = getSubTabs();
+  if (!validTabs.find(t => t.id === state.activeSubTab)) {
+    state.activeSubTab = 'network';
+  }
   const sub = state.activeSubTab;
 
+  // Track visited tabs for export report
+  const secDefs0 = SECONDARY_TABS[sub];
+  if (secDefs0) {
+    visitedTabs.add(`${sub}:${state.activeSecondaryTab || secDefs0[0]!.id}`);
+  } else {
+    visitedTabs.add(sub);
+  }
+
   // Populate cachedModels/cachedCents from active group data for downstream multi-group tabs
-  if (mode !== 'single' && mode !== 'onehot') {
+  if (mode !== 'single' && mode !== 'onehot' && mode !== 'sna') {
     const groupActive = isGroupAnalysisActive();
     if (groupActive && sub !== 'setup') {
       cachedModels = new Map(activeGroupModels);
@@ -1209,14 +1491,43 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
   tabWrapper.style.margin = '0 auto';
   content.appendChild(tabWrapper);
 
+  // Per-tab HTML/PDF export bar (skip setup tab)
+  if (sub !== 'setup') {
+    const tabDef = getSubTabs().find(t => t.id === sub);
+    const tabLabel = tabDef ? tabDef.label : sub;
+    addTabExportBar(tabWrapper, tabLabel);
+  }
+
   // Check if this subtab has secondary tabs
-  const secDefs = SECONDARY_TABS[sub];
+  // SNA mode only supports centralities secondary tabs (no sequence/frequency data)
+  const secDefs = (mode === 'sna' && sub !== 'centralities') ? undefined : SECONDARY_TABS[sub];
   if (secDefs) {
     // Validate/default activeSecondaryTab
     if (!secDefs.find(d => d.id === state.activeSecondaryTab)) {
       state.activeSecondaryTab = secDefs[0]!.id;
     }
     renderSecondaryTabBar(tabWrapper, secDefs);
+
+    // Add Measures filter to the centralities secondary tab bar
+    if (sub === 'centralities') {
+      const bar = document.getElementById('secondary-tab-bar');
+      if (bar) {
+        const isMulti = mode !== 'single' && mode !== 'onehot' && mode !== 'sna';
+        createMeasureFilterBar(bar, () => {
+          if (isMulti) {
+            for (const [groupName, m] of cachedModels) {
+              cachedCents.set(groupName, computeCentralities(m));
+            }
+          } else if (cachedModel) {
+            cachedCent = computeCentralities(cachedModel);
+            populateNodeSizeByDropdown(cachedCent);
+          }
+          const contentEl = document.getElementById('secondary-tab-content');
+          if (contentEl) { contentEl.innerHTML = ''; renderSecondaryContent(contentEl); }
+        });
+      }
+    }
+
     const secContent = document.createElement('div');
     secContent.id = 'secondary-tab-content';
     tabWrapper.appendChild(secContent);
@@ -1226,10 +1537,15 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
   }
 
   // Tabs without secondary tabs
-  if (mode === 'single' || mode === 'onehot') {
+  if (mode === 'single' || mode === 'onehot' || mode === 'sna') {
     switch (sub) {
       case 'network':
         renderNetworkTab(tabWrapper, model);
+        break;
+      case 'summary':
+        renderSnaSummaryTab(tabWrapper, model);
+        break;
+      case 'centralities':
         break;
       case 'communities':
         renderCommunitiesTab(tabWrapper, model, comm);
@@ -1296,34 +1612,47 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
  * @param idPrefix - Unique prefix for element IDs
  * @returns The figure and table container elements
  */
+/** Returns 'table' for SNA mode (analysis tabs prefer table-first), 'figure' otherwise. */
+function defaultViewForMode(): 'figure' | 'table' {
+  return state.activeMode === 'sna' ? 'table' : 'figure';
+}
+
 export function createViewToggle(
   parent: HTMLElement,
   renderFigure: (container: HTMLElement) => void,
   renderTable: (container: HTMLElement) => void,
   idPrefix: string,
+  defaultView?: 'figure' | 'table',
 ): { figureContainer: HTMLElement; tableContainer: HTMLElement } {
+  const startTable = defaultView === 'table';
   const bar = document.createElement('div');
   bar.className = 'panel';
   bar.style.padding = '8px 16px';
   bar.innerHTML = `
     <div class="view-toggle">
-      <button class="toggle-btn active" id="${idPrefix}-toggle-figure">Figure</button>
-      <button class="toggle-btn" id="${idPrefix}-toggle-table">Table</button>
+      <button class="toggle-btn ${startTable ? '' : 'active'}" id="${idPrefix}-toggle-figure">Figure</button>
+      <button class="toggle-btn ${startTable ? 'active' : ''}" id="${idPrefix}-toggle-table">Table</button>
     </div>
   `;
   parent.appendChild(bar);
 
   const figureContainer = document.createElement('div');
   figureContainer.id = `${idPrefix}-figure`;
+  if (startTable) figureContainer.style.display = 'none';
   parent.appendChild(figureContainer);
 
   const tableContainer = document.createElement('div');
   tableContainer.id = `${idPrefix}-table`;
-  tableContainer.style.display = 'none';
+  if (!startTable) tableContainer.style.display = 'none';
   parent.appendChild(tableContainer);
 
-  // Render figure immediately
-  renderFigure(figureContainer);
+  // Render the default view immediately
+  if (startTable) {
+    tableContainer.dataset.rendered = '1';
+    renderTable(tableContainer);
+  } else {
+    renderFigure(figureContainer);
+  }
 
   // Wire toggle events
   setTimeout(() => {
@@ -1332,6 +1661,11 @@ export function createViewToggle(
       document.getElementById(`${idPrefix}-toggle-table`)!.classList.remove('active');
       figureContainer.style.display = '';
       tableContainer.style.display = 'none';
+      // Lazy-render figure if it was not the default
+      if (!figureContainer.dataset.rendered) {
+        figureContainer.dataset.rendered = '1';
+        renderFigure(figureContainer);
+      }
     });
     document.getElementById(`${idPrefix}-toggle-table`)?.addEventListener('click', () => {
       document.getElementById(`${idPrefix}-toggle-table`)!.classList.add('active');
@@ -1392,7 +1726,7 @@ function renderSecondaryContent(container: HTMLElement) {
   const mode = state.activeMode;
   const sub = state.activeSubTab;
   const secId = state.activeSecondaryTab;
-  const isMulti = mode !== 'single' && mode !== 'onehot';
+  const isMulti = mode !== 'single' && mode !== 'onehot' && mode !== 'sna';
 
   if (sub === 'frequencies') {
     if (isMulti) {
@@ -1457,25 +1791,7 @@ function renderSecondaryContent(container: HTMLElement) {
 function updateSidebarAppearance() {
   const section = document.getElementById('section-appearance');
   if (!section) return;
-
-  const sub = state.activeSubTab;
-  const secId = state.activeSecondaryTab;
-
-  // Always show for these tabs
-  const alwaysShow = ['network', 'communities', 'cliques', 'bootstrap'];
-  if (alwaysShow.includes(sub)) {
-    section.style.display = '';
-    return;
-  }
-
-  // Centralities betweenness secondary tab shows network
-  if (sub === 'centralities' && secId === 'betweenness') {
-    section.style.display = '';
-    return;
-  }
-
-  // Hide for everything else
-  section.style.display = 'none';
+  section.style.display = '';
 }
 
 /** Build a transition matrix HTML table from a TNA model. */
@@ -1494,7 +1810,7 @@ function buildTransitionMatrixTable(model: TNA, idSuffix = ''): HTMLElement {
     html += `<tr><td style="font-weight:600">${labels[i]}</td>`;
     for (let j = 0; j < n; j++) {
       const w = model.weights.get(i, j);
-      html += `<td>${w > 0 ? w.toFixed(4) : ''}</td>`;
+      html += `<td>${w > 0 ? fmtNum(w) : ''}</td>`;
     }
     html += '</tr>';
   }
@@ -1522,7 +1838,7 @@ function buildLongTransitionTable(models: Map<string, TNA>): HTMLElement {
       for (let j = 0; j < n; j++) {
         const w = model.weights.get(i, j);
         if (w > 0) {
-          html += `<tr><td>${groupName}</td><td>${labels[i]}</td><td>${labels[j]}</td><td>${w.toFixed(4)}</td></tr>`;
+          html += `<tr><td>${groupName}</td><td>${labels[i]}</td><td>${labels[j]}</td><td>${fmtNum(w)}</td></tr>`;
         }
       }
     }
@@ -1553,11 +1869,70 @@ function renderNetworkTab(content: HTMLElement, model: any) {
       });
       requestAnimationFrame(() => {
         const el = document.getElementById('viz-network');
-        if (el) renderNetwork(el, model, state.networkSettings);
+        if (el) renderNetwork(el, model, state.networkSettings, undefined, cachedCent ?? undefined);
       });
     },
     (tbl) => { tbl.appendChild(buildTransitionMatrixTable(model)); },
     'net',
+  );
+}
+
+// ─── SNA Summary tab ───
+function renderSnaSummaryTab(content: HTMLElement, model: TNA) {
+  const metrics = computeGraphMetrics(model);
+
+  const cards: { label: string; value: string }[] = [
+    { label: 'NODES', value: String(metrics.nodes) },
+    { label: 'EDGES', value: String(metrics.edges) },
+    { label: 'DENSITY', value: fmtNum(metrics.density, 4) },
+    { label: 'AVG DEGREE', value: fmtNum(metrics.avgDegree) },
+    { label: 'AVG WEIGHTED DEGREE', value: fmtNum(metrics.avgWeightedDegree) },
+    { label: 'RECIPROCITY', value: metrics.reciprocity !== null ? fmtNum(metrics.reciprocity) : 'N/A' },
+    { label: 'TRANSITIVITY', value: fmtNum(metrics.transitivity, 4) },
+    { label: 'AVG PATH LENGTH', value: fmtNum(metrics.avgPathLength) },
+    { label: 'DIAMETER', value: fmtNum(metrics.diameter) },
+    { label: 'COMPONENTS', value: String(metrics.components) },
+    { label: 'LARGEST COMPONENT', value: String(metrics.largestComponentSize) },
+    { label: 'SELF-LOOPS', value: String(metrics.selfLoops) },
+  ];
+
+  createViewToggle(content,
+    (fig) => {
+      const grid = document.createElement('div');
+      grid.style.display = 'grid';
+      grid.style.gridTemplateColumns = 'repeat(4, 1fr)';
+      grid.style.gap = '12px';
+
+      for (const c of cards) {
+        const card = document.createElement('div');
+        card.className = 'panel';
+        card.style.padding = '20px 16px';
+        card.style.textAlign = 'center';
+        card.innerHTML = `
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:#888;letter-spacing:0.5px;margin-bottom:8px">${c.label}</div>
+          <div style="font-size:28px;font-weight:700;color:var(--blue,#3b82f6)">${c.value}</div>
+        `;
+        grid.appendChild(card);
+      }
+      fig.appendChild(grid);
+    },
+    (tbl) => {
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+      panel.style.overflow = 'auto';
+      panel.innerHTML = `<div class="panel-title">Network Summary</div>`;
+
+      let html = '<table class="preview-table" style="font-size:12px"><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>';
+      for (const c of cards) {
+        html += `<tr><td style="font-weight:600">${c.label}</td><td>${c.value}</td></tr>`;
+      }
+      html += '</tbody></table>';
+      panel.innerHTML += html;
+      addPanelDownloadButtons(panel, { csv: true, filename: 'network-summary' });
+      tbl.appendChild(panel);
+    },
+    'sna-summary',
+    defaultViewForMode(),
   );
 }
 
@@ -1704,7 +2079,7 @@ function renderMosaicTab(content: HTMLElement) {
         for (let c = 0; c < nG; c++) {
           const r = stdRes[s]?.[c] ?? 0;
           const bg = Math.abs(r) >= 2 ? (r > 0 ? '#d1e5f0' : '#fddbc7') : '';
-          html += `<td style="text-align:right${bg ? ';background:' + bg : ''}">${r.toFixed(3)}</td>`;
+          html += `<td style="text-align:right${bg ? ';background:' + bg : ''}">${fmtNum(r, 3)}</td>`;
         }
         html += '</tr>';
       }
@@ -1717,24 +2092,83 @@ function renderMosaicTab(content: HTMLElement) {
   );
 }
 
+// ─── Centrality measure filter bar (shared) ───
+function createMeasureFilterBar(
+  container: HTMLElement,
+  onUpdate: () => void,
+) {
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'position:relative;display:inline-block;margin-left:auto';
+  const btn = document.createElement('button');
+  btn.className = 'secondary-tab';
+  btn.style.cssText = 'cursor:pointer;position:relative';
+  btn.textContent = 'Measures \u25BE';
+  wrapper.appendChild(btn);
+
+  const dropdown = document.createElement('div');
+  dropdown.style.cssText = 'display:none;position:absolute;top:100%;right:0;z-index:100;background:#fff;border:1px solid #ccc;border-radius:4px;padding:6px 10px;box-shadow:0 2px 8px rgba(0,0,0,0.15);min-width:180px;max-height:300px;overflow-y:auto';
+  ALL_MEASURES.forEach(m => {
+    const row = document.createElement('label');
+    row.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:11px;padding:2px 0;cursor:pointer';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !state.disabledMeasures.includes(m);
+    cb.dataset.measure = m;
+    cb.addEventListener('change', () => {
+      if (cb.checked) {
+        state.disabledMeasures = state.disabledMeasures.filter(x => x !== m);
+      } else {
+        if (!state.disabledMeasures.includes(m)) state.disabledMeasures.push(m);
+      }
+      saveState();
+      onUpdate();
+    });
+    row.appendChild(cb);
+    row.appendChild(document.createTextNode(m));
+    dropdown.appendChild(row);
+  });
+
+  // Self-loops toggle at bottom
+  const sep = document.createElement('div');
+  sep.style.cssText = 'border-top:1px solid #e0e0e0;margin:4px 0;padding-top:4px';
+  const loopsLabel = document.createElement('label');
+  loopsLabel.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:11px;cursor:pointer';
+  const loopsCb = document.createElement('input');
+  loopsCb.type = 'checkbox';
+  loopsCb.checked = state.centralityLoops;
+  loopsCb.addEventListener('change', () => {
+    state.centralityLoops = loopsCb.checked;
+    saveState();
+    if (cachedModel) {
+      cachedCent = computeCentralities(cachedModel);
+      populateNodeSizeByDropdown(cachedCent);
+    }
+    for (const [groupName, model] of cachedModels) {
+      cachedCents.set(groupName, computeCentralities(model));
+    }
+    onUpdate();
+  });
+  loopsLabel.appendChild(loopsCb);
+  loopsLabel.appendChild(document.createTextNode('Include Self-Loops'));
+  sep.appendChild(loopsLabel);
+  dropdown.appendChild(sep);
+
+  wrapper.appendChild(dropdown);
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+  });
+  document.addEventListener('click', () => { dropdown.style.display = 'none'; });
+  dropdown.addEventListener('click', (e) => e.stopPropagation());
+
+  container.appendChild(wrapper);
+}
+
 // ─── Centralities sub-views (single) ───
 function renderCentChartsView(content: HTMLElement, model: any, cent: any) {
   let currentCent = cent;
-  const enabledMeasures = () => AVAILABLE_MEASURES.filter(m => !state.disabledMeasures.includes(m));
-
-  // Controls bar: checkboxes for each measure + Include loops
-  const topBar = document.createElement('div');
-  topBar.className = 'panel';
-  topBar.style.padding = '10px 16px';
-  let cbHtml = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
-  for (const m of AVAILABLE_MEASURES) {
-    const checked = !state.disabledMeasures.includes(m) ? 'checked' : '';
-    cbHtml += `<label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer"><input type="checkbox" class="measure-cb" data-measure="${m}" ${checked} style="accent-color:var(--blue)"> ${m}</label>`;
-  }
-  cbHtml += `<div style="margin-left:auto;display:flex;align-items:center;gap:6px"><label style="font-size:12px;font-weight:600;color:#555">Include loops:</label><input type="checkbox" id="centrality-loops" ${state.centralityLoops ? 'checked' : ''} style="accent-color:var(--blue)"></div>`;
-  cbHtml += '</div>';
-  topBar.innerHTML = cbHtml;
-  content.appendChild(topBar);
+  const enabledMeasures = () => ALL_MEASURES.filter(m => !state.disabledMeasures.includes(m)) as CentralityMeasure[];
 
   createViewToggle(content,
     (fig) => {
@@ -1804,11 +2238,6 @@ function renderCentChartsView(content: HTMLElement, model: any, cent: any) {
         });
       }
 
-      function renderCurrentView() {
-        if (currentView === 'card') renderCardView();
-        else renderCombinedView();
-      }
-
       renderCombinedView();
 
       setTimeout(() => {
@@ -1828,28 +2257,6 @@ function renderCentChartsView(content: HTMLElement, model: any, cent: any) {
         });
       }, 0);
 
-      // Wire checkbox events
-      setTimeout(() => {
-        content.querySelectorAll('.measure-cb').forEach(cb => {
-          cb.addEventListener('change', () => {
-            const measure = (cb as HTMLInputElement).dataset.measure!;
-            if ((cb as HTMLInputElement).checked) {
-              state.disabledMeasures = state.disabledMeasures.filter(m => m !== measure);
-            } else {
-              if (!state.disabledMeasures.includes(measure)) state.disabledMeasures.push(measure);
-            }
-            saveState();
-            renderCurrentView();
-          });
-        });
-        document.getElementById('centrality-loops')?.addEventListener('change', (e) => {
-          state.centralityLoops = (e.target as HTMLInputElement).checked;
-          saveState();
-          currentCent = computeCentralities(model);
-          cachedCent = currentCent;
-          renderCurrentView();
-        });
-      }, 0);
     },
     (tbl) => {
       const wrapper = document.createElement('div');
@@ -1865,7 +2272,7 @@ function renderCentChartsView(content: HTMLElement, model: any, cent: any) {
         html += `<tr><td style="font-weight:600">${currentCent.labels[i]}</td>`;
         for (const m of measures) {
           const v = currentCent.measures[m]?.[i] ?? 0;
-          html += `<td>${v.toFixed(4)}</td>`;
+          html += `<td>${fmtNum(v)}</td>`;
         }
         html += '</tr>';
       }
@@ -1876,36 +2283,20 @@ function renderCentChartsView(content: HTMLElement, model: any, cent: any) {
       tbl.appendChild(wrapper);
     },
     'cent-charts',
+    defaultViewForMode(),
   );
 }
 
 function renderCentBetweennessView(content: HTMLElement, model: any) {
   createViewToggle(content,
     (fig) => {
-      const wrapper = document.createElement('div');
-      wrapper.style.margin = '0 auto';
-      renderBetweennessTab(wrapper, model, state.networkSettings);
-      fig.appendChild(wrapper);
+      renderBetweennessNetwork(fig, model, state.networkSettings);
     },
     (tbl) => {
-      const wrapper = document.createElement('div');
-      wrapper.style.margin = '0 auto';
-      const cent = cachedCent!;
-      const panel = document.createElement('div');
-      panel.className = 'panel';
-      const btw = cent.measures['BetweennessRSP'] ?? [];
-      let html = '<div class="panel-title">Betweenness Scores</div>';
-      html += '<table class="preview-table" style="font-size:12px"><thead><tr><th>Node</th><th>BetweennessRSP</th></tr></thead><tbody>';
-      for (let i = 0; i < cent.labels.length; i++) {
-        html += `<tr><td style="font-weight:600">${cent.labels[i]}</td><td>${(btw[i] ?? 0).toFixed(4)}</td></tr>`;
-      }
-      html += '</tbody></table>';
-      panel.innerHTML = html;
-      addPanelDownloadButtons(panel, { csv: true, filename: 'betweenness-scores' });
-      wrapper.appendChild(panel);
-      tbl.appendChild(wrapper);
+      renderBetweennessTable(tbl, model);
     },
     'cent-bet',
+    defaultViewForMode(),
   );
 }
 
@@ -1962,6 +2353,7 @@ function renderCentStabilityView(content: HTMLElement, model: any) {
       tbl.appendChild(panel);
     },
     'cent-stab',
+    defaultViewForMode(),
   );
 }
 
@@ -1988,11 +2380,14 @@ function renderFreqStateView(content: HTMLElement, model: any) {
       const panel = document.createElement('div');
       panel.className = 'panel';
       panel.innerHTML = `<div class="panel-title">State Frequencies</div>`;
-      let html = '<table class="preview-table" style="font-size:12px"><thead><tr><th>State</th><th>Frequency</th><th>Initial Prob</th></tr></thead><tbody>';
-      for (let i = 0; i < model.labels.length; i++) {
-        html += `<tr><td style="font-weight:600">${model.labels[i]}</td>`;
-        html += `<td>${model.inits[i]!.toFixed(4)}</td>`;
-        html += `<td>${model.inits[i]!.toFixed(4)}</td></tr>`;
+      const freqs = countStateFrequencies(model);
+      const totalCount = freqs.reduce((s, f) => s + f.count, 0);
+      let html = '<table class="preview-table" style="font-size:12px"><thead><tr><th>State</th><th>Count</th><th>%</th></tr></thead><tbody>';
+      for (const f of freqs) {
+        const pct = totalCount > 0 ? (f.count / totalCount) * 100 : 0;
+        html += `<tr><td style="font-weight:600">${f.label}</td>`;
+        html += `<td>${f.count}</td>`;
+        html += `<td>${pct.toFixed(1)}%</td></tr>`;
       }
       html += '</tbody></table>';
       panel.innerHTML += html;
@@ -2008,9 +2403,9 @@ function renderFreqStateView(content: HTMLElement, model: any) {
       shtml += `<tr><td>Type</td><td>${model.type}</td></tr>`;
       shtml += `<tr><td>States</td><td>${summ.nStates}</td></tr>`;
       shtml += `<tr><td>Edges</td><td>${summ.nEdges}</td></tr>`;
-      shtml += `<tr><td>Density</td><td>${(summ.density as number).toFixed(3)}</td></tr>`;
-      shtml += `<tr><td>Mean Weight</td><td>${(summ.meanWeight as number).toFixed(4)}</td></tr>`;
-      shtml += `<tr><td>Max Weight</td><td>${(summ.maxWeight as number).toFixed(4)}</td></tr>`;
+      shtml += `<tr><td>Density</td><td>${fmtNum(summ.density as number, 3)}</td></tr>`;
+      shtml += `<tr><td>Mean Weight</td><td>${fmtNum(summ.meanWeight as number)}</td></tr>`;
+      shtml += `<tr><td>Max Weight</td><td>${fmtNum(summ.maxWeight as number)}</td></tr>`;
       shtml += `<tr><td>Self-loops</td><td>${summ.hasSelfLoops ? 'Yes' : 'No'}</td></tr>`;
       shtml += '</tbody></table>';
       summPanel.innerHTML += shtml;
@@ -2019,6 +2414,7 @@ function renderFreqStateView(content: HTMLElement, model: any) {
       tbl.appendChild(wrapper);
     },
     'freq-state',
+    defaultViewForMode(),
   );
 }
 
@@ -2063,10 +2459,10 @@ function renderFreqWeightView(content: HTMLElement, model: any) {
       panel.className = 'panel';
       panel.innerHTML = `<div class="panel-title">Weight Statistics</div>`;
       let html = '<table class="preview-table" style="font-size:12px"><thead><tr><th>Statistic</th><th>Value</th></tr></thead><tbody>';
-      html += `<tr><td>Min (non-zero)</td><td>${min.toFixed(4)}</td></tr>`;
-      html += `<tr><td>Max</td><td>${max.toFixed(4)}</td></tr>`;
-      html += `<tr><td>Mean (non-zero)</td><td>${mean.toFixed(4)}</td></tr>`;
-      html += `<tr><td>Median (non-zero)</td><td>${median.toFixed(4)}</td></tr>`;
+      html += `<tr><td>Min (non-zero)</td><td>${fmtNum(min)}</td></tr>`;
+      html += `<tr><td>Max</td><td>${fmtNum(max)}</td></tr>`;
+      html += `<tr><td>Mean (non-zero)</td><td>${fmtNum(mean)}</td></tr>`;
+      html += `<tr><td>Median (non-zero)</td><td>${fmtNum(median)}</td></tr>`;
       html += `<tr><td>Non-zero edges</td><td>${nonZero.length}</td></tr>`;
       html += `<tr><td>Zero edges</td><td>${zeros}</td></tr>`;
       html += '</tbody></table>';
@@ -2076,45 +2472,53 @@ function renderFreqWeightView(content: HTMLElement, model: any) {
       tbl.appendChild(wrapper);
     },
     'freq-weight',
+    defaultViewForMode(),
   );
 }
 
 function renderFreqMosaicView(content: HTMLElement, model: any) {
+  function getChiSq() {
+    const labels = model.labels;
+    const n = labels.length;
+    const tab: number[][] = [];
+    for (let i = 0; i < n; i++) { tab.push([]); for (let j = 0; j < n; j++) tab[i]!.push(model.weights.get(i, j)); }
+    return chiSquareTest(tab);
+  }
+
   createViewToggle(content,
     (fig) => {
       const wrapper = document.createElement('div');
       wrapper.style.margin = '0 auto';
       const panel = document.createElement('div');
       panel.className = 'panel';
-      panel.innerHTML = `<div class="panel-title">Mosaic Plot (Standardized Residuals)</div><div id="viz-mosaic" style="width:100%"></div>`;
+      panel.innerHTML = `<div class="panel-title">Mosaic Plot (Standardized Residuals)</div><div id="viz-mosaic" style="width:100%"></div><div id="chisq-single" style="font-size:11px;color:#555;text-align:center;margin-top:8px"></div>`;
       addPanelDownloadButtons(panel, { image: true, filename: 'mosaic-plot' });
       wrapper.appendChild(panel);
       fig.appendChild(wrapper);
       requestAnimationFrame(() => {
         const el = document.getElementById('viz-mosaic');
         if (el) renderMosaic(el, model);
+        const chiEl = document.getElementById('chisq-single');
+        if (chiEl) {
+          const cs = getChiSq();
+          chiEl.innerHTML = `&chi;&sup2; = ${cs.chiSq.toFixed(2)}, df = ${cs.df}, <i>p</i> ${cs.pValue < 0.001 ? '< 0.001' : '= ' + cs.pValue.toFixed(3)}`;
+        }
       });
     },
     (tbl) => {
       const wrapper = document.createElement('div');
       wrapper.style.margin = '0 auto';
-      // Standardized residuals table
+      const cs = getChiSq();
       const labels = model.labels;
       const n = labels.length;
-      const tab: number[][] = [];
-      for (let i = 0; i < n; i++) {
-        tab.push([]);
-        for (let j = 0; j < n; j++) {
-          tab[i]!.push(model.weights.get(i, j));
-        }
-      }
-      const { stdRes } = chiSquareTest(tab);
+      const { stdRes } = cs;
 
       const panel = document.createElement('div');
       panel.className = 'panel';
       panel.style.overflow = 'auto';
       panel.innerHTML = `<div class="panel-title">Standardized Residuals</div>`;
-      let html = '<table class="preview-table" style="font-size:11px"><thead><tr><th>From \\ To</th>';
+      let html = `<div style="font-size:11px;color:#555;margin-bottom:8px">&chi;&sup2; = ${cs.chiSq.toFixed(2)}, df = ${cs.df}, <i>p</i> ${cs.pValue < 0.001 ? '< 0.001' : '= ' + cs.pValue.toFixed(3)}</div>`;
+      html += '<table class="preview-table" style="font-size:11px"><thead><tr><th>From \\ To</th>';
       for (const l of labels) html += `<th>${l}</th>`;
       html += '</tr></thead><tbody>';
       for (let i = 0; i < n; i++) {
@@ -2122,7 +2526,7 @@ function renderFreqMosaicView(content: HTMLElement, model: any) {
         for (let j = 0; j < n; j++) {
           const r = stdRes[i]?.[j] ?? 0;
           const bg = Math.abs(r) >= 2 ? (r > 0 ? '#d1e5f0' : '#fddbc7') : '';
-          html += `<td style="text-align:right${bg ? ';background:' + bg : ''}">${r.toFixed(3)}</td>`;
+          html += `<td style="text-align:right${bg ? ';background:' + bg : ''}">${fmtNum(r, 3)}</td>`;
         }
         html += '</tr>';
       }
@@ -2296,6 +2700,7 @@ function renderCommunitiesTab(content: HTMLElement, model: any, _comm: any) {
       }
     },
     'comm',
+    defaultViewForMode(),
   );
 
   function showCommunityTable(container: HTMLElement, mdl: any, comm: CommunityResult) {
@@ -2463,35 +2868,21 @@ function renderGroupedBars(
 // ─── Centralities tab (multi-group) ───
 // ─── Centralities sub-views (multi-group) ───
 function renderCentChartsViewMulti(content: HTMLElement) {
-  const enabledMeasures = () => AVAILABLE_MEASURES.filter(m => !state.disabledMeasures.includes(m));
-
-  // Controls: checkboxes + loops
-  const topBar = document.createElement('div');
-  topBar.className = 'panel';
-  topBar.style.padding = '10px 16px';
-  let cbHtml = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
-  for (const m of AVAILABLE_MEASURES) {
-    const checked = !state.disabledMeasures.includes(m) ? 'checked' : '';
-    cbHtml += `<label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer"><input type="checkbox" class="measure-cb" data-measure="${m}" ${checked} style="accent-color:var(--blue)"> ${m}</label>`;
-  }
-  cbHtml += `<div style="margin-left:auto;display:flex;align-items:center;gap:6px"><label style="font-size:12px;font-weight:600;color:#555">Include loops:</label><input type="checkbox" id="centrality-loops" ${state.centralityLoops ? 'checked' : ''} style="accent-color:var(--blue)"></div>`;
-  cbHtml += '</div>';
-  topBar.innerHTML = cbHtml;
-  content.appendChild(topBar);
+  const enabledMeasures = () => ALL_MEASURES.filter(m => !state.disabledMeasures.includes(m)) as CentralityMeasure[];
 
   createViewToggle(content,
     (fig) => {
-      // Card/Combined toggle
+      // Card / Bar / Line toggle
       const toggleBar = document.createElement('div');
       toggleBar.style.marginBottom = '8px';
-      toggleBar.innerHTML = `<div class="view-toggle"><button class="toggle-btn" id="cent-toggle-card">Card View</button><button class="toggle-btn active" id="cent-toggle-combined">Combined</button></div>`;
+      toggleBar.innerHTML = `<div class="view-toggle"><button class="toggle-btn" id="cent-toggle-card">Card View</button><button class="toggle-btn active" id="cent-toggle-bar">Bar</button><button class="toggle-btn" id="cent-toggle-line">Line</button></div>`;
       fig.appendChild(toggleBar);
 
       const viewContainer = document.createElement('div');
       viewContainer.id = 'cent-view-container';
       fig.appendChild(viewContainer);
 
-      let currentView: 'card' | 'combined' = 'combined';
+      let currentView: 'card' | 'bar' | 'line' = 'bar';
 
       function renderCardView() {
         viewContainer.innerHTML = '';
@@ -2528,7 +2919,7 @@ function renderCentChartsViewMulti(content: HTMLElement) {
         });
       }
 
-      function renderCombinedView() {
+      function renderBarView() {
         viewContainer.innerHTML = '';
         const measures = enabledMeasures();
         for (let m = 0; m < measures.length; m++) {
@@ -2547,6 +2938,120 @@ function renderCentChartsViewMulti(content: HTMLElement) {
         });
       }
 
+      function renderLineView() {
+        viewContainer.innerHTML = '';
+        const measures = enabledMeasures();
+        const groupNames = [...cachedModels.keys()];
+        const nodeLabels = cachedCents.get(groupNames[0]!)?.labels ?? [];
+        const nMeasures = measures.length;
+        const cols = nMeasures <= 2 ? nMeasures : nMeasures <= 4 ? 2 : 3;
+        const gridPanel = document.createElement('div');
+        gridPanel.className = 'panel';
+        gridPanel.style.padding = '12px';
+        let gridHtml = `<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:16px">`;
+        for (let m = 0; m < nMeasures; m++) {
+          gridHtml += `<div><div style="font-size:12px;font-weight:600;text-align:center;margin-bottom:4px">${measures[m]}</div><div id="viz-cent-line-${m}" style="width:100%;height:${Math.max(200, nodeLabels.length * 24 + 60)}px"></div></div>`;
+        }
+        gridHtml += '</div>';
+        gridPanel.innerHTML = gridHtml;
+        // Legend
+        let legendHtml = '<div style="display:flex;align-items:center;gap:16px;justify-content:center;margin-top:12px">';
+        for (let gi = 0; gi < groupNames.length; gi++) {
+          const color = GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]!;
+          legendHtml += `<div style="display:flex;align-items:center;gap:4px"><div style="width:20px;height:3px;background:${color};border-radius:1px"></div><span style="font-size:11px;color:#555">${groupNames[gi]}</span></div>`;
+        }
+        legendHtml += '</div>';
+        gridPanel.innerHTML += legendHtml;
+        addPanelDownloadButtons(gridPanel, { image: true, filename: 'centrality-line-all' });
+        viewContainer.appendChild(gridPanel);
+
+        requestAnimationFrame(() => {
+          for (let m = 0; m < nMeasures; m++) {
+            const el = document.getElementById(`viz-cent-line-${m}`);
+            if (!el) continue;
+            renderCentralityLineChart(el, measures[m]!, nodeLabels, groupNames);
+          }
+        });
+      }
+
+      function renderCentralityLineChart(container: HTMLElement, measure: string, nodeLabels: string[], groupNames: string[]) {
+        const rect = container.getBoundingClientRect();
+        const width = Math.max(rect.width, 250);
+        const height = Math.max(200, nodeLabels.length * 24 + 60);
+        const margin = { top: 10, right: 20, bottom: 20, left: 80 };
+        const innerW = width - margin.left - margin.right;
+        const innerH = height - margin.top - margin.bottom;
+
+        d3.select(container).selectAll('*').remove();
+        const svg = d3.select(container).append('svg').attr('width', width).attr('height', height);
+        const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+
+        // Collect all values for x scale
+        let maxVal = 0;
+        const groupData: { group: string; values: number[]; color: string }[] = [];
+        for (let gi = 0; gi < groupNames.length; gi++) {
+          const cent = cachedCents.get(groupNames[gi]!)!;
+          const vals: number[] = Array.from((cent.measures as any)[measure] ?? []);
+          for (const v of vals) { if (v > maxVal) maxVal = v; }
+          groupData.push({ group: groupNames[gi]!, values: vals, color: GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]! });
+        }
+
+        const y = d3.scaleBand().domain(nodeLabels).range([0, innerH]).padding(0.3);
+        const x = d3.scaleLinear().domain([0, maxVal * 1.1 || 1]).range([0, innerW]);
+
+        // Grid lines
+        g.selectAll('.grid-line')
+          .data(x.ticks(4))
+          .enter()
+          .append('line')
+          .attr('x1', d => x(d)).attr('x2', d => x(d))
+          .attr('y1', 0).attr('y2', innerH)
+          .attr('stroke', '#eee').attr('stroke-dasharray', '2,2');
+
+        // Lines and dots for each group
+        for (const gd of groupData) {
+          const lineData = nodeLabels.map((label, ni) => ({
+            label,
+            value: gd.values[ni] ?? 0,
+          }));
+
+          // Line path
+          const line = d3.line<{ label: string; value: number }>()
+            .x(d => x(d.value))
+            .y(d => (y(d.label) ?? 0) + y.bandwidth() / 2);
+
+          g.append('path')
+            .datum(lineData)
+            .attr('d', line)
+            .attr('fill', 'none')
+            .attr('stroke', gd.color)
+            .attr('stroke-width', 2)
+            .attr('opacity', 0.8);
+
+          // Dots
+          g.selectAll(null)
+            .data(lineData)
+            .enter()
+            .append('circle')
+            .attr('cx', d => x(d.value))
+            .attr('cy', d => (y(d.label) ?? 0) + y.bandwidth() / 2)
+            .attr('r', 4)
+            .attr('fill', gd.color)
+            .attr('stroke', '#fff')
+            .attr('stroke-width', 1);
+        }
+
+        // Axes
+        g.append('g')
+          .call(d3.axisLeft(y).tickSize(0).tickPadding(6))
+          .selectAll('text').attr('font-size', '10px');
+
+        g.append('g')
+          .attr('transform', `translate(0,${innerH})`)
+          .call(d3.axisBottom(x).ticks(4))
+          .selectAll('text').attr('font-size', '9px');
+      }
+
       function renderGroupedBarChartForMeasure(container: HTMLElement, measure: string) {
         const groupNames = [...cachedModels.keys()];
         const nodeLabels = cachedCents.get(groupNames[0]!)?.labels ?? [];
@@ -2561,27 +3066,29 @@ function renderCentChartsViewMulti(content: HTMLElement) {
         renderGroupedBars(container, data, nodeLabels, groupNames, measure);
       }
 
-      renderCombinedView();
+      function renderActive() {
+        if (currentView === 'card') renderCardView();
+        else if (currentView === 'bar') renderBarView();
+        else renderLineView();
+      }
+
+      renderBarView();
 
       setTimeout(() => {
-        document.getElementById('cent-toggle-card')?.addEventListener('click', () => {
-          if (currentView === 'card') return;
-          currentView = 'card';
-          document.getElementById('cent-toggle-card')!.classList.add('active');
-          document.getElementById('cent-toggle-combined')!.classList.remove('active');
-          renderCardView();
-        });
-        document.getElementById('cent-toggle-combined')?.addEventListener('click', () => {
-          if (currentView === 'combined') return;
-          currentView = 'combined';
-          document.getElementById('cent-toggle-combined')!.classList.add('active');
-          document.getElementById('cent-toggle-card')!.classList.remove('active');
-          renderCombinedView();
-        });
+        const cardBtn = document.getElementById('cent-toggle-card');
+        const barBtn = document.getElementById('cent-toggle-bar');
+        const lineBtn = document.getElementById('cent-toggle-line');
+        const setActive = (active: string) => {
+          [cardBtn, barBtn, lineBtn].forEach(b => b?.classList.remove('active'));
+          document.getElementById(`cent-toggle-${active}`)?.classList.add('active');
+        };
+        cardBtn?.addEventListener('click', () => { if (currentView === 'card') return; currentView = 'card'; setActive('card'); renderCardView(); });
+        barBtn?.addEventListener('click', () => { if (currentView === 'bar') return; currentView = 'bar'; setActive('bar'); renderBarView(); });
+        lineBtn?.addEventListener('click', () => { if (currentView === 'line') return; currentView = 'line'; setActive('line'); renderLineView(); });
       }, 0);
 
       // Store render fns for checkbox updates
-      (content as any).__centRenderFns = { renderCardView, renderCombinedView, getCurrentView: () => currentView };
+      (content as any).__centRenderFns = { renderCardView, renderCombinedView: renderActive, getCurrentView: () => currentView };
     },
     (tbl) => {
       const panel = document.createElement('div');
@@ -2600,7 +3107,7 @@ function renderCentChartsViewMulti(content: HTMLElement) {
           html += `<tr><td>${groupName}</td><td style="font-weight:600">${cent.labels[i]}</td>`;
           for (const m of measures) {
             const v = (cent.measures as any)[m]?.[i] ?? 0;
-            html += `<td>${v.toFixed(4)}</td>`;
+            html += `<td>${fmtNum(v)}</td>`;
           }
           html += '</tr>';
         }
@@ -2612,48 +3119,30 @@ function renderCentChartsViewMulti(content: HTMLElement) {
     },
     'cent-multi-charts',
   );
-
-  // Wire checkboxes and loops
-  setTimeout(() => {
-    content.querySelectorAll('.measure-cb').forEach(cb => {
-      cb.addEventListener('change', () => {
-        const measure = (cb as HTMLInputElement).dataset.measure!;
-        if ((cb as HTMLInputElement).checked) {
-          state.disabledMeasures = state.disabledMeasures.filter(m => m !== measure);
-        } else {
-          if (!state.disabledMeasures.includes(measure)) state.disabledMeasures.push(measure);
-        }
-        saveState();
-        const fns = (content as any).__centRenderFns;
-        if (fns) {
-          if (fns.getCurrentView() === 'card') fns.renderCardView();
-          else fns.renderCombinedView();
-        }
-      });
-    });
-    document.getElementById('centrality-loops')?.addEventListener('change', (e) => {
-      state.centralityLoops = (e.target as HTMLInputElement).checked;
-      saveState();
-      for (const [groupName, model] of cachedModels) {
-        cachedCents.set(groupName, computeCentralities(model));
-      }
-      const fns = (content as any).__centRenderFns;
-      if (fns) {
-        if (fns.getCurrentView() === 'card') fns.renderCardView();
-        else fns.renderCombinedView();
-      }
-    });
-  }, 0);
 }
 
 function renderCentBetweennessViewMulti(content: HTMLElement) {
-  const grid = createMultiGroupGrid(content);
-  let i = 0;
-  for (const [groupName, model] of cachedModels) {
-    const card = createGroupCard(grid, groupName, i);
-    renderBetweennessTab(card, model, groupNetworkSettings(state.networkSettings), `-g${i}`);
-    i++;
-  }
+  createViewToggle(content,
+    (fig) => {
+      const grid = createMultiGroupGrid(fig);
+      let i = 0;
+      for (const [groupName, model] of cachedModels) {
+        const card = createGroupCard(grid, groupName, i);
+        renderBetweennessNetwork(card, model, groupNetworkSettings(state.networkSettings), `-g${i}`);
+        i++;
+      }
+    },
+    (tbl) => {
+      const grid = createMultiGroupGrid(tbl);
+      let i = 0;
+      for (const [groupName, model] of cachedModels) {
+        const card = createGroupCard(grid, groupName, i);
+        renderBetweennessTable(card, model, `-g${i}`);
+        i++;
+      }
+    },
+    'cent-multi-bet',
+  );
 }
 
 function renderCentStabilityViewMulti(content: HTMLElement) {
@@ -2713,75 +3202,48 @@ function renderCentStabilityViewMulti(content: HTMLElement) {
 // ─── Frequencies tab (multi-group) ───
 // ─── Frequencies sub-views (multi-group) ───
 function renderFreqStateViewMulti(content: HTMLElement) {
+  // Count state occurrences from sequence data for each group
+  function countStates(): { counts: Map<string, Map<string, number>>; nodeLabels: string[]; groupNames: string[] } {
+    const groupNames = [...cachedModels.keys()];
+    const nodeLabels = [...cachedModels.values()][0]?.labels ?? [];
+    const counts = new Map<string, Map<string, number>>();
+    for (const gn of groupNames) {
+      const model = cachedModels.get(gn)!;
+      const stateCounts = new Map<string, number>();
+      for (const label of nodeLabels) stateCounts.set(label, 0);
+      if (model.data) {
+        for (const seq of model.data) {
+          for (const s of seq) {
+            if (s !== null && stateCounts.has(s)) stateCounts.set(s, stateCounts.get(s)! + 1);
+          }
+        }
+      }
+      counts.set(gn, stateCounts);
+    }
+    return { counts, nodeLabels, groupNames };
+  }
+
   createViewToggle(content,
     (fig) => {
-      const toggleBar = document.createElement('div');
-      toggleBar.style.marginBottom = '8px';
-      toggleBar.innerHTML = `<div class="view-toggle"><button class="toggle-btn" id="freq-toggle-card">Card View</button><button class="toggle-btn active" id="freq-toggle-combined">Combined</button></div>`;
-      fig.appendChild(toggleBar);
-      const vc = document.createElement('div');
-      vc.id = 'freq-view-container';
-      fig.appendChild(vc);
-
-      function renderCard() {
-        vc.innerHTML = '';
-        const n = cachedModels.size;
-        const cols = Math.min(n, 4);
-        const section = document.createElement('div');
-        section.className = 'panel';
-        let gridHtml = `<div class="panel-title">State Frequencies</div><div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:12px">`;
-        let i = 0;
-        for (const [groupName] of cachedModels) {
-          const color = GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]!;
-          gridHtml += `<div><div style="font-size:12px;font-weight:600;color:${color};margin-bottom:4px;text-align:center">${groupName}</div><div id="viz-freq-g${i}" style="width:100%"></div></div>`;
-          i++;
-        }
-        gridHtml += '</div>';
-        section.innerHTML = gridHtml;
-        addPanelDownloadButtons(section, { image: true, filename: 'freq-all-groups' });
-        vc.appendChild(section);
-        requestAnimationFrame(() => {
-          let j = 0;
-          for (const [, model] of cachedModels) {
-            const el = document.getElementById(`viz-freq-g${j}`);
-            if (el) renderFrequencies(el, model);
-            j++;
-          }
-        });
-      }
-
-      function renderCombined() {
-        vc.innerHTML = '';
-        const panel = document.createElement('div');
-        panel.className = 'panel';
-        panel.innerHTML = `<div class="panel-title">State Frequencies — All Groups</div><div id="viz-freq-combined" style="width:100%;height:300px"></div>`;
-        addPanelDownloadButtons(panel, { image: true, filename: 'freq-combined-all-groups' });
-        vc.appendChild(panel);
-        requestAnimationFrame(() => {
-          const el = document.getElementById('viz-freq-combined');
-          if (el) {
-            const groupNames = [...cachedModels.keys()];
-            const nodeLabels = [...cachedModels.values()][0]?.labels ?? [];
-            const data: { node: string; group: string; value: number; color: string }[] = [];
-            for (let gi = 0; gi < groupNames.length; gi++) {
-              const model = cachedModels.get(groupNames[gi]!)!;
-              for (let ni = 0; ni < nodeLabels.length; ni++) {
-                let total = 0;
-                for (let j = 0; j < nodeLabels.length; j++) total += model.weights.get(ni, j);
-                data.push({ node: nodeLabels[ni]!, group: groupNames[gi]!, value: total, color: GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]! });
-              }
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+      panel.innerHTML = `<div class="panel-title">State Frequencies — All Groups</div><div id="viz-freq-combined" style="width:100%;height:300px"></div>`;
+      addPanelDownloadButtons(panel, { image: true, filename: 'freq-combined-all-groups' });
+      fig.appendChild(panel);
+      requestAnimationFrame(() => {
+        const el = document.getElementById('viz-freq-combined');
+        if (el) {
+          const { counts, nodeLabels, groupNames } = countStates();
+          const data: { node: string; group: string; value: number; color: string }[] = [];
+          for (let gi = 0; gi < groupNames.length; gi++) {
+            const sc = counts.get(groupNames[gi]!)!;
+            for (const label of nodeLabels) {
+              data.push({ node: label, group: groupNames[gi]!, value: sc.get(label) ?? 0, color: GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]! });
             }
-            renderGroupedBars(el, data, nodeLabels, groupNames, 'State Frequency');
           }
-        });
-      }
-
-      renderCombined();
-      let cur: 'card' | 'combined' = 'combined';
-      setTimeout(() => {
-        document.getElementById('freq-toggle-card')?.addEventListener('click', () => { if (cur === 'card') return; cur = 'card'; document.getElementById('freq-toggle-card')!.classList.add('active'); document.getElementById('freq-toggle-combined')!.classList.remove('active'); renderCard(); });
-        document.getElementById('freq-toggle-combined')?.addEventListener('click', () => { if (cur === 'combined') return; cur = 'combined'; document.getElementById('freq-toggle-combined')!.classList.add('active'); document.getElementById('freq-toggle-card')!.classList.remove('active'); renderCombined(); });
-      }, 0);
+          renderGroupedBars(el, data, nodeLabels, groupNames, 'State Frequency');
+        }
+      });
     },
     (tbl) => {
       const panel = document.createElement('div');
@@ -2789,13 +3251,22 @@ function renderFreqStateViewMulti(content: HTMLElement) {
       panel.style.overflow = 'auto';
       panel.style.maxHeight = '600px';
       panel.innerHTML = `<div class="panel-title">State Frequencies — Long Format</div>`;
-      let html = '<table class="preview-table" style="font-size:11px"><thead><tr><th>Group</th><th>State</th><th>Initial Prob</th><th>Row Sum</th></tr></thead><tbody>';
-      for (const [groupName, model] of cachedModels) {
-        const n = model.labels.length;
-        for (let i = 0; i < n; i++) {
-          let rowSum = 0;
-          for (let j = 0; j < n; j++) rowSum += model.weights.get(i, j);
-          html += `<tr><td>${groupName}</td><td style="font-weight:600">${model.labels[i]}</td><td>${model.inits[i]!.toFixed(4)}</td><td>${rowSum.toFixed(4)}</td></tr>`;
+      const { counts, nodeLabels, groupNames } = countStates();
+      // Compute totals per group for %
+      const groupTotals = new Map<string, number>();
+      for (const gn of groupNames) {
+        let t = 0;
+        const sc = counts.get(gn)!;
+        for (const label of nodeLabels) t += sc.get(label) ?? 0;
+        groupTotals.set(gn, t);
+      }
+      let html = '<table class="preview-table" style="font-size:11px"><thead><tr><th>Group</th><th>State</th><th>Count</th><th>%</th></tr></thead><tbody>';
+      for (const gn of groupNames) {
+        const sc = counts.get(gn)!;
+        const tot = groupTotals.get(gn) ?? 1;
+        for (const label of nodeLabels) {
+          const c = sc.get(label) ?? 0;
+          html += `<tr><td>${gn}</td><td style="font-weight:600">${label}</td><td>${c}</td><td>${tot > 0 ? ((c / tot) * 100).toFixed(1) : '0'}%</td></tr>`;
         }
       }
       html += '</tbody></table>';
@@ -2810,78 +3281,52 @@ function renderFreqStateViewMulti(content: HTMLElement) {
 function renderFreqWeightViewMulti(content: HTMLElement) {
   createViewToggle(content,
     (fig) => {
-      const toggleBar = document.createElement('div');
-      toggleBar.style.marginBottom = '8px';
-      toggleBar.innerHTML = `<div class="view-toggle"><button class="toggle-btn" id="wt-toggle-card">Card View</button><button class="toggle-btn active" id="wt-toggle-combined">Combined</button></div>`;
-      fig.appendChild(toggleBar);
-      const vc = document.createElement('div');
-      vc.id = 'wt-view-container';
-      fig.appendChild(vc);
-
-      function renderCard() {
-        vc.innerHTML = '';
-        const n = cachedModels.size;
-        const cols = Math.min(n, 4);
-        const section = document.createElement('div');
-        section.className = 'panel';
-        let gridHtml = `<div class="panel-title">Weight Distribution</div><div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:12px">`;
-        let i = 0;
-        for (const [groupName] of cachedModels) {
-          const color = GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]!;
-          gridHtml += `<div><div style="font-size:12px;font-weight:600;color:${color};margin-bottom:4px;text-align:center">${groupName}</div><div id="viz-histogram-g${i}" style="width:100%"></div></div>`;
-          i++;
+      const n = cachedModels.size;
+      const cols = Math.min(n, 4);
+      const section = document.createElement('div');
+      section.className = 'panel';
+      let gridHtml = `<div class="panel-title">Weight Distribution</div><div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:12px">`;
+      let i = 0;
+      for (const [groupName] of cachedModels) {
+        const color = GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]!;
+        gridHtml += `<div><div style="font-size:12px;font-weight:600;color:${color};margin-bottom:4px;text-align:center">${groupName}</div><div id="viz-histogram-g${i}" style="width:100%"></div></div>`;
+        i++;
+      }
+      gridHtml += '</div>';
+      section.innerHTML = gridHtml;
+      addPanelDownloadButtons(section, { image: true, filename: 'histogram-all-groups' });
+      fig.appendChild(section);
+      requestAnimationFrame(() => {
+        let j = 0;
+        for (const [, model] of cachedModels) {
+          const el = document.getElementById(`viz-histogram-g${j}`);
+          if (el) renderWeightHistogram(el, model);
+          j++;
         }
-        gridHtml += '</div>';
-        section.innerHTML = gridHtml;
-        addPanelDownloadButtons(section, { image: true, filename: 'histogram-all-groups' });
-        vc.appendChild(section);
-        requestAnimationFrame(() => {
-          let j = 0;
-          for (const [, model] of cachedModels) {
-            const el = document.getElementById(`viz-histogram-g${j}`);
-            if (el) renderWeightHistogram(el, model);
-            j++;
-          }
-        });
-      }
-
-      function renderCombined() {
-        vc.innerHTML = '';
-        const panel = document.createElement('div');
-        panel.className = 'panel';
-        panel.innerHTML = `<div class="panel-title">Mean Edge Weights — All Groups</div><div id="viz-weights-combined" style="width:100%;height:300px"></div>`;
-        addPanelDownloadButtons(panel, { image: true, filename: 'weights-combined-all-groups' });
-        vc.appendChild(panel);
-        requestAnimationFrame(() => {
-          const el = document.getElementById('viz-weights-combined');
-          if (el) {
-            const groupNames = [...cachedModels.keys()];
-            const nodeLabels = [...cachedModels.values()][0]?.labels ?? [];
-            const data: { node: string; group: string; value: number; color: string }[] = [];
-            for (let gi = 0; gi < groupNames.length; gi++) {
-              const model = cachedModels.get(groupNames[gi]!)!;
-              for (let ni = 0; ni < nodeLabels.length; ni++) {
-                let total = 0, count = 0;
-                for (let j = 0; j < nodeLabels.length; j++) { const w = model.weights.get(ni, j); if (w > 0) { total += w; count++; } }
-                data.push({ node: nodeLabels[ni]!, group: groupNames[gi]!, value: count > 0 ? total / count : 0, color: GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]! });
-              }
-            }
-            renderGroupedBars(el, data, nodeLabels, groupNames, 'Mean Weight');
-          }
-        });
-      }
-
-      renderCombined();
-      let cur: 'card' | 'combined' = 'combined';
-      setTimeout(() => {
-        document.getElementById('wt-toggle-card')?.addEventListener('click', () => { if (cur === 'card') return; cur = 'card'; document.getElementById('wt-toggle-card')!.classList.add('active'); document.getElementById('wt-toggle-combined')!.classList.remove('active'); renderCard(); });
-        document.getElementById('wt-toggle-combined')?.addEventListener('click', () => { if (cur === 'combined') return; cur = 'combined'; document.getElementById('wt-toggle-combined')!.classList.add('active'); document.getElementById('wt-toggle-card')!.classList.remove('active'); renderCombined(); });
-      }, 0);
+      });
     },
     (tbl) => {
       const panel = document.createElement('div');
       panel.className = 'panel';
+      panel.style.overflow = 'auto';
       panel.innerHTML = '<div class="panel-title">Weight Statistics — All Groups</div>';
+      let html = '<table class="preview-table" style="font-size:11px"><thead><tr><th>Group</th><th>Non-zero</th><th>Zero</th><th>Min</th><th>Max</th><th>Mean</th><th>Median</th></tr></thead><tbody>';
+      for (const [groupName, model] of cachedModels) {
+        const n = model.labels.length;
+        const weights: number[] = [];
+        let zeros = 0;
+        for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { const w = model.weights.get(i, j); weights.push(w); if (w === 0) zeros++; }
+        const nonZero = weights.filter(w => w > 0);
+        const min = nonZero.length > 0 ? Math.min(...nonZero) : 0;
+        const max = nonZero.length > 0 ? Math.max(...nonZero) : 0;
+        const mean = nonZero.length > 0 ? nonZero.reduce((a, b) => a + b, 0) / nonZero.length : 0;
+        const sorted = [...nonZero].sort((a, b) => a - b);
+        const median = sorted.length > 0 ? (sorted.length % 2 === 0 ? (sorted[sorted.length / 2 - 1]! + sorted[sorted.length / 2]!) / 2 : sorted[Math.floor(sorted.length / 2)]!) : 0;
+        html += `<tr><td style="font-weight:600">${groupName}</td><td>${nonZero.length}</td><td>${zeros}</td><td>${fmtNum(min)}</td><td>${fmtNum(max)}</td><td>${fmtNum(mean)}</td><td>${fmtNum(median)}</td></tr>`;
+      }
+      html += '</tbody></table>';
+      panel.innerHTML += html;
+      addPanelDownloadButtons(panel, { csv: true, filename: 'weight-statistics-all-groups' });
       tbl.appendChild(panel);
     },
     'freq-multi-weight',
@@ -2889,17 +3334,28 @@ function renderFreqWeightViewMulti(content: HTMLElement) {
 }
 
 function renderFreqMosaicViewMulti(content: HTMLElement) {
+  function getChiSqForModel(model: any) {
+    const labels = model.labels;
+    const n = labels.length;
+    const tab: number[][] = [];
+    for (let i = 0; i < n; i++) {
+      tab.push([]);
+      for (let j = 0; j < n; j++) tab[i]!.push(model.weights.get(i, j));
+    }
+    return chiSquareTest(tab);
+  }
+
   createViewToggle(content,
     (fig) => {
       const n = cachedModels.size;
       const cols = Math.min(n, 4);
       const section = document.createElement('div');
       section.className = 'panel';
-      let gridHtml = `<div class="panel-title">Mosaic Plot</div><div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:12px">`;
+      let gridHtml = `<div class="panel-title">Mosaic Plot (Standardized Residuals)</div><div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:12px">`;
       let i = 0;
       for (const [groupName] of cachedModels) {
         const color = GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]!;
-        gridHtml += `<div><div style="font-size:12px;font-weight:600;color:${color};margin-bottom:4px;text-align:center">${groupName}</div><div id="viz-mosaic-g${i}" style="width:100%"></div></div>`;
+        gridHtml += `<div><div style="font-size:12px;font-weight:600;color:${color};margin-bottom:4px;text-align:center">${groupName}</div><div id="viz-mosaic-g${i}" style="width:100%"></div><div id="chisq-g${i}" style="font-size:10px;color:#555;text-align:center;margin-top:4px"></div></div>`;
         i++;
       }
       gridHtml += '</div>';
@@ -2911,15 +3367,47 @@ function renderFreqMosaicViewMulti(content: HTMLElement) {
         for (const [, model] of cachedModels) {
           const el = document.getElementById(`viz-mosaic-g${j}`);
           if (el) renderMosaic(el, model);
+          const chiEl = document.getElementById(`chisq-g${j}`);
+          if (chiEl) {
+            const cs = getChiSqForModel(model);
+            chiEl.innerHTML = `&chi;&sup2; = ${cs.chiSq.toFixed(2)}, df = ${cs.df}, <i>p</i> ${cs.pValue < 0.001 ? '< 0.001' : '= ' + cs.pValue.toFixed(3)}`;
+          }
           j++;
         }
       });
     },
     (tbl) => {
-      const panel = document.createElement('div');
-      panel.className = 'panel';
-      panel.innerHTML = '<div class="panel-title">Mosaic Residuals — All Groups</div>';
-      tbl.appendChild(panel);
+      for (const [groupName, model] of cachedModels) {
+        const cs = getChiSqForModel(model);
+        const labels = model.labels;
+        const n = labels.length;
+        const tab: number[][] = [];
+        for (let i = 0; i < n; i++) { tab.push([]); for (let j = 0; j < n; j++) tab[i]!.push(model.weights.get(i, j)); }
+        const { stdRes } = chiSquareTest(tab);
+
+        const panel = document.createElement('div');
+        panel.className = 'panel';
+        panel.style.overflow = 'auto';
+        panel.style.marginBottom = '12px';
+        panel.innerHTML = `<div class="panel-title">${groupName} — Standardized Residuals</div>`;
+        let html = `<div style="font-size:11px;color:#555;margin-bottom:8px">&chi;&sup2; = ${cs.chiSq.toFixed(2)}, df = ${cs.df}, <i>p</i> ${cs.pValue < 0.001 ? '< 0.001' : '= ' + cs.pValue.toFixed(3)}</div>`;
+        html += '<table class="preview-table" style="font-size:11px"><thead><tr><th>From \\ To</th>';
+        for (const l of labels) html += `<th>${l}</th>`;
+        html += '</tr></thead><tbody>';
+        for (let i = 0; i < n; i++) {
+          html += `<tr><td style="font-weight:600">${labels[i]}</td>`;
+          for (let j = 0; j < n; j++) {
+            const r = stdRes[i]?.[j] ?? 0;
+            const bg = Math.abs(r) >= 2 ? (r > 0 ? '#d1e5f0' : '#fddbc7') : '';
+            html += `<td style="text-align:right${bg ? ';background:' + bg : ''}">${fmtNum(r, 3)}</td>`;
+          }
+          html += '</tr>';
+        }
+        html += '</tbody></table>';
+        panel.innerHTML += html;
+        addPanelDownloadButtons(panel, { csv: true, filename: `mosaic-residuals-${groupName}` });
+        tbl.appendChild(panel);
+      }
     },
     'freq-multi-mosaic',
   );
@@ -3049,6 +3537,7 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
 
       function renderCardView() {
         viewContainer.innerHTML = '';
+        const currentGs = groupNetworkSettings(state.networkSettings);
         let i = 0;
         for (const [groupName, model] of cachedModels) {
           const groupRow = document.createElement('div');
@@ -3073,7 +3562,7 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
           for (const [groupName, model] of cachedModels) {
             const el = document.getElementById(`viz-community-network-g${j}`);
             const comm = cachedComms.get(groupName);
-            if (el) renderNetwork(el, model, gs, comm ?? undefined);
+            if (el) renderNetwork(el, model, currentGs, comm ?? undefined);
             if (comm) showCommunityResults(j, model, comm);
             j++;
           }
@@ -3128,8 +3617,9 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
             gEl.setAttribute('transform', `translate(${x}, ${y + labelH})`);
             svgEl.appendChild(gEl);
 
+            const currentGs = groupNetworkSettings(state.networkSettings);
             const comm = cachedComms.get(groupName);
-            renderNetworkIntoGroup(gEl, model, gs, cellW, cellH, comm ?? undefined);
+            renderNetworkIntoGroup(gEl, model, currentGs, cellW, cellH, comm ?? undefined);
             idx++;
           }
         });
@@ -3248,7 +3738,7 @@ function renderCommunitiesTabMulti(content: HTMLElement) {
 
             if (fns && fns.getCurrentView() === 'card') {
               const el = document.getElementById(`viz-community-network-g${k}`);
-              if (el && comm) renderNetwork(el, model, gs, comm);
+              if (el && comm) renderNetwork(el, model, groupNetworkSettings(state.networkSettings), comm);
               fns.showCommunityResults(k, model, comm);
             }
           } catch (err) {
@@ -3308,20 +3798,139 @@ function renderBootstrapTabMulti(content: HTMLElement) {
   `;
   content.appendChild(controls);
 
-  // Per-group result areas
-  const gs = groupNetworkSettings(state.networkSettings);
-  let i = 0;
-  for (const [groupName] of cachedModels) {
-    const groupRow = document.createElement('div');
-    groupRow.className = 'panel';
-    groupRow.style.cssText = 'margin-top:12px;padding:12px';
-    groupRow.innerHTML = `
-      <div class="panel-title" style="margin-bottom:8px;font-size:14px;color:${GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]}">${groupName}</div>
-      <div id="boot-results-g${i}" style="text-align:center;color:#888;padding:20px;font-size:13px">Click "Run Bootstrap" to assess edge stability.</div>
-    `;
-    content.appendChild(groupRow);
-    i++;
+  // Card/Combined toggle bar
+  const toggleBar = document.createElement('div');
+  toggleBar.className = 'panel';
+  toggleBar.style.padding = '8px 16px';
+  toggleBar.innerHTML = `
+    <div class="view-toggle">
+      <button class="toggle-btn active" id="boot-toggle-card">Card View</button>
+      <button class="toggle-btn" id="boot-toggle-combined">Combined</button>
+    </div>
+  `;
+  content.appendChild(toggleBar);
+
+  const viewContainer = document.createElement('div');
+  viewContainer.id = 'boot-view-container';
+  content.appendChild(viewContainer);
+
+  let currentView: 'card' | 'combined' = 'card';
+
+  function renderBootCardView() {
+    viewContainer.innerHTML = '';
+    const currentGs = groupNetworkSettings(state.networkSettings);
+    let i = 0;
+    for (const [groupName] of cachedModels) {
+      const result = cachedBootResults.get(groupName);
+      const groupRow = document.createElement('div');
+      groupRow.className = 'panel';
+      groupRow.style.cssText = 'margin-top:12px;padding:12px';
+      groupRow.innerHTML = `
+        <div class="panel-title" style="margin-bottom:8px;font-size:14px;color:${GROUP_CARD_COLORS[i % GROUP_CARD_COLORS.length]}">${groupName}</div>
+        <div id="boot-results-g${i}" style="text-align:center;color:#888;padding:20px;font-size:13px">${result ? '' : 'Click "Run Bootstrap" to assess edge stability.'}</div>
+      `;
+      viewContainer.appendChild(groupRow);
+      i++;
+    }
+    // Re-render cached results
+    requestAnimationFrame(() => {
+      let j = 0;
+      for (const [groupName] of cachedModels) {
+        const result = cachedBootResults.get(groupName);
+        if (result) {
+          const el = document.getElementById(`boot-results-g${j}`);
+          if (el) renderBootstrapResults(el, result, currentGs, `-g${j}`);
+        }
+        j++;
+      }
+    });
   }
+
+  function renderBootCombinedView() {
+    viewContainer.innerHTML = '';
+    if (cachedBootModels.size === 0) {
+      viewContainer.innerHTML = '<div class="panel" style="text-align:center;color:#888;padding:40px;margin-top:12px">Run Bootstrap first to see combined network view.</div>';
+      return;
+    }
+
+    const currentGs = { ...groupNetworkSettings(state.networkSettings), edgeThreshold: 0 };
+    const n = cachedModels.size;
+    const cols = n <= 2 ? n : n <= 4 ? 2 : Math.ceil(Math.sqrt(n));
+    const rows = Math.ceil(n / cols);
+    const cellW = 500;
+    const cellH = Math.min(state.networkSettings.networkHeight, 400);
+    const labelH = 24;
+    const totalW = cols * cellW;
+    const totalH = rows * (cellH + labelH);
+
+    const canvasPanel = document.createElement('div');
+    canvasPanel.className = 'panel';
+    canvasPanel.style.marginTop = '12px';
+    canvasPanel.innerHTML = `<div class="panel-title">Combined Bootstrap Networks</div>`;
+    addPanelDownloadButtons(canvasPanel, { image: true, filename: 'combined-bootstrap-networks' });
+
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svgEl = document.createElementNS(svgNS, 'svg');
+    svgEl.setAttribute('viewBox', `0 0 ${totalW} ${totalH}`);
+    svgEl.setAttribute('width', '100%');
+    svgEl.style.minHeight = '300px';
+    svgEl.style.background = '#fff';
+    canvasPanel.appendChild(svgEl);
+    viewContainer.appendChild(canvasPanel);
+
+    requestAnimationFrame(() => {
+      let idx = 0;
+      for (const [groupName] of cachedModels) {
+        const bm = cachedBootModels.get(groupName);
+        if (!bm) { idx++; continue; }
+        const col = idx % cols;
+        const row = Math.floor(idx / cols);
+        const x = col * cellW;
+        const y = row * (cellH + labelH);
+
+        const label = document.createElementNS(svgNS, 'text');
+        label.setAttribute('x', String(x + cellW / 2));
+        label.setAttribute('y', String(y + 16));
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('font-size', '13');
+        label.setAttribute('font-weight', '700');
+        label.setAttribute('fill', GROUP_CARD_COLORS[idx % GROUP_CARD_COLORS.length]!);
+        label.textContent = groupName;
+        svgEl.appendChild(label);
+
+        const gEl = document.createElementNS(svgNS, 'g') as SVGGElement;
+        gEl.setAttribute('transform', `translate(${x}, ${y + labelH})`);
+        svgEl.appendChild(gEl);
+
+        renderNetworkIntoGroup(gEl, bm, currentGs, cellW, cellH);
+        idx++;
+      }
+    });
+  }
+
+  // Default: card view
+  renderBootCardView();
+
+  // Wire toggle buttons
+  setTimeout(() => {
+    document.getElementById('boot-toggle-card')?.addEventListener('click', () => {
+      if (currentView === 'card') return;
+      currentView = 'card';
+      document.getElementById('boot-toggle-card')!.classList.add('active');
+      document.getElementById('boot-toggle-combined')!.classList.remove('active');
+      renderBootCardView();
+    });
+    document.getElementById('boot-toggle-combined')?.addEventListener('click', () => {
+      if (currentView === 'combined') return;
+      currentView = 'combined';
+      document.getElementById('boot-toggle-combined')!.classList.add('active');
+      document.getElementById('boot-toggle-card')!.classList.remove('active');
+      renderBootCombinedView();
+    });
+  }, 0);
+
+  // Store references for updateNetworkOnly
+  (window as any).__bootMultiFns = { renderBootCombinedView, getCurrentView: () => currentView };
 
   // Wire single button to run all groups
   setTimeout(() => {
@@ -3330,29 +3939,36 @@ function renderBootstrapTabMulti(content: HTMLElement) {
       const level = parseFloat((document.getElementById('boot-level') as HTMLSelectElement).value);
       const method = (document.getElementById('boot-method') as HTMLSelectElement).value as BootstrapOptions['method'];
 
-      // Show loading for all
-      let idx = 0;
-      for (const [groupName] of cachedModels) {
-        const el = document.getElementById(`boot-results-g${idx}`);
-        if (el) el.innerHTML = '<div style="text-align:center;padding:20px;color:#888"><div class="spinner" style="width:16px;height:16px;border-width:2px;margin:0 auto 8px"></div>Running bootstrap...</div>';
-        idx++;
+      // Show loading for all (card view only)
+      if (currentView === 'card') {
+        let idx = 0;
+        for (const [groupName] of cachedModels) {
+          const el = document.getElementById(`boot-results-g${idx}`);
+          if (el) el.innerHTML = '<div style="text-align:center;padding:20px;color:#888"><div class="spinner" style="width:16px;height:16px;border-width:2px;margin:0 auto 8px"></div>Running bootstrap...</div>';
+          idx++;
+        }
       }
 
       setTimeout(() => {
         cachedBootModels.clear();
+        cachedBootResults.clear();
+        const currentGs = groupNetworkSettings(state.networkSettings);
         let k = 0;
         for (const [groupName, model] of cachedModels) {
-          const resultsEl = document.getElementById(`boot-results-g${k}`);
-          if (resultsEl) {
-            try {
-              const result = bootstrapTna(model, { iter, level, method, seed: 42 });
-              renderBootstrapResults(resultsEl, result, gs, `-g${k}`);
-              cachedBootModels.set(groupName, result.model);
-            } catch (err) {
-              resultsEl.innerHTML = `<div class="panel error-banner">Error: ${(err as Error).message}</div>`;
-            }
+          try {
+            const result = bootstrapTna(model, { iter, level, method, seed: 42 });
+            cachedBootResults.set(groupName, result);
+            cachedBootModels.set(groupName, result.model);
+          } catch (err) {
+            // Card view will show placeholder for groups without results
           }
           k++;
+        }
+        // Re-render current active view with results
+        if (currentView === 'card') {
+          renderBootCardView();
+        } else {
+          renderBootCombinedView();
         }
       }, 50);
     });

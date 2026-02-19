@@ -6,17 +6,43 @@ import type { TNA } from 'tnaj';
 import { showTooltip, hideTooltip } from '../main';
 import { NODE_COLORS } from './colors';
 
-export function renderFrequencies(container: HTMLElement, model: TNA) {
+/** Count state occurrences from sequence data, or compute node out-strength from weight matrix. */
+export function countStateFrequencies(model: TNA): { label: string; count: number }[] {
   const labels = model.labels;
-  const inits = model.inits;
+  const n = labels.length;
+  const counts = new Map<string, number>();
+  for (const l of labels) counts.set(l, 0);
 
-  const data = labels.map((label, i) => ({
-    label,
-    value: inits[i]!,
+  if (model.data) {
+    for (const seq of model.data) {
+      for (const s of seq) {
+        if (s !== null && counts.has(s)) counts.set(s, counts.get(s)! + 1);
+      }
+    }
+  } else {
+    // No sequence data (e.g., SNA/edge list mode): compute node out-strength from weight matrix
+    for (let i = 0; i < n; i++) {
+      let strength = 0;
+      for (let j = 0; j < n; j++) {
+        strength += model.weights.get(i, j);
+      }
+      counts.set(labels[i]!, Math.round(strength * 1000) / 1000);
+    }
+  }
+  return labels.map(label => ({ label, count: counts.get(label) ?? 0 }));
+}
+
+export function renderFrequencies(container: HTMLElement, model: TNA) {
+  const freqs = countStateFrequencies(model);
+  const total = freqs.reduce((s, f) => s + f.count, 0);
+  const data = freqs.map((f, i) => ({
+    label: f.label,
+    value: f.count,
+    pct: total > 0 ? (f.count / total) * 100 : 0,
     color: NODE_COLORS[i % NODE_COLORS.length]!,
   })).sort((a, b) => b.value - a.value);
 
-  const maxVal = Math.max(...data.map(d => d.value), 1e-6);
+  const maxVal = Math.max(...data.map(d => d.value), 1);
 
   const rect = container.getBoundingClientRect();
   const width = Math.max(rect.width, 400);
@@ -55,7 +81,7 @@ export function renderFrequencies(container: HTMLElement, model: TNA) {
     .attr('rx', 4)
     .on('mouseover', function (event: MouseEvent, d) {
       d3.select(this).attr('opacity', 0.8);
-      showTooltip(event, `<b>${d.label}</b><br>Frequency: ${d.value.toFixed(4)}`);
+      showTooltip(event, `<b>${d.label}</b><br>Count: ${d.value} (${d.pct.toFixed(1)}%)`);
     })
     .on('mousemove', function (event: MouseEvent) {
       const tt = document.getElementById('tooltip')!;
@@ -76,7 +102,7 @@ export function renderFrequencies(container: HTMLElement, model: TNA) {
     .attr('dy', '0.35em')
     .attr('font-size', '11px')
     .attr('fill', '#666')
-    .text(d => d.value.toFixed(3));
+    .text(d => `${d.value} (${d.pct.toFixed(1)}%)`);
 
   g.append('g')
     .attr('class', 'axis')

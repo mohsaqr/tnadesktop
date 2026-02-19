@@ -2,9 +2,12 @@
  * Inline load-data panel: file drop zone + format tabs + options + preview table + analyze.
  * Replaces the old welcome + preview screens as a single inline component.
  */
-import { state, render, showLoading, hideLoading, importOnehot } from '../main';
-import { parseFile, wideToSequences, longToSequences, guessColumns } from '../data';
+import { state, render, showLoading, hideLoading, importOnehot, defaultNetworkSettings } from '../main';
+import { clearLayoutCache } from './network';
+import { parseFile, wideToSequences, longToSequences, guessColumns, guessEdgeListColumns, edgeListToMatrix } from '../data';
 import { clearGroupAnalysisData } from './dashboard';
+import { erdosRenyi, barabasiAlbert, wattsStrogatz, stochasticBlockModel, matrixToEdgeRows } from '../analysis/random-networks';
+import type { GeneratorResult } from '../analysis/random-networks';
 import sampleCsv from '../sample-data.csv?raw';
 
 function escHtml(s: string): string {
@@ -67,6 +70,8 @@ export function renderLoadPanel(container: HTMLElement) {
     renderFormatOptions(panel);
     renderAnalyzeButton(panel);
     renderPreviewTable(panel);
+    // ─── Generate Random Network (below data when file is loaded) ───
+    renderGenerateNetworkPanel(panel);
   }
 }
 
@@ -92,6 +97,8 @@ function renderWelcomePage(panel: HTMLElement) {
         or drag &amp; drop a file here (.csv, .xlsx, .xls)
       </div>
     </div>
+
+    <div id="gen-network-placeholder"></div>
 
     <div class="welcome-cards">
       <div class="welcome-card">
@@ -129,6 +136,10 @@ function renderWelcomePage(panel: HTMLElement) {
   `;
 
   panel.appendChild(welcome);
+
+  // ─── Generate Random Network (inside welcome page, between hero and info cards) ───
+  const genPlaceholder = welcome.querySelector('#gen-network-placeholder') as HTMLElement;
+  if (genPlaceholder) renderGenerateNetworkPanel(genPlaceholder);
 
   // Hidden file input
   const fileInput = document.createElement('input');
@@ -284,6 +295,7 @@ function rerenderPanel() {
       renderFormatOptions(existing as HTMLElement);
       renderAnalyzeButton(existing as HTMLElement);
       renderPreviewTable(existing as HTMLElement);
+      renderGenerateNetworkPanel(existing as HTMLElement);
     }
   }
 }
@@ -308,6 +320,7 @@ function renderFormatTabs(panel: HTMLElement) {
     { id: 'onehot', label: 'One-Hot' },
     { id: 'group_onehot', label: 'Group One-Hot' },
     { id: 'wide', label: 'Wide' },
+    { id: 'edgelist', label: 'Edge List' },
   ];
 
   for (const fmt of formats) {
@@ -323,7 +336,7 @@ function renderFormatTabs(panel: HTMLElement) {
       const switchedOnehotVariant =
         (prevFormat === 'onehot' && state.format === 'group_onehot') ||
         (prevFormat === 'group_onehot' && state.format === 'onehot');
-      if (switchedOnehotVariant) {
+      if (switchedOnehotVariant || state.format === 'edgelist' || prevFormat === 'edgelist') {
         rerenderPanel();
       } else {
         tabs.querySelectorAll('button').forEach(b => b.classList.remove('active'));
@@ -339,8 +352,10 @@ function renderFormatTabs(panel: HTMLElement) {
 function updateFormatOptions() {
   const longOpts = document.getElementById('load-long-opts');
   const onehotOpts = document.getElementById('load-onehot-opts');
+  const edgeOpts = document.getElementById('load-edgelist-opts');
   if (longOpts) longOpts.style.display = state.format === 'long' ? 'flex' : 'none';
   if (onehotOpts) onehotOpts.style.display = (state.format === 'onehot' || state.format === 'group_onehot') ? 'block' : 'none';
+  if (edgeOpts) edgeOpts.style.display = state.format === 'edgelist' ? 'flex' : 'none';
 }
 
 function renderFormatOptions(panel: HTMLElement) {
@@ -477,6 +492,60 @@ function renderFormatOptions(panel: HTMLElement) {
       state.onehotWindowType = (e.target as HTMLSelectElement).value as 'tumbling' | 'sliding';
     });
   }, 0);
+
+  // ─── Edge List format options ───
+  const edgeOpts = document.createElement('div');
+  edgeOpts.className = 'load-format-options';
+  edgeOpts.id = 'load-edgelist-opts';
+  edgeOpts.style.display = state.format === 'edgelist' ? 'flex' : 'none';
+
+  // Auto-guess edge list columns
+  if (state.format === 'edgelist' && state.headers.length >= 2) {
+    const guessed = guessEdgeListColumns(state.headers);
+    if (state.snaFromCol === 0 && state.snaToCol === 1) {
+      state.snaFromCol = guessed.fromCol;
+      state.snaToCol = guessed.toCol;
+      state.snaWeightCol = guessed.weightCol;
+    }
+  }
+
+  const makeEdgeColOpts = (selected: number, includeNone = false) => {
+    let opts = includeNone ? `<option value="-1" ${selected === -1 ? 'selected' : ''}>None (unweighted)</option>` : '';
+    opts += state.headers.map((h, i) =>
+      `<option value="${i}" ${i === selected ? 'selected' : ''}>${escHtml(h)}</option>`
+    ).join('');
+    return opts;
+  };
+
+  edgeOpts.innerHTML = `
+    <label>From:</label>
+    <select id="load-edge-from">${makeEdgeColOpts(state.snaFromCol)}</select>
+    <label>To:</label>
+    <select id="load-edge-to">${makeEdgeColOpts(state.snaToCol)}</select>
+    <label>Weight:</label>
+    <select id="load-edge-weight">${makeEdgeColOpts(state.snaWeightCol, true)}</select>
+    <label style="display:flex;align-items:center;gap:4px">
+      <input type="checkbox" id="load-edge-directed" ${state.snaDirected ? 'checked' : ''}>
+      Directed
+    </label>
+  `;
+  panel.appendChild(edgeOpts);
+
+  // Wire edge list event handlers
+  setTimeout(() => {
+    document.getElementById('load-edge-from')?.addEventListener('change', (e) => {
+      state.snaFromCol = parseInt((e.target as HTMLSelectElement).value);
+    });
+    document.getElementById('load-edge-to')?.addEventListener('change', (e) => {
+      state.snaToCol = parseInt((e.target as HTMLSelectElement).value);
+    });
+    document.getElementById('load-edge-weight')?.addEventListener('change', (e) => {
+      state.snaWeightCol = parseInt((e.target as HTMLSelectElement).value);
+    });
+    document.getElementById('load-edge-directed')?.addEventListener('change', (e) => {
+      state.snaDirected = (e.target as HTMLInputElement).checked;
+    });
+  }, 0);
 }
 
 function renderPreviewTable(panel: HTMLElement) {
@@ -515,10 +584,32 @@ function renderAnalyzeButton(panel: HTMLElement) {
 
   actions.querySelector('#load-analyze-btn')!.addEventListener('click', () => {
     try {
-      // Clear any stale group analysis from a previous dataset
+      // Clear any stale group analysis and reset network settings for new dataset
       clearGroupAnalysisData();
+      state.networkSettings = defaultNetworkSettings();
+      clearLayoutCache();
 
-      if (state.format === 'wide') {
+      if (state.format === 'edgelist') {
+        // Edge list: validate columns, set SNA mode
+        const { matrix, labels } = edgeListToMatrix(
+          state.rawData, state.snaFromCol, state.snaToCol, state.snaWeightCol, state.snaDirected,
+        );
+        if (labels.length === 0) {
+          alert('No valid nodes found in edge list. Check your From/To column selections.');
+          return;
+        }
+        state.sequenceData = [[]]; // sentinel
+        state.groupLabels = null;
+        state.activeGroup = null;
+        state.activeMode = 'sna';
+        state.activeSubTab = 'network';
+        // SNA defaults: thinner edges, no edge labels
+        state.networkSettings.edgeWidthMax = 2;
+        state.networkSettings.edgeWidthMin = 0.2;
+        state.networkSettings.showEdgeLabels = false;
+        render();
+        return;
+      } else if (state.format === 'wide') {
         state.sequenceData = wideToSequences(state.rawData);
         state.groupLabels = null;
         state.longGroupCol = -1;
@@ -635,4 +726,160 @@ function analyzeOnehot() {
   } else {
     state.groupLabels = null;
   }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Generate Random Network panel
+// ═══════════════════════════════════════════════════════════
+
+function renderGenerateNetworkPanel(panel: HTMLElement) {
+  const section = document.createElement('div');
+  section.className = 'generate-network-section';
+  section.innerHTML = `
+    <div class="generate-network-header">
+      <span class="generate-network-title">Generate Random Network</span>
+    </div>
+    <div class="generate-network-body">
+      <div class="generate-network-row">
+        <label>Model:</label>
+        <select id="gen-model">
+          <option value="er">Erdos-Renyi</option>
+          <option value="ba">Barabasi-Albert</option>
+          <option value="ws">Watts-Strogatz</option>
+          <option value="sbm">Stochastic Block Model</option>
+        </select>
+        <label>Nodes:</label>
+        <input type="number" id="gen-nodes" value="30" min="3" max="200" style="width:60px">
+        <label style="display:flex;align-items:center;gap:4px">
+          <input type="checkbox" id="gen-directed" checked>
+          Directed
+        </label>
+        <label>Seed:</label>
+        <input type="number" id="gen-seed" value="42" min="0" style="width:60px">
+      </div>
+      <div class="generate-network-params">
+        <div id="gen-er-params" class="gen-param-group">
+          <label>Edge prob:</label>
+          <input type="number" id="gen-er-p" value="0.15" min="0" max="1" step="0.01" style="width:70px">
+          <label style="display:flex;align-items:center;gap:4px">
+            <input type="checkbox" id="gen-er-weighted">
+            Weighted
+          </label>
+        </div>
+        <div id="gen-ba-params" class="gen-param-group" style="display:none">
+          <label>Edges/node:</label>
+          <input type="number" id="gen-ba-m" value="2" min="1" max="20" style="width:60px">
+        </div>
+        <div id="gen-ws-params" class="gen-param-group" style="display:none">
+          <label>Neighbors (k):</label>
+          <input type="number" id="gen-ws-k" value="4" min="2" max="20" style="width:60px">
+          <label>Rewiring (beta):</label>
+          <input type="number" id="gen-ws-beta" value="0.3" min="0" max="1" step="0.05" style="width:70px">
+        </div>
+        <div id="gen-sbm-params" class="gen-param-group" style="display:none">
+          <label>Communities:</label>
+          <input type="number" id="gen-sbm-k" value="3" min="2" max="10" style="width:60px">
+          <label>P_in:</label>
+          <input type="number" id="gen-sbm-pin" value="0.3" min="0" max="1" step="0.01" style="width:70px">
+          <label>P_out:</label>
+          <input type="number" id="gen-sbm-pout" value="0.05" min="0" max="1" step="0.01" style="width:70px">
+        </div>
+      </div>
+      <button class="btn-primary" id="gen-analyze-btn">Generate &amp; Analyze</button>
+    </div>
+  `;
+  panel.appendChild(section);
+
+  // Wire model selector to show/hide param groups
+  setTimeout(() => {
+    const modelSel = document.getElementById('gen-model') as HTMLSelectElement | null;
+    const dirCheck = document.getElementById('gen-directed') as HTMLInputElement | null;
+    if (modelSel) {
+      modelSel.addEventListener('change', () => {
+        const m = modelSel.value;
+        document.getElementById('gen-er-params')!.style.display = m === 'er' ? '' : 'none';
+        document.getElementById('gen-ba-params')!.style.display = m === 'ba' ? '' : 'none';
+        document.getElementById('gen-ws-params')!.style.display = m === 'ws' ? '' : 'none';
+        document.getElementById('gen-sbm-params')!.style.display = m === 'sbm' ? '' : 'none';
+        // Watts-Strogatz is always undirected
+        if (m === 'ws' && dirCheck) { dirCheck.checked = false; dirCheck.disabled = true; }
+        else if (dirCheck) { dirCheck.disabled = false; }
+      });
+    }
+
+    document.getElementById('gen-analyze-btn')?.addEventListener('click', () => {
+      try {
+        const model = (document.getElementById('gen-model') as HTMLSelectElement).value;
+        const n = parseInt((document.getElementById('gen-nodes') as HTMLInputElement).value) || 30;
+        const directed = (document.getElementById('gen-directed') as HTMLInputElement).checked;
+        const seed = parseInt((document.getElementById('gen-seed') as HTMLInputElement).value) || 42;
+
+        let result: GeneratorResult;
+        let description: string;
+
+        switch (model) {
+          case 'er': {
+            const p = parseFloat((document.getElementById('gen-er-p') as HTMLInputElement).value) || 0.15;
+            const weighted = (document.getElementById('gen-er-weighted') as HTMLInputElement).checked;
+            result = erdosRenyi({ n, p, directed, weighted, seed });
+            description = `Generated: Erdos-Renyi (n=${n}, p=${p})`;
+            break;
+          }
+          case 'ba': {
+            const m = parseInt((document.getElementById('gen-ba-m') as HTMLInputElement).value) || 2;
+            result = barabasiAlbert({ n, m, directed, seed });
+            description = `Generated: Barabasi-Albert (n=${n}, m=${m})`;
+            break;
+          }
+          case 'ws': {
+            const k = parseInt((document.getElementById('gen-ws-k') as HTMLInputElement).value) || 4;
+            const beta = parseFloat((document.getElementById('gen-ws-beta') as HTMLInputElement).value) || 0.3;
+            result = wattsStrogatz({ n, k, beta, seed });
+            description = `Generated: Watts-Strogatz (n=${n}, k=${k}, beta=${beta})`;
+            break;
+          }
+          case 'sbm': {
+            const k = parseInt((document.getElementById('gen-sbm-k') as HTMLInputElement).value) || 3;
+            const pIn = parseFloat((document.getElementById('gen-sbm-pin') as HTMLInputElement).value) || 0.3;
+            const pOut = parseFloat((document.getElementById('gen-sbm-pout') as HTMLInputElement).value) || 0.05;
+            result = stochasticBlockModel({ n, k, pIn, pOut, directed, seed });
+            description = `Generated: SBM (n=${n}, k=${k}, p_in=${pIn}, p_out=${pOut})`;
+            break;
+          }
+          default:
+            return;
+        }
+
+        // Convert matrix to edge list rows for rawData
+        const edgeRows = matrixToEdgeRows(result.matrix, result.labels, directed);
+
+        // Clear any stale group analysis and reset network settings for new dataset
+        clearGroupAnalysisData();
+        state.networkSettings = defaultNetworkSettings();
+        clearLayoutCache();
+
+        // Set state for SNA mode
+        state.rawData = edgeRows;
+        state.headers = ['From', 'To', 'Weight'];
+        state.format = 'edgelist';
+        state.snaFromCol = 0;
+        state.snaToCol = 1;
+        state.snaWeightCol = 2;
+        state.snaDirected = directed;
+        state.filename = description;
+        state.sequenceData = [[]]; // sentinel
+        state.groupLabels = null;
+        state.activeGroup = null;
+        state.activeMode = 'sna';
+        state.activeSubTab = 'network';
+        // SNA defaults: thinner edges, no edge labels
+        state.networkSettings.edgeWidthMax = 2;
+        state.networkSettings.edgeWidthMin = 0.2;
+        state.networkSettings.showEdgeLabels = false;
+        render();
+      } catch (err) {
+        alert('Error generating network: ' + (err as Error).message);
+      }
+    });
+  }, 0);
 }

@@ -2,12 +2,11 @@
  * Cliques tab: find cliques in the TNA network with configurable size and threshold.
  * Renders a grid of mini-networks for each clique found.
  */
-import * as d3 from 'd3';
 import type { TNA, CliqueResult } from 'tnaj';
 import { cliques, createTNA } from 'tnaj';
 import type { NetworkSettings } from '../main';
+import { state } from '../main';
 import { renderNetwork } from './network';
-import { NODE_COLORS } from './colors';
 import { addPanelDownloadButtons } from './export';
 import { createViewToggle } from './dashboard';
 
@@ -17,6 +16,9 @@ export function renderCliquesTab(
   networkSettings: NetworkSettings,
   idSuffix = '',
 ) {
+  const isSna = state.activeMode === 'sna';
+  const defaultSize = isSna ? 2 : 3;
+  const defaultThreshold = isSna ? 0 : 0.05;
   const grid = document.createElement('div');
   grid.className = 'panels-grid';
 
@@ -30,14 +32,14 @@ export function renderCliquesTab(
         <label style="font-size:12px;color:#777">Min Size:</label>
         <select id="clique-size${idSuffix}" style="font-size:12px">
           ${[2, 3, 4, 5, 6, 7, 8].map(s =>
-            `<option value="${s}" ${s === 3 ? 'selected' : ''}>${s}</option>`
+            `<option value="${s}" ${s === defaultSize ? 'selected' : ''}>${s}</option>`
           ).join('')}
         </select>
       </div>
       <div style="display:flex;align-items:center;gap:6px">
         <label style="font-size:12px;color:#777">Threshold:</label>
-        <input type="range" id="clique-threshold${idSuffix}" min="0" max="0.5" step="0.01" value="0.05" style="width:120px">
-        <span id="clique-threshold-val${idSuffix}" style="font-size:12px;color:#555">0.05</span>
+        <input type="range" id="clique-threshold${idSuffix}" min="0" max="0.5" step="0.01" value="${defaultThreshold}" style="width:120px">
+        <span id="clique-threshold-val${idSuffix}" style="font-size:12px;color:#555">${defaultThreshold.toFixed(2)}</span>
       </div>
       <span id="clique-count${idSuffix}" style="font-size:12px;color:#888;margin-left:12px"></span>
     </div>
@@ -80,8 +82,9 @@ export function renderCliquesTab(
 
         let currentView: 'card' | 'combined' = 'combined';
 
-        function renderMiniNetworks() {
+        function renderMiniNetworks(overrideSettings?: NetworkSettings) {
           requestAnimationFrame(() => {
+            const baseSettings = overrideSettings ?? networkSettings;
             for (let c = 0; c < nCliques; c++) {
               const el = document.getElementById(`viz-clique-${c}${idSuffix}`);
               if (!el) continue;
@@ -91,11 +94,8 @@ export function renderCliquesTab(
               const miniModel = createTNA(cliqueWeights, inits, cliqueLabels, null, 'matrix', []);
 
               const miniSettings: NetworkSettings = {
-                ...networkSettings,
+                ...baseSettings,
                 networkHeight: 250,
-                nodeRadius: 25,
-                nodeLabelSize: 8,
-                edgeLabelSize: 6,
                 edgeThreshold: 0,
                 layout: 'circular',
                 graphPadding: 10,
@@ -105,6 +105,10 @@ export function renderCliquesTab(
             }
           });
         }
+
+        // Store re-render function for sidebar live-updates
+        const clqFns = (window as any).__clqRenderFns = (window as any).__clqRenderFns || {};
+        clqFns[idSuffix || '_single'] = renderMiniNetworks;
 
         function renderCardView() {
           viewContainer.innerHTML = '';

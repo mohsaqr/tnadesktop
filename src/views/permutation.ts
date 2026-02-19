@@ -8,6 +8,7 @@ import { showTooltip, hideTooltip } from '../main';
 import { permutationTest } from '../analysis/permutation';
 import type { PermutationResult, PermutationOptions } from '../analysis/permutation';
 import { addPanelDownloadButtons } from './export';
+import { fmtNum } from './network';
 import { createViewToggle } from './dashboard';
 
 export function renderPermutationTab(
@@ -151,9 +152,9 @@ function renderPermutationResults(
         const rowStyle = sig ? 'background:#fff3cd' : '';
         tableHtml += `<tr style="${rowStyle}">`;
         tableHtml += `<td>${e.from}</td><td>${e.to}</td>`;
-        tableHtml += `<td>${e.diffTrue.toFixed(4)}</td>`;
-        tableHtml += `<td>${isNaN(e.effectSize) ? 'N/A' : e.effectSize.toFixed(3)}</td>`;
-        tableHtml += `<td>${e.pValue.toFixed(4)}</td>`;
+        tableHtml += `<td>${fmtNum(e.diffTrue)}</td>`;
+        tableHtml += `<td>${isNaN(e.effectSize) ? 'N/A' : fmtNum(e.effectSize, 3)}</td>`;
+        tableHtml += `<td>${fmtNum(e.pValue)}</td>`;
         tableHtml += `<td style="text-align:center">${sig ? '***' : ''}</td>`;
         tableHtml += '</tr>';
       }
@@ -211,8 +212,8 @@ function renderDiffHeatmap(container: HTMLElement, result: PermutationResult) {
           const pIdx = i * a + j;
           showTooltip(event,
             `<b>${labels[i]} → ${labels[j]}</b><br>` +
-            `Diff: ${result.diffTrue[pIdx]!.toFixed(4)}<br>` +
-            `p: ${result.pValues[pIdx]!.toFixed(4)}<br>` +
+            `Diff: ${fmtNum(result.diffTrue[pIdx]!)}<br>` +
+            `p: ${fmtNum(result.pValues[pIdx]!)}<br>` +
             `${val !== 0 ? 'Significant' : 'Not significant'}`);
         })
         .on('mousemove', function (event: MouseEvent) {
@@ -235,7 +236,7 @@ function renderDiffHeatmap(container: HTMLElement, result: PermutationResult) {
           .attr('font-size', '8px')
           .attr('fill', Math.abs(val) > maxAbs * 0.6 ? '#fff' : '#333')
           .attr('pointer-events', 'none')
-          .text(val.toFixed(3));
+          .text(fmtNum(val, 3));
       }
     }
   }

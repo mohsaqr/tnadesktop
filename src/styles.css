@@ -634,6 +634,76 @@ body {
   padding: 10px 48px;
 }
 
+/* ─── Generate Random Network ─── */
+
+.generate-network-section {
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.generate-network-header {
+  background: var(--bg-secondary);
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.generate-network-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.generate-network-body {
+  padding: 12px 16px;
+}
+
+.generate-network-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.generate-network-row label {
+  font-size: 13px;
+  color: #555;
+}
+
+.generate-network-row select,
+.generate-network-row input[type="number"] {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.generate-network-params {
+  margin-bottom: 10px;
+}
+
+.gen-param-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.gen-param-group label {
+  font-size: 13px;
+  color: #555;
+}
+
+.gen-param-group input[type="number"] {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
 .btn-primary {
   background: var(--blue);
   color: #fff;
@@ -1257,6 +1327,15 @@ body {
   line-height: 1.4;
 }
 .panel-dl-btn:hover { background: var(--blue); color: #fff; border-color: var(--blue); }
+
+/* ─── Tab Export Bar ─── */
+.tab-export-bar {
+  float: right;
+  display: flex;
+  gap: 6px;
+  padding: 0;
+  margin: 0;
+}
 
 /* ─── View Toggle (Card / Combined) ─── */
 .view-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }

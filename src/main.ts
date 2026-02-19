@@ -3,8 +3,10 @@
  * Manages app state and routes between views: welcome → preview → dashboard.
  */
 import type { TNA, GroupTNA, CentralityResult, CommunityResult, CentralityMeasure, CommunityMethod, SequenceData } from 'tnaj';
-import { tna, ftna, ctna, atna, centralities, prune, summary, AVAILABLE_MEASURES, AVAILABLE_METHODS, groupTna, groupFtna, groupCtna, groupAtna, isGroupTNA, clusterSequences, importOnehot } from 'tnaj';
+import { tna, ftna, ctna, atna, centralities, prune, summary, AVAILABLE_MEASURES, AVAILABLE_METHODS, groupTna, groupFtna, groupCtna, groupAtna, isGroupTNA, clusterSequences, importOnehot, buildModel as tnajBuildModel } from 'tnaj';
+import { edgeListToMatrix } from './data';
 import { detectCommunities } from './analysis/communities';
+import { computePageRank } from './analysis/pagerank';
 import { renderDashboard } from './views/dashboard';
 
 // ═══════════════════════════════════════════════════════════
@@ -23,6 +25,7 @@ export interface NetworkSettings {
   nodeLabelHaloWidth: number;    // halo stroke width
   showNodeLabels: boolean;
   nodeColors: Record<string, string>;
+  nodeShape: 'circle' | 'square' | 'diamond' | 'triangle' | 'hexagon';
 
   // Pie (donut ring)
   pieBorderWidth: number;
@@ -53,13 +56,20 @@ export interface NetworkSettings {
   showSelfLoops: boolean;
 
   // Layout
-  layout: 'circular' | 'spring' | 'kamada_kawai' | 'spectral';
+  layout: 'circular' | 'spring' | 'kamada_kawai' | 'spectral' | 'fruchterman_reingold' | 'forceatlas2' | 'fr_shell' | 'concentric' | 'fcose' | 'dagre' | 'cola' | 'euler' | 'avsdf';
+  layoutSeed: number;
+  layoutSpacing: number;        // scale positions from center (1 = normal)
   graphPadding: number;
   networkHeight: number;
+
+  // Node sizing by centrality
+  nodeSizeBy: string;       // '' = uniform, or CentralityMeasure name
+  nodeSizeMin: number;      // min radius when scaling
+  nodeSizeMax: number;      // max radius when scaling
 }
 
 // Bump this whenever defaults change to force a localStorage reset
-export const SETTINGS_VERSION = 14;
+export const SETTINGS_VERSION = 20;
 
 export function defaultNetworkSettings(): NetworkSettings {
   return {
@@ -74,6 +84,7 @@ export function defaultNetworkSettings(): NetworkSettings {
     nodeLabelHaloWidth: 3,
     showNodeLabels: true,
     nodeColors: {},
+    nodeShape: 'circle',
 
     pieBorderWidth: 1,
     pieBorderColor: '#666666',
@@ -99,8 +110,14 @@ export function defaultNetworkSettings(): NetworkSettings {
     showSelfLoops: true,
 
     layout: 'circular',
+    layoutSeed: 42,
+    layoutSpacing: 1.0,
     graphPadding: 25,
     networkHeight: 580,
+
+    nodeSizeBy: '',
+    nodeSizeMin: 8,
+    nodeSizeMax: 40,
   };
 }
 
@@ -113,6 +130,8 @@ export function groupNetworkSettings(base: NetworkSettings): NetworkSettings {
     edgeLabelSize: Math.round(base.edgeLabelSize * 0.85),
     arrowSize: Math.round(base.arrowSize * 0.75),
     graphPadding: 5,
+    nodeSizeMin: Math.round(base.nodeSizeMin * 0.65),
+    nodeSizeMax: Math.round(base.nodeSizeMax * 0.65),
   };
 }
 
@@ -124,7 +143,7 @@ export interface AppState {
   rawData: string[][];
   headers: string[];
   sequenceData: SequenceData | null;
-  format: 'wide' | 'long' | 'onehot' | 'group_onehot';
+  format: 'wide' | 'long' | 'onehot' | 'group_onehot' | 'edgelist';
   longIdCol: number;
   longTimeCol: number;
   longStateCol: number;
@@ -148,7 +167,11 @@ export interface AppState {
   activeSecondaryTab: string;
   clusterK: number;
   clusterDissimilarity: 'hamming' | 'lv' | 'osa' | 'lcs';
-  activeMode: 'data' | 'single' | 'clustering' | 'group' | 'onehot' | 'group_onehot';
+  snaFromCol: number;
+  snaToCol: number;
+  snaWeightCol: number;       // -1 = unweighted
+  snaDirected: boolean;
+  activeMode: 'data' | 'single' | 'clustering' | 'group' | 'onehot' | 'group_onehot' | 'sna';
   activeSubTab: string;
   chartMaxWidth: number;
   error: string | null;
@@ -171,6 +194,10 @@ export const state: AppState = {
   onehotGroupCol: -1,
   onehotWindowSize: 1,
   onehotWindowType: 'tumbling',
+  snaFromCol: 0,
+  snaToCol: 1,
+  snaWeightCol: -1,
+  snaDirected: true,
   groupLabels: null,
   activeGroup: null,
   modelType: 'tna',
@@ -197,8 +224,23 @@ export const state: AppState = {
 const builders = { tna, ftna, ctna, atna } as const;
 export const groupBuilders = { tna: groupTna, ftna: groupFtna, ctna: groupCtna, atna: groupAtna } as const;
 
+/** Build a TNA model from an edge list (SNA mode). */
+export function buildSnaModel(): TNA {
+  if (!state.rawData || state.rawData.length === 0) throw new Error('No edge list data loaded');
+  const { matrix, labels } = edgeListToMatrix(
+    state.rawData, state.snaFromCol, state.snaToCol, state.snaWeightCol, state.snaDirected,
+  );
+  const type = state.snaDirected ? 'frequency' : 'co-occurrence';
+  let model = tnajBuildModel(matrix, { type, labels, scaling: state.scaling || undefined } as any);
+  if (state.threshold > 0) {
+    model = prune(model, state.threshold) as TNA;
+  }
+  return model;
+}
+
 /** Build a single TNA from all sequences (ignoring group labels). */
 export function buildModel(): TNA {
+  if (state.activeMode === 'sna') return buildSnaModel();
   if (!state.sequenceData) throw new Error('No data loaded');
   const opts: Record<string, unknown> = {};
   if (state.scaling) opts.scaling = state.scaling;
@@ -242,7 +284,9 @@ export function getGroupNames(model: TNA | GroupTNA): string[] {
 export { isGroupTNA };
 
 export function computeCentralities(model: TNA): CentralityResult {
-  return centralities(model, { loops: state.centralityLoops });
+  const result = centralities(model, { loops: state.centralityLoops });
+  (result.measures as any)['PageRank'] = computePageRank(model);
+  return result;
 }
 
 export function computeCommunities(model: TNA, method?: CommunityMethod): CommunityResult | undefined {
@@ -297,6 +341,10 @@ function loadState() {
     state.longTimeCol = saved.longTimeCol ?? 1;
     state.longStateCol = saved.longStateCol ?? 2;
     state.longGroupCol = saved.longGroupCol ?? -1;
+    state.snaFromCol = (saved as any).snaFromCol ?? 0;
+    state.snaToCol = (saved as any).snaToCol ?? 1;
+    state.snaWeightCol = (saved as any).snaWeightCol ?? -1;
+    state.snaDirected = (saved as any).snaDirected ?? true;
     state.onehotActorCol = (saved as any).onehotActorCol ?? -1;
     state.onehotSessionCol = (saved as any).onehotSessionCol ?? -1;
     state.onehotGroupCol = (saved as any).onehotGroupCol ?? -1;
