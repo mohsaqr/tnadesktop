@@ -85,6 +85,7 @@ export function circularLayout(
 function springLayout(
   n: number, weights: { get(i: number, j: number): number },
   width: number, height: number, padding: number, seed = 42,
+  nodeRadius = 25,
 ): { x: number; y: number }[] {
   // Build links from weight matrix
   const links: { source: number; target: number; weight: number }[] = [];
@@ -96,6 +97,14 @@ function springLayout(
     }
   }
 
+  // SNA-aware parameters: adapt to graph size
+  const isSna = n > 20;
+  const chargeStrength = isSna ? -200 - (n * 5) : -300;
+  const linkDist = isSna ? 30 + 200 / Math.sqrt(n) : 100;
+  const linkStr = isSna ? 0.3 : undefined;
+  const collideRadius = isSna ? nodeRadius * 1.8 : padding * 0.5;
+  const iters = isSna ? 500 : 300;
+
   // Seed initial positions in a circle with jitter so spring layout is deterministic
   const rng = seededRandom(seed);
   const cx = width / 2;
@@ -106,14 +115,19 @@ function springLayout(
     return { index: i, x: cx + initRadius * Math.cos(angle) + (rng() - 0.5) * 2, y: cy + initRadius * Math.sin(angle) + (rng() - 0.5) * 2 };
   });
 
+  const linkForce = d3.forceLink(links).id((_d, i) => i).distance(linkDist);
+  if (linkStr !== undefined) linkForce.strength(linkStr);
+
   const sim = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(links).id((_d, i) => i).distance(100).strength((d: any) => d.weight))
-    .force('charge', d3.forceManyBody().strength(-300))
+    .force('link', linkForce)
+    .force('charge', d3.forceManyBody().strength(chargeStrength))
     .force('center', d3.forceCenter(width / 2, height / 2))
-    .force('collide', d3.forceCollide(padding * 0.5))
+    .force('collide', d3.forceCollide(collideRadius))
+    .force('x', d3.forceX(width / 2).strength(isSna ? 0.05 : 0))
+    .force('y', d3.forceY(height / 2).strength(isSna ? 0.05 : 0))
     .stop();
 
-  for (let i = 0; i < 300; i++) sim.tick();
+  for (let i = 0; i < iters; i++) sim.tick();
 
   const positions = nodes.map(nd => ({ x: nd.x!, y: nd.y! }));
   rescalePositions(positions, width, height, padding);
@@ -283,25 +297,49 @@ function spectralLayout(
   return pos;
 }
 
-// ─── Fruchterman-Reingold (Gephi-style) ───
+// ─── Fruchterman-Reingold (Gephi-faithful) ───
+//
+// Matches Gephi's FruchtermanReingold.java by Mathieu Jacomy:
+//   - k = sqrt(AREA_MULT * area / (1+n))
+//   - Repulsive: k²/d  (all pairs)
+//   - Attractive: d²/k  (edges only, no weight scaling)
+//   - Gravity: 0.01 * k * gravity * d  (toward origin)
+//   - Constant speed factor (speed / SPEED_DIVISOR) instead of cooling
+//   - maxDisplace cap per iteration
+//
+// Adapted for batch use: we loop many iterations internally since
+// Gephi calls goAlgo() from a UI loop.
 
 function fruchtermanReingoldLayout(
   n: number, weights: { get(i: number, j: number): number },
   width: number, height: number, padding: number, seed = 42,
+  _nodeRadius = 25,
 ): { x: number; y: number }[] {
   if (n <= 1) return [{ x: width / 2, y: height / 2 }];
 
-  const area = width * height;
-  const k = Math.sqrt(area / n);       // ideal edge length
-  const gravity = 0.05;                // pull disconnected components toward center
-  const iterations = 500;
+  // Gephi constants
+  const SPEED_DIVISOR = 800;
+  const AREA_MULTIPLICATOR = 10000;
 
-  // Build adjacency list for speed
-  const edges: { i: number; j: number; w: number }[] = [];
+  // Tunable properties (Gephi defaults)
+  const area = 10000;
+  const gravity = 10;
+  const speed = 1;
+
+  // Derived
+  const k = Math.sqrt((AREA_MULTIPLICATOR * area) / (1 + n));
+  const maxDisplace = Math.sqrt(AREA_MULTIPLICATOR * area) / 10;
+  const speedFactor = speed / SPEED_DIVISOR;
+
+  // More iterations for larger graphs (Gephi runs interactively; we batch)
+  const iterations = n > 20 ? Math.max(1000, n * 8) : 500;
+
+  // Build edge list
+  const edges: { i: number; j: number }[] = [];
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
       const w = weights.get(i, j) + weights.get(j, i);
-      if (w > 0) edges.push({ i, j, w });
+      if (w > 0) edges.push({ i, j });
     }
   }
 
@@ -316,9 +354,6 @@ function fruchtermanReingoldLayout(
     };
   });
 
-  let temperature = Math.min(width, height) * 0.1;
-  const cooling = temperature / (iterations + 1);
-
   const dispX = new Float64Array(n);
   const dispY = new Float64Array(n);
 
@@ -326,54 +361,59 @@ function fruchtermanReingoldLayout(
     dispX.fill(0);
     dispY.fill(0);
 
-    // Repulsive forces between all node pairs
+    // Repulsive forces: all node pairs
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
-        let dx = pos[i]!.x - pos[j]!.x;
-        let dy = pos[i]!.y - pos[j]!.y;
+        const dx = pos[i]!.x - pos[j]!.x;
+        const dy = pos[i]!.y - pos[j]!.y;
         const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-        const force = (k * k) / dist;  // repulsive: k²/d
-        const fx = (dx / dist) * force;
-        const fy = (dy / dist) * force;
+        const repulsiveF = (k * k) / dist;
+        const fx = (dx / dist) * repulsiveF;
+        const fy = (dy / dist) * repulsiveF;
         dispX[i]! += fx;  dispY[i]! += fy;
         dispX[j]! -= fx;  dispY[j]! -= fy;
       }
     }
 
-    // Attractive forces along edges
+    // Attractive forces: edges only, d²/k (no weight scaling, like Gephi)
     for (const edge of edges) {
       const dx = pos[edge.i]!.x - pos[edge.j]!.x;
       const dy = pos[edge.i]!.y - pos[edge.j]!.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-      const force = (dist * dist) / k * Math.min(edge.w, 3);  // attractive: d²/k, capped weight
-      const fx = (dx / dist) * force;
-      const fy = (dy / dist) * force;
+      const attractiveF = (dist * dist) / k;
+      const fx = (dx / dist) * attractiveF;
+      const fy = (dy / dist) * attractiveF;
       dispX[edge.i]! -= fx;  dispY[edge.i]! -= fy;
       dispX[edge.j]! += fx;  dispY[edge.j]! += fy;
     }
 
-    // Gravity toward center
+    // Gravity toward center: 0.01 * k * gravity * d (Gephi formula)
     const cx = width / 2, cy = height / 2;
     for (let i = 0; i < n; i++) {
       const dx = pos[i]!.x - cx;
       const dy = pos[i]!.y - cy;
-      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      dispX[i]! -= gravity * dx;
-      dispY[i]! -= gravity * dy;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const gf = 0.01 * k * gravity * d;
+      dispX[i]! -= gf * dx / d;
+      dispY[i]! -= gf * dy / d;
     }
 
-    // Apply displacement capped by temperature
+    // Apply speed scaling (constant, no cooling — like Gephi)
+    for (let i = 0; i < n; i++) {
+      dispX[i]! *= speedFactor;
+      dispY[i]! *= speedFactor;
+    }
+
+    // Apply displacement capped by maxDisplace * speedFactor
+    const limitedDisplace = maxDisplace * speedFactor;
     for (let i = 0; i < n; i++) {
       const dx = dispX[i]!;
       const dy = dispY[i]!;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      const cap = Math.min(dist, temperature) / dist;
-      pos[i]!.x += dx * cap;
-      pos[i]!.y += dy * cap;
+      const capped = Math.min(limitedDisplace, dist) / dist;
+      pos[i]!.x += dx * capped;
+      pos[i]!.y += dy * capped;
     }
-
-    temperature -= cooling;
-    if (temperature < 0.01) break;
   }
 
   rescalePositions(pos, width, height, padding);
@@ -385,14 +425,16 @@ function fruchtermanReingoldLayout(
 function forceAtlas2Layout(
   n: number, weights: { get(i: number, j: number): number },
   width: number, height: number, padding: number, seed = 42,
+  _nodeRadius = 25,
 ): { x: number; y: number }[] {
   if (n <= 1) return [{ x: width / 2, y: height / 2 }];
 
+  const isSna = n > 20;
   const linLog = true;                 // LinLog mode: better community separation
-  const scalingRatio = 2.0;
-  const gravity = 1.0;
+  const scalingRatio = isSna ? 2.0 + n * 0.02 : 2.0;
+  const gravity = isSna ? 1.0 + n * 0.005 : 1.0;
   const jitterTolerance = 1.0;
-  const iterations = 600;
+  const iterations = isSna ? Math.max(600, n * 4) : 600;
 
   // Build adjacency
   const edges: { i: number; j: number; w: number }[] = [];
@@ -546,20 +588,24 @@ function frShellLayout(
     return fruchtermanReingoldLayout(n, weights, width, height, padding, seed);
   }
 
-  // --- Step 1: Run FR on core nodes only ---
+  // --- Step 1: Run Gephi-style FR on core nodes only ---
   const coreN = coreIdx.length;
-  const coreArea = width * height * 0.55; // use ~55% of area for the core
-  const coreK = Math.sqrt(coreArea / coreN);
-  const gravity = 0.08;
-  const iterations = 500;
+  const SHELL_SPEED_DIVISOR = 800;
+  const SHELL_AREA_MULT = 10000;
+  const shellArea = 10000;
+  const coreK = Math.sqrt((SHELL_AREA_MULT * shellArea) / (1 + coreN));
+  const shellMaxDisplace = Math.sqrt(SHELL_AREA_MULT * shellArea) / 10;
+  const shellSpeedFactor = 1 / SHELL_SPEED_DIVISOR;
+  const shellGravity = 10;
+  const iterations = coreN > 20 ? Math.max(1000, coreN * 8) : 500;
 
-  const coreEdges: { i: number; j: number; w: number }[] = [];
+  const coreEdges: { i: number; j: number }[] = [];
   const coreMap = new Map<number, number>(); // original idx → core local idx
   coreIdx.forEach((orig, local) => coreMap.set(orig, local));
   for (let a = 0; a < coreN; a++) {
     for (let b = a + 1; b < coreN; b++) {
       const w = weights.get(coreIdx[a]!, coreIdx[b]!) + weights.get(coreIdx[b]!, coreIdx[a]!);
-      if (w > 0) coreEdges.push({ i: a, j: b, w });
+      if (w > 0) coreEdges.push({ i: a, j: b });
     }
   }
 
@@ -573,8 +619,6 @@ function frShellLayout(
     };
   });
 
-  let temperature = Math.min(width, height) * 0.1;
-  const cooling = temperature / (iterations + 1);
   const dispX = new Float64Array(coreN);
   const dispY = new Float64Array(coreN);
 
@@ -582,47 +626,53 @@ function frShellLayout(
     dispX.fill(0);
     dispY.fill(0);
 
+    // Repulsive: k²/d
     for (let i = 0; i < coreN; i++) {
       for (let j = i + 1; j < coreN; j++) {
         const dx = corePos[i]!.x - corePos[j]!.x;
         const dy = corePos[i]!.y - corePos[j]!.y;
         const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-        const force = (coreK * coreK) / dist;
-        const fx = (dx / dist) * force;
-        const fy = (dy / dist) * force;
+        const repF = (coreK * coreK) / dist;
+        const fx = (dx / dist) * repF;
+        const fy = (dy / dist) * repF;
         dispX[i]! += fx; dispY[i]! += fy;
         dispX[j]! -= fx; dispY[j]! -= fy;
       }
     }
 
+    // Attractive: d²/k (no weight, like Gephi)
     for (const edge of coreEdges) {
       const dx = corePos[edge.i]!.x - corePos[edge.j]!.x;
       const dy = corePos[edge.i]!.y - corePos[edge.j]!.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-      const force = (dist * dist) / coreK * Math.min(edge.w, 3);
-      const fx = (dx / dist) * force;
-      const fy = (dy / dist) * force;
+      const attF = (dist * dist) / coreK;
+      const fx = (dx / dist) * attF;
+      const fy = (dy / dist) * attF;
       dispX[edge.i]! -= fx; dispY[edge.i]! -= fy;
       dispX[edge.j]! += fx; dispY[edge.j]! += fy;
     }
 
-    const cx = width / 2, cy = height / 2;
+    // Gravity: 0.01 * k * gravity * d
+    const ccx = width / 2, ccy = height / 2;
     for (let i = 0; i < coreN; i++) {
-      dispX[i]! -= gravity * (corePos[i]!.x - cx);
-      dispY[i]! -= gravity * (corePos[i]!.y - cy);
+      const dx = corePos[i]!.x - ccx;
+      const dy = corePos[i]!.y - ccy;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const gf = 0.01 * coreK * shellGravity * d;
+      dispX[i]! -= gf * dx / d;
+      dispY[i]! -= gf * dy / d;
     }
 
+    // Speed scaling + maxDisplace cap
+    const limitedD = shellMaxDisplace * shellSpeedFactor;
     for (let i = 0; i < coreN; i++) {
-      const dx = dispX[i]!;
-      const dy = dispY[i]!;
+      const dx = dispX[i]! * shellSpeedFactor;
+      const dy = dispY[i]! * shellSpeedFactor;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      const cap = Math.min(dist, temperature) / dist;
+      const cap = Math.min(limitedD, dist) / dist;
       corePos[i]!.x += dx * cap;
       corePos[i]!.y += dy * cap;
     }
-
-    temperature -= cooling;
-    if (temperature < 0.01) break;
   }
 
   // --- Step 2: Arrange shell nodes in a circle around the core ---
@@ -953,6 +1003,21 @@ function drawNetwork(
 ) {
   const n = model.labels.length;
   const weights = model.weights;
+
+  // Auto-scale visuals for large (SNA-scale) networks
+  if (n > 20) {
+    settings = {
+      ...settings,
+      nodeRadius: Math.round(settings.nodeRadius * 0.7),
+      nodeSizeMin: Math.round(settings.nodeSizeMin * 0.7),
+      nodeSizeMax: Math.round(settings.nodeSizeMax * 0.7),
+      edgeWidthMin: settings.edgeWidthMin * 0.7,
+      edgeWidthMax: settings.edgeWidthMax * 0.7,
+      arrowSize: Math.round(settings.arrowSize * 0.7),
+      showNodeLabels: false,
+    };
+  }
+
   const nodeRadius = settings.nodeRadius;
 
   // ─── Pre-compute per-node radii (needed for padding before layout) ───
@@ -974,7 +1039,9 @@ function drawNetwork(
 
   // ─── Layout (with position caching) ───
   const layoutSeed = settings.layoutSeed ?? 42;
-  const key = layoutCacheKey(model, settings.layout, layoutSeed);
+  // Auto-switch circular → fcose for large graphs (SNA scale)
+  const effectiveLayout = (settings.layout === 'circular' && n > 20) ? 'fcose' : settings.layout;
+  const key = layoutCacheKey(model, effectiveLayout, layoutSeed);
   let positions: { x: number; y: number }[];
 
   if (key === cachedLayoutKey && cachedNormPositions.length === n) {
@@ -983,15 +1050,15 @@ function drawNetwork(
   } else {
     // Compute fresh layout
     const cyLayouts: CytoscapeLayoutName[] = ['concentric', 'fcose', 'dagre', 'cola', 'euler', 'avsdf'];
-    if (cyLayouts.includes(settings.layout as CytoscapeLayoutName)) {
+    if (cyLayouts.includes(effectiveLayout as CytoscapeLayoutName)) {
       positions = cytoscapeLayout(
-        settings.layout as CytoscapeLayoutName,
+        effectiveLayout as CytoscapeLayoutName,
         n, weights, graphWidth, graphHeight, padding, layoutSeed,
       );
     } else {
-      switch (settings.layout) {
+      switch (effectiveLayout) {
         case 'spring':
-          positions = springLayout(n, weights, graphWidth, graphHeight, padding, layoutSeed);
+          positions = springLayout(n, weights, graphWidth, graphHeight, padding, layoutSeed, nodeRadius);
           break;
         case 'kamada_kawai':
           positions = kamadaKawaiLayout(n, weights, graphWidth, graphHeight, padding);
@@ -1000,10 +1067,10 @@ function drawNetwork(
           positions = spectralLayout(n, weights, graphWidth, graphHeight, padding, layoutSeed);
           break;
         case 'fruchterman_reingold':
-          positions = fruchtermanReingoldLayout(n, weights, graphWidth, graphHeight, padding, layoutSeed);
+          positions = fruchtermanReingoldLayout(n, weights, graphWidth, graphHeight, padding, layoutSeed, nodeRadius);
           break;
         case 'forceatlas2':
-          positions = forceAtlas2Layout(n, weights, graphWidth, graphHeight, padding, layoutSeed);
+          positions = forceAtlas2Layout(n, weights, graphWidth, graphHeight, padding, layoutSeed, nodeRadius);
           break;
         case 'fr_shell':
           positions = frShellLayout(n, weights, graphWidth, graphHeight, padding, layoutSeed);

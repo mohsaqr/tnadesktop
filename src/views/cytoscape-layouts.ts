@@ -101,21 +101,28 @@ export function cytoscapeLayout(
       };
       break;
 
-    case 'fcose':
+    case 'fcose': {
+      // Scale parameters with node count for better SNA layouts
+      const isSna = n > 20;
+      const idealEdge = isSna ? 60 + 400 / Math.sqrt(n) : 80;
+      const repulsion = isSna ? 4000 + n * 50 : 4500;
+      const numIter = isSna ? Math.max(2500, n * 20) : 2500;
+      const gravRange = isSna ? 5.0 : 3.8;
       layoutOpts = {
         ...baseOpts,
         name: 'fcose',
         quality: 'default',
         randomize: true,
-        idealEdgeLength: () => 80,
-        nodeRepulsion: () => 4500,
+        idealEdgeLength: () => idealEdge,
+        nodeRepulsion: () => repulsion,
         edgeElasticity: () => 0.45,
-        numIter: 2500,
+        numIter,
         gravity: 0.25,
-        gravityRange: 3.8,
+        gravityRange: gravRange,
         seed: seed ?? 42,
       };
       break;
+    }
 
     case 'dagre':
       layoutOpts = {
@@ -128,15 +135,18 @@ export function cytoscapeLayout(
       };
       break;
 
-    case 'cola':
+    case 'cola': {
+      const colaSpacing = n > 20 ? 20 + 200 / Math.sqrt(n) : 30;
+      const colaTime = n > 20 ? Math.max(4000, n * 40) : 4000;
       layoutOpts = {
         ...baseOpts,
         name: 'cola',
-        nodeSpacing: 30,
+        nodeSpacing: colaSpacing,
         randomize: true,
-        maxSimulationTime: 4000,
+        maxSimulationTime: colaTime,
       };
       break;
+    }
 
     case 'euler':
       layoutOpts = {
