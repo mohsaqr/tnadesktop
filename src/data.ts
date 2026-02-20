@@ -78,7 +78,7 @@ function parseExcel(file: File): Promise<ParsedFile> {
  * Default: long (more common for event logs).
  * Wide: only if many columns with few unique values (sequence-per-row).
  */
-function detectFormat(headers: string[], rows: string[][]): 'wide' | 'long' {
+export function detectFormat(headers: string[], rows: string[][]): 'wide' | 'long' {
   // Heuristic: if <= 5 columns, likely long format
   if (headers.length <= 5) return 'long';
 
@@ -235,7 +235,7 @@ const DATE_PATTERNS: { regex: RegExp; parse: (m: RegExpMatchArray) => Date }[] =
  * Parse a single timestamp string into a Date, or return null if unparseable.
  * Tries: numeric (plain number / Unix timestamp), then common date formats.
  */
-function parseTimestamp(value: string): Date | null {
+export function parseTimestamp(value: string): Date | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
 
