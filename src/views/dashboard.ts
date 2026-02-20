@@ -4,7 +4,7 @@
 import type { TNA, GroupTNA, CentralityResult, CommunityResult, CentralityMeasure, CommunityMethod } from 'tnaj';
 import { betweennessNetwork } from 'tnaj';
 import type { NetworkSettings } from '../main';
-import { state, render, saveState, buildModel, buildGroupModel, computeCentralities, computeCommunities, computeSummary, groupNetworkSettings, AVAILABLE_MEASURES, AVAILABLE_METHODS, prune } from '../main';
+import { state, render, saveState, clearAnalysis, buildModel, buildGroupModel, computeCentralities, computeCommunities, computeSummary, groupNetworkSettings, AVAILABLE_MEASURES, AVAILABLE_METHODS, prune } from '../main';
 import { renderNetwork, renderNetworkIntoGroup, fmtNum, clearLayoutCache } from './network';
 import { renderCentralityChart } from './centralities';
 import { renderFrequencies, renderWeightHistogram, countStateFrequencies, renderFrequencyLines } from './frequencies';
@@ -395,7 +395,8 @@ export function renderDashboard(container: HTMLElement) {
   buildTopNav(nav);
 
   // ─── Dashboard Body ───
-  const isDataMode = state.activeMode === 'data' || !state.sequenceData;
+  const hasAnyData = !!state.sequenceData || (state.rawData.length > 0 && state.format === 'edgelist');
+  const isDataMode = state.activeMode === 'data' || !hasAnyData;
   if (isDataMode) state.activeMode = 'data';
 
   const dashboard = document.createElement('div');
@@ -959,11 +960,16 @@ export function renderDashboard(container: HTMLElement) {
   });
 
   // Initial render
-  if (state.activeMode === 'data' || !state.sequenceData) {
+  const hasRestoredData = !!state.sequenceData || (state.rawData.length > 0 && state.format === 'edgelist');
+  if (state.activeMode === 'data' || !hasRestoredData) {
     state.activeMode = 'data';
     dashboard.classList.add('data-mode');
     renderDataView();
   } else {
+    // Auto-activate group analysis if restoring to a group mode
+    if ((state.activeMode === 'group' || state.activeMode === 'group_onehot') && state.groupLabels && state.groupLabels.length > 0 && !isGroupAnalysisActive()) {
+      buildColumnGroups(state.networkSettings);
+    }
     updateAll();
   }
 }
@@ -1099,6 +1105,13 @@ function buildTopNav(nav: HTMLElement) {
     fn.textContent = state.filename;
     right.appendChild(fn);
   }
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'top-nav-action';
+  clearBtn.id = 'clear-btn';
+  clearBtn.textContent = 'Clear';
+  clearBtn.title = 'Clear all loaded data and analysis';
+  if (!hasData && state.rawData.length === 0) clearBtn.disabled = true;
+  right.appendChild(clearBtn);
   const exportBtn = document.createElement('button');
   exportBtn.className = 'top-nav-action';
   exportBtn.id = 'export-btn';
@@ -1218,6 +1231,23 @@ function wireNavEvents() {
   // Close dropdowns on outside click
   document.addEventListener('click', closeAllDropdowns);
 
+  // Clear analysis
+  document.getElementById('clear-btn')?.addEventListener('click', () => {
+    clearGroupAnalysisData();
+    cachedFullModel = null;
+    cachedModel = null;
+    cachedCent = null;
+    cachedComm = undefined;
+    cachedModels.clear();
+    cachedCents.clear();
+    cachedComms.clear();
+    cachedBootModel = null;
+    cachedBootModels.clear();
+    cachedBootResults.clear();
+    visitedTabs.clear();
+    clearAnalysis();
+  });
+
   // Export
   document.getElementById('export-btn')?.addEventListener('click', () => {
     if (!state.sequenceData) return;
@@ -1301,6 +1331,8 @@ function updateNavActive() {
         : '';
     }
   });
+  const clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
+  if (clearBtn) clearBtn.disabled = !hasData && state.rawData.length === 0;
   const exportBtn = document.getElementById('export-btn') as HTMLButtonElement;
   if (exportBtn) exportBtn.disabled = !hasData;
 }

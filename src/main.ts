@@ -309,19 +309,44 @@ export { AVAILABLE_MEASURES, AVAILABLE_METHODS, clusterSequences, prune, importO
 //  State persistence
 // ═══════════════════════════════════════════════════════════
 const STORAGE_KEY = 'tna-desktop-state';
+const DATA_STORAGE_KEY = 'tna-desktop-data';
 const VERSION_KEY = 'tna-desktop-settings-version';
+
+/** Whether the last data save succeeded (false = quota exceeded). */
+let dataPersisted = true;
 
 export function saveState() {
   try {
-    // Only persist settings, not large data arrays
+    // Persist settings (excluding transient/large fields)
     const toSave: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(state)) {
-      if (key === 'error' || key === 'rawData' || key === 'sequenceData' || key === 'groupLabels') continue;
+      if (key === 'error' || key === 'rawData' || key === 'sequenceData' || key === 'groupLabels' || key === 'headers' || key === 'filename') continue;
       toSave[key] = val;
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
     localStorage.setItem(VERSION_KEY, String(SETTINGS_VERSION));
   } catch { /* quota exceeded or private browsing — ignore */ }
+
+  // Persist data separately (can be large)
+  try {
+    if (state.sequenceData || state.rawData.length > 0) {
+      const dataPayload = {
+        rawData: state.rawData,
+        sequenceData: state.sequenceData,
+        headers: state.headers,
+        groupLabels: state.groupLabels,
+        filename: state.filename,
+      };
+      localStorage.setItem(DATA_STORAGE_KEY, JSON.stringify(dataPayload));
+      dataPersisted = true;
+    } else {
+      localStorage.removeItem(DATA_STORAGE_KEY);
+      dataPersisted = true;
+    }
+  } catch {
+    // Quota exceeded — data too large for localStorage
+    dataPersisted = false;
+  }
 }
 
 function loadState() {
@@ -334,8 +359,7 @@ function loadState() {
     const savedVersion = parseInt(localStorage.getItem(VERSION_KEY) ?? '0', 10);
     const settingsStale = savedVersion < SETTINGS_VERSION;
 
-    // Data is no longer persisted — always start with no data loaded
-    // Only restore settings/preferences
+    // Restore settings/preferences
     state.format = saved.format ?? 'wide';
     state.longIdCol = saved.longIdCol ?? 0;
     state.longTimeCol = saved.longTimeCol ?? 1;
@@ -361,16 +385,58 @@ function loadState() {
     state.disabledMeasures = (saved as any).disabledMeasures ?? [];
     state.centralityLoops = saved.centralityLoops ?? false;
     state.activeSecondaryTab = (saved as any).activeSecondaryTab ?? '';
-    state.activeMode = 'data';
-    state.activeSubTab = 'network';
     // Reset network settings to fresh defaults when version bumps
     if (settingsStale) {
       state.networkSettings = defaultNetworkSettings();
     } else {
       state.networkSettings = { ...defaultNetworkSettings(), ...(saved.networkSettings ?? {}) };
     }
+
+    // Restore data from separate key
+    const dataRaw = localStorage.getItem(DATA_STORAGE_KEY);
+    if (dataRaw) {
+      const dataObj = JSON.parse(dataRaw);
+      state.rawData = dataObj.rawData ?? [];
+      state.sequenceData = dataObj.sequenceData ?? null;
+      state.headers = dataObj.headers ?? [];
+      state.groupLabels = dataObj.groupLabels ?? null;
+      state.filename = dataObj.filename ?? '';
+    }
+
+    // Restore mode/subtab only if we have data to support it
+    if (state.sequenceData || (state.rawData.length > 0 && state.format === 'edgelist')) {
+      state.activeMode = (saved as any).activeMode ?? 'data';
+      state.activeSubTab = (saved as any).activeSubTab ?? 'network';
+    } else {
+      state.activeMode = 'data';
+      state.activeSubTab = 'network';
+    }
   } catch { /* corrupt data — start fresh */ }
 }
+
+/** Clear all loaded data and analysis, returning to the data loading view. */
+export function clearAnalysis() {
+  state.rawData = [];
+  state.sequenceData = null;
+  state.headers = [];
+  state.groupLabels = null;
+  state.filename = '';
+  state.activeMode = 'data';
+  state.activeSubTab = 'network';
+  state.activeSecondaryTab = '';
+  state.error = null;
+  localStorage.removeItem(DATA_STORAGE_KEY);
+  saveState();
+  render();
+}
+
+// ─── Warn before leaving with unsaved analysis ───
+window.addEventListener('beforeunload', (e) => {
+  // Only warn if there's loaded data AND it couldn't be persisted
+  if ((state.sequenceData || state.rawData.length > 0) && !dataPersisted) {
+    e.preventDefault();
+  }
+});
 
 // ═══════════════════════════════════════════════════════════
 //  Render
