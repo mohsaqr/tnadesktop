@@ -211,6 +211,7 @@ export function updateSubTabStates() {
       const btn = item as HTMLButtonElement;
       if (btn.dataset.subtab !== 'setup') {
         btn.disabled = !groupsActive;
+        btn.title = btn.disabled ? 'Run group setup first to enable this tab' : '';
       }
     });
   });
@@ -1130,6 +1131,7 @@ function buildNavDropdown(mode: string, label: string, tabs: SubTabDef[], disabl
     if (state.activeMode === mode && state.activeSubTab === tab.id) item.classList.add('active');
     if (mode !== 'single' && mode !== 'onehot' && mode !== 'sna' && tab.id !== 'setup' && !groupsActive) {
       item.disabled = true;
+      item.title = 'Run group setup first to enable this tab';
     }
     menu.appendChild(item);
   }
@@ -1261,19 +1263,42 @@ function updateNavActive() {
     const trigger = dd.querySelector('.top-nav-btn') as HTMLButtonElement;
     if (mode === 'single') {
       trigger.disabled = !hasData || isOnehotData || isSnaData;
+      trigger.title = trigger.disabled
+        ? (!hasData ? 'Load sequence data (wide or long format) to build a transition network'
+           : 'Single Network requires sequence data — current format is not compatible')
+        : '';
     } else if (mode === 'clustering') {
       trigger.disabled = !hasData || isOnehotData || isSnaData;
+      trigger.title = trigger.disabled
+        ? (!hasData ? 'Load sequence data to perform cluster analysis'
+           : 'Clustering requires sequence data — current format is not compatible')
+        : '';
     } else if (mode === 'group') {
       trigger.disabled = !hasData || !hasGroups || isOnehotData || isSnaData;
+      trigger.title = trigger.disabled
+        ? (!hasData ? 'Load sequence data with a group column for group comparison'
+           : !hasGroups ? 'Your data needs a group column — select one in Data mode'
+           : 'Group Analysis requires sequence data — current format is not compatible')
+        : '';
     } else if (mode === 'onehot') {
       trigger.disabled = !hasData || !isOnehotData;
-      trigger.title = trigger.disabled ? 'Load one-hot encoded data to analyze co-occurrence networks' : '';
+      trigger.title = trigger.disabled
+        ? (!hasData ? 'Load one-hot encoded data to analyze co-occurrence networks'
+           : 'One-Hot mode requires one-hot encoded data (wide format with binary values)')
+        : '';
     } else if (mode === 'group_onehot') {
       trigger.disabled = !hasData || state.format !== 'group_onehot' || !hasGroups;
-      trigger.title = trigger.disabled ? 'Load group one-hot data for group co-occurrence analysis' : '';
+      trigger.title = trigger.disabled
+        ? (!hasData ? 'Load group one-hot data for group co-occurrence analysis'
+           : !hasGroups ? 'Your data needs a group column for group one-hot analysis'
+           : 'Group One-Hot requires one-hot encoded data with group labels')
+        : '';
     } else if (mode === 'sna') {
       trigger.disabled = !isSnaData;
-      trigger.title = trigger.disabled ? 'Load edge list data or generate a network for SNA' : '';
+      trigger.title = trigger.disabled
+        ? (!hasData ? 'Load an edge list or generate a random network for Social Network Analysis'
+           : 'SNA mode requires edge list data — use Data mode to load or generate a network')
+        : '';
     }
   });
   const exportBtn = document.getElementById('export-btn') as HTMLButtonElement;

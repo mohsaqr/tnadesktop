@@ -16,27 +16,6 @@ export function showExportDialog(model: TNA, cent: CentralityResult) {
   overlay.innerHTML = `
     <div class="modal">
       <h3>Export Results</h3>
-      <div class="export-option" id="export-png">
-        <div class="icon">&#128247;</div>
-        <div class="info">
-          <h4>Network Graph (PNG)</h4>
-          <p>Save the network visualization as an image</p>
-        </div>
-      </div>
-      <div class="export-option" id="export-csv">
-        <div class="icon">&#128196;</div>
-        <div class="info">
-          <h4>Centralities (CSV)</h4>
-          <p>Export centrality measures as a CSV table</p>
-        </div>
-      </div>
-      <div class="export-option" id="export-weights">
-        <div class="icon">&#128202;</div>
-        <div class="info">
-          <h4>Weight Matrix (CSV)</h4>
-          <p>Export the transition weight matrix</p>
-        </div>
-      </div>
       <div class="export-option" id="export-html">
         <div class="icon">&#127760;</div>
         <div class="info">
@@ -75,18 +54,6 @@ export function showExportDialog(model: TNA, cent: CentralityResult) {
   });
   document.getElementById('export-close')!.addEventListener('click', () => overlay.remove());
 
-  document.getElementById('export-png')!.addEventListener('click', () => {
-    overlay.remove();
-    exportPng();
-  });
-  document.getElementById('export-csv')!.addEventListener('click', () => {
-    overlay.remove();
-    exportCentralitiesCsv(model, cent);
-  });
-  document.getElementById('export-weights')!.addEventListener('click', () => {
-    overlay.remove();
-    exportWeightsCsv(model);
-  });
   document.getElementById('export-html')!.addEventListener('click', () => {
     overlay.remove();
     exportHtml(model, cent, true);
