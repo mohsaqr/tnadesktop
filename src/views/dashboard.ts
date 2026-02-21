@@ -530,8 +530,13 @@ export function renderDashboard(container: HTMLElement) {
               <option value="fcose" ${s.layout === 'fcose' ? 'selected' : ''}>fCoSE</option>
               <option value="spring" ${s.layout === 'spring' ? 'selected' : ''}>Spring (D3 Force)</option>
               <option value="kamada_kawai" ${s.layout === 'kamada_kawai' ? 'selected' : ''}>Kamada-Kawai</option>
+              <option value="saqr" ${s.layout === 'saqr' ? 'selected' : ''}>Saqr</option>
+              <option value="degree_hierarchical" ${s.layout === 'degree_hierarchical' ? 'selected' : ''}>Degree Hierarchical</option>
               <option value="dagre" ${s.layout === 'dagre' ? 'selected' : ''}>Dagre (Hierarchical)</option>
-
+              <option value="breadthfirst" ${s.layout === 'breadthfirst' ? 'selected' : ''}>Breadth-First</option>
+              <option value="elk_layered" ${s.layout === 'elk_layered' ? 'selected' : ''}>ELK Layered (Klay)</option>
+              <option value="elk_stress" ${s.layout === 'elk_stress' ? 'selected' : ''}>ELK Stress</option>
+              <option value="elk_mrtree" ${s.layout === 'elk_mrtree' ? 'selected' : ''}>ELK MrTree</option>
               <option value="cola" ${s.layout === 'cola' ? 'selected' : ''}>Cola (Constraint)</option>
               <option value="euler" ${s.layout === 'euler' ? 'selected' : ''}>Euler (Force)</option>
               <option value="avsdf" ${s.layout === 'avsdf' ? 'selected' : ''}>AVSDF (Circular)</option>
@@ -1767,7 +1772,7 @@ export function createViewToggle(
   renderTable: (container: HTMLElement) => void,
   idPrefix: string,
   defaultView?: 'figure' | 'table',
-): { figureContainer: HTMLElement; tableContainer: HTMLElement } {
+): { figureContainer: HTMLElement; tableContainer: HTMLElement; bar: HTMLElement } {
   const startTable = defaultView === 'table';
   const bar = document.createElement('div');
   bar.className = 'panel';
@@ -1824,7 +1829,7 @@ export function createViewToggle(
     });
   }, 0);
 
-  return { figureContainer, tableContainer };
+  return { figureContainer, tableContainer, bar };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1994,8 +1999,273 @@ function buildLongTransitionTable(models: Map<string, TNA>): HTMLElement {
   return panel;
 }
 
+/** Inject (or refresh) the floating Layout Settings modal on document.body. */
+function injectLayoutSettingsModal() {
+  document.getElementById('layout-settings-modal')?.remove();
+  const s = state.networkSettings;
+
+  // Helper: build a labeled slider row for the modal
+  const sliderRow = (id: string, label: string, min: number, max: number, step: number, val: number, decimals = 0, note = '') =>
+    `<div class="control-group" style="margin-bottom:10px">
+      <label style="font-size:11px;font-weight:600;display:block;margin-bottom:3px">${label}${note ? ` <span style="font-weight:400;color:#999;font-size:10px">${note}</span>` : ''}</label>
+      <div class="slider-row">
+        <input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${val}" style="flex:1">
+        <span id="${id}-val" style="font-size:11px;min-width:34px;text-align:right">${decimals ? val.toFixed(decimals) : val}</span>
+      </div>
+    </div>`;
+
+  const modal = document.createElement('div');
+  modal.id = 'layout-settings-modal';
+  modal.style.cssText = 'display:none;position:fixed;top:72px;right:16px;z-index:2000;background:#fff;border:1px solid var(--border);border-radius:8px;padding:14px 16px;width:290px;box-shadow:0 6px 24px rgba(0,0,0,0.16);max-height:calc(100vh - 100px);overflow-y:auto';
+  modal.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border)">
+      <span style="font-weight:700;font-size:13px;letter-spacing:0.2px">⚙ Layout Settings</span>
+      <button id="layout-settings-close" style="background:none;border:none;cursor:pointer;font-size:20px;color:#999;padding:0 2px;line-height:1;margin-top:-2px">×</button>
+    </div>
+
+    <!-- Algorithm -->
+    <div class="control-group" style="margin-bottom:10px">
+      <label style="font-size:11px;font-weight:600;display:block;margin-bottom:3px">Algorithm</label>
+      <select id="lsm-layout" style="width:100%;font-size:11px;padding:3px 4px">
+        <option value="circular" ${s.layout === 'circular' ? 'selected' : ''}>Circular</option>
+        <option value="concentric" ${s.layout === 'concentric' ? 'selected' : ''}>Concentric</option>
+        <option value="saqr" ${s.layout === 'saqr' ? 'selected' : ''}>Saqr</option>
+        <option value="degree_hierarchical" ${s.layout === 'degree_hierarchical' ? 'selected' : ''}>Degree Hierarchical</option>
+        <option value="fruchterman_reingold" ${s.layout === 'fruchterman_reingold' ? 'selected' : ''}>Fruchterman-Reingold</option>
+        <option value="forceatlas2" ${s.layout === 'forceatlas2' ? 'selected' : ''}>ForceAtlas2</option>
+        <option value="fr_shell" ${s.layout === 'fr_shell' ? 'selected' : ''}>FR + Shell</option>
+        <option value="fcose" ${s.layout === 'fcose' ? 'selected' : ''}>fCoSE</option>
+        <option value="spring" ${s.layout === 'spring' ? 'selected' : ''}>Spring (D3 Force)</option>
+        <option value="kamada_kawai" ${s.layout === 'kamada_kawai' ? 'selected' : ''}>Kamada-Kawai</option>
+        <option value="dagre" ${s.layout === 'dagre' ? 'selected' : ''}>Dagre (Hierarchical)</option>
+        <option value="breadthfirst" ${s.layout === 'breadthfirst' ? 'selected' : ''}>Breadth-First</option>
+        <option value="cola" ${s.layout === 'cola' ? 'selected' : ''}>Cola (Constraint)</option>
+        <option value="euler" ${s.layout === 'euler' ? 'selected' : ''}>Euler (Force)</option>
+        <option value="elk_layered" ${s.layout === 'elk_layered' ? 'selected' : ''}>ELK Layered (Klay)</option>
+        <option value="elk_stress" ${s.layout === 'elk_stress' ? 'selected' : ''}>ELK Stress</option>
+        <option value="elk_mrtree" ${s.layout === 'elk_mrtree' ? 'selected' : ''}>ELK MrTree</option>
+        <option value="spectral" ${s.layout === 'spectral' ? 'selected' : ''}>Spectral</option>
+        <option value="avsdf" ${s.layout === 'avsdf' ? 'selected' : ''}>AVSDF (Circular)</option>
+      </select>
+    </div>
+
+    <!-- Seed + action buttons -->
+    <div class="control-group" style="margin-bottom:12px">
+      <label style="font-size:11px;font-weight:600;display:block;margin-bottom:3px">Seed</label>
+      <div style="display:flex;align-items:center;gap:5px">
+        <input type="number" id="lsm-layoutSeed" min="0" max="99999" step="1" value="${s.layoutSeed}" style="width:64px;font-size:11px;padding:3px 4px;border:1px solid var(--border);border-radius:4px">
+        <button id="lsm-randomize" class="btn-primary" style="font-size:10px;padding:3px 8px;flex:1">Randomize</button>
+        <button id="lsm-reset-layout" style="font-size:10px;padding:3px 8px;flex:1;cursor:pointer;border:1px solid var(--border);border-radius:4px;background:#f5f5f5;color:var(--text-muted)">Re-run</button>
+      </div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);margin:10px 0 10px"></div>
+
+    ${sliderRow('lsm-layoutSpacing', 'Node Spacing', 0.3, 3.0, 0.05, s.layoutSpacing, 2)}
+    <div class="control-group" style="margin-bottom:10px">
+      <label style="font-size:11px;font-weight:600;display:block;margin-bottom:5px">Rotation (° clockwise)</label>
+      <div style="display:flex;align-items:center;gap:5px">
+        <div style="display:flex;border:1px solid var(--border);border-radius:5px;overflow:hidden;flex:1">
+          ${[0,90,180,270].map(deg => `<button class="lsm-rot-btn" data-deg="${deg}" style="flex:1;padding:4px 0;font-size:11px;font-weight:600;border:none;border-right:1px solid var(--border);cursor:pointer;background:${(s.layoutRotation??0)===deg?'var(--blue)':'#f8f9fa'};color:${(s.layoutRotation??0)===deg?'#fff':'var(--text)'}">${deg}°</button>`).join('')}
+        </div>
+        <input type="number" id="lsm-layoutRotation" min="0" max="360" step="1" value="${s.layoutRotation ?? 0}" style="width:52px;font-size:11px;padding:3px 4px;border:1px solid var(--border);border-radius:4px;text-align:center" title="Custom angle">
+      </div>
+    </div>
+    ${sliderRow('lsm-graphPadding', 'Graph Padding', 0, 80, 1, s.graphPadding)}
+    ${sliderRow('lsm-networkHeight', 'Network Height', 300, 1200, 10, s.networkHeight)}
+
+    <div style="border-top:1px solid var(--border);margin:10px 0 10px"></div>
+
+    ${sliderRow('lsm-saqrJitter', 'Saqr Row Jitter', 0, 1.0, 0.05, s.saqrJitter ?? 0.32, 2, '(Saqr only)')}
+    ${sliderRow('lsm-edgeLabelOffset', 'Edge Label Offset', 0, 24, 1, s.edgeLabelOffset ?? 0)}
+    ${sliderRow('lsm-edgeLabelT', 'Label Position', 0.1, 0.9, 0.05, s.edgeLabelT ?? 0.55, 2, '(0=source … 1=target)')}
+  `;
+  document.body.appendChild(modal);
+
+  setTimeout(() => {
+    // ── Close button ──
+    document.getElementById('layout-settings-close')?.addEventListener('click', () => {
+      const m = document.getElementById('layout-settings-modal');
+      if (m) m.style.display = 'none';
+    });
+
+    // ── Click outside to dismiss ──
+    document.addEventListener('click', function onOutsideClick(e: MouseEvent) {
+      const m = document.getElementById('layout-settings-modal');
+      const btn = document.getElementById('layout-settings-btn');
+      if (!m) { document.removeEventListener('click', onOutsideClick); return; }
+      if (m.style.display === 'none') return;
+      if (!m.contains(e.target as Node) && e.target !== btn && !btn?.contains(e.target as Node)) {
+        m.style.display = 'none';
+      }
+    });
+
+    // ── Algorithm select ──
+    const layoutSelect = document.getElementById('lsm-layout') as HTMLSelectElement | null;
+    if (layoutSelect) {
+      layoutSelect.addEventListener('change', () => {
+        const val = layoutSelect.value as NetworkSettings['layout'];
+        state.networkSettings.layout = val;
+        // Sync sidebar
+        const sb = document.getElementById('ns-layout') as HTMLSelectElement | null;
+        if (sb) sb.value = val;
+        clearLayoutCache();
+        debouncedNetworkUpdate();
+      });
+    }
+
+    // ── Seed ──
+    const seedInput = document.getElementById('lsm-layoutSeed') as HTMLInputElement | null;
+    if (seedInput) {
+      seedInput.addEventListener('change', () => {
+        const val = parseInt(seedInput.value) || 42;
+        state.networkSettings.layoutSeed = val;
+        const sbSeed = document.getElementById('ns-layoutSeed') as HTMLInputElement | null;
+        if (sbSeed) sbSeed.value = String(val);
+        clearLayoutCache();
+        debouncedNetworkUpdate();
+      });
+    }
+
+    // ── Randomize ──
+    document.getElementById('lsm-randomize')?.addEventListener('click', () => {
+      const newSeed = Math.floor(Math.random() * 100000);
+      state.networkSettings.layoutSeed = newSeed;
+      if (seedInput) seedInput.value = String(newSeed);
+      const sbSeed = document.getElementById('ns-layoutSeed') as HTMLInputElement | null;
+      if (sbSeed) sbSeed.value = String(newSeed);
+      clearLayoutCache();
+      debouncedNetworkUpdate();
+    });
+
+    // ── Re-run (reset positions without changing seed) ──
+    document.getElementById('lsm-reset-layout')?.addEventListener('click', () => {
+      clearLayoutCache();
+      debouncedNetworkUpdate();
+    });
+
+    // ── Node Spacing ──
+    const spacingSlider = document.getElementById('lsm-layoutSpacing') as HTMLInputElement | null;
+    if (spacingSlider) {
+      spacingSlider.addEventListener('input', () => {
+        const val = parseFloat(spacingSlider.value);
+        state.networkSettings.layoutSpacing = val;
+        const valEl = document.getElementById('lsm-layoutSpacing-val');
+        if (valEl) valEl.textContent = val.toFixed(2);
+        const sbSlider = document.getElementById('ns-layoutSpacing') as HTMLInputElement | null;
+        if (sbSlider) {
+          sbSlider.value = String(val);
+          const sbVal = document.getElementById('ns-layoutSpacing-val');
+          if (sbVal) sbVal.textContent = val.toFixed(2);
+        }
+        debouncedNetworkUpdate();
+      });
+    }
+
+    // ── Rotation: preset buttons + number input ──
+    function applyRotation(deg: number) {
+      state.networkSettings.layoutRotation = deg;
+      const inp = document.getElementById('lsm-layoutRotation') as HTMLInputElement | null;
+      if (inp) inp.value = String(deg);
+      // Update button highlights
+      modal.querySelectorAll<HTMLButtonElement>('.lsm-rot-btn').forEach(btn => {
+        const active = parseInt(btn.dataset.deg ?? '0', 10) === deg;
+        btn.style.background = active ? 'var(--blue)' : '#f8f9fa';
+        btn.style.color = active ? '#fff' : 'var(--text)';
+      });
+      debouncedNetworkUpdate();
+    }
+    modal.querySelectorAll<HTMLButtonElement>('.lsm-rot-btn').forEach(btn => {
+      btn.addEventListener('click', () => applyRotation(parseInt(btn.dataset.deg ?? '0', 10)));
+    });
+    const rotInput = document.getElementById('lsm-layoutRotation') as HTMLInputElement | null;
+    if (rotInput) {
+      rotInput.addEventListener('change', () => applyRotation(Math.max(0, Math.min(360, parseInt(rotInput.value, 10) || 0))));
+    }
+
+    // ── Graph Padding ──
+    const paddingSlider = document.getElementById('lsm-graphPadding') as HTMLInputElement | null;
+    if (paddingSlider) {
+      paddingSlider.addEventListener('input', () => {
+        const val = parseInt(paddingSlider.value, 10);
+        state.networkSettings.graphPadding = val;
+        const valEl = document.getElementById('lsm-graphPadding-val');
+        if (valEl) valEl.textContent = String(val);
+        const sbSlider = document.getElementById('ns-graphPadding') as HTMLInputElement | null;
+        if (sbSlider) {
+          sbSlider.value = String(val);
+          const sbVal = document.getElementById('ns-graphPadding-val');
+          if (sbVal) sbVal.textContent = String(val);
+        }
+        debouncedNetworkUpdate();
+      });
+    }
+
+    // ── Network Height ──
+    const heightSlider = document.getElementById('lsm-networkHeight') as HTMLInputElement | null;
+    if (heightSlider) {
+      heightSlider.addEventListener('input', () => {
+        const val = parseInt(heightSlider.value, 10);
+        state.networkSettings.networkHeight = val;
+        const valEl = document.getElementById('lsm-networkHeight-val');
+        if (valEl) valEl.textContent = String(val);
+        const sbSlider = document.getElementById('ns-networkHeight') as HTMLInputElement | null;
+        if (sbSlider) {
+          sbSlider.value = String(val);
+          const sbVal = document.getElementById('ns-networkHeight-val');
+          if (sbVal) sbVal.textContent = String(val);
+        }
+        // Also resize the viz container live
+        const vizEl = document.getElementById('viz-network') || document.getElementById('viz-community-network');
+        if (vizEl) vizEl.style.height = `${val}px`;
+        const panel = vizEl?.closest('.panel') as HTMLElement | null;
+        if (panel) panel.style.minHeight = `${val + 40}px`;
+        debouncedNetworkUpdate();
+      });
+    }
+
+    // ── Saqr Jitter (invalidates layout cache) ──
+    const jitterSlider = document.getElementById('lsm-saqrJitter') as HTMLInputElement | null;
+    if (jitterSlider) {
+      jitterSlider.addEventListener('input', () => {
+        const val = parseFloat(jitterSlider.value);
+        state.networkSettings.saqrJitter = val;
+        const valEl = document.getElementById('lsm-saqrJitter-val');
+        if (valEl) valEl.textContent = val.toFixed(2);
+        // Jitter changes positions → must invalidate cache
+        clearLayoutCache();
+        debouncedNetworkUpdate();
+      });
+    }
+
+    // ── Edge Label Offset ──
+    const offsetSlider = document.getElementById('lsm-edgeLabelOffset') as HTMLInputElement | null;
+    if (offsetSlider) {
+      offsetSlider.addEventListener('input', () => {
+        const val = parseInt(offsetSlider.value, 10);
+        state.networkSettings.edgeLabelOffset = val;
+        const valEl = document.getElementById('lsm-edgeLabelOffset-val');
+        if (valEl) valEl.textContent = String(val);
+        debouncedNetworkUpdate();
+      });
+    }
+
+    // ── Edge Label Position (t) ──
+    const tSlider = document.getElementById('lsm-edgeLabelT') as HTMLInputElement | null;
+    if (tSlider) {
+      tSlider.addEventListener('input', () => {
+        const val = parseFloat(tSlider.value);
+        state.networkSettings.edgeLabelT = val;
+        const valEl = document.getElementById('lsm-edgeLabelT-val');
+        if (valEl) valEl.textContent = val.toFixed(2);
+        debouncedNetworkUpdate();
+      });
+    }
+  }, 0);
+}
+
 function renderNetworkTab(content: HTMLElement, model: any) {
-  createViewToggle(content,
+  const { bar } = createViewToggle(content,
     (fig) => {
       const h = state.networkSettings.networkHeight;
       const grid = document.createElement('div');
@@ -2020,6 +2290,37 @@ function renderNetworkTab(content: HTMLElement, model: any) {
     (tbl) => { tbl.appendChild(buildTransitionMatrixTable(model)); },
     'net',
   );
+
+  // Inject ⚙ Layout Settings button directly into the toggle bar — beside Figure/Table
+  bar.style.display = 'flex';
+  bar.style.alignItems = 'center';
+  bar.style.justifyContent = 'space-between';
+  const lsBtn = document.createElement('button');
+  lsBtn.id = 'layout-settings-btn';
+  lsBtn.style.cssText = [
+    'background:var(--blue)',
+    'color:#fff',
+    'border:none',
+    'border-radius:6px',
+    'padding:6px 16px',
+    'font-size:13px',
+    'font-weight:700',
+    'cursor:pointer',
+    'letter-spacing:0.2px',
+    'box-shadow:0 2px 6px rgba(59,130,246,0.35)',
+    'transition:background 0.15s',
+  ].join(';');
+  lsBtn.textContent = '⚙ Layout Settings';
+  lsBtn.addEventListener('mouseenter', () => { lsBtn.style.background = 'var(--blue-dark, #1d4ed8)'; });
+  lsBtn.addEventListener('mouseleave', () => { lsBtn.style.background = 'var(--blue)'; });
+  lsBtn.addEventListener('click', () => {
+    const modal = document.getElementById('layout-settings-modal');
+    if (modal) modal.style.display = modal.style.display === 'none' ? 'block' : 'none';
+  });
+  bar.appendChild(lsBtn);
+
+  // Inject modal (deferred so DOM is settled and internal event wiring works)
+  setTimeout(() => { injectLayoutSettingsModal(); }, 0);
 }
 
 // ─── SNA Summary tab ───

@@ -1,5 +1,21 @@
 # Dynalytics Desktop — Change Log
 
+### 2026-02-21 — Edge Label Position Fix: On-Edge Placement + Directed 2/3 Rule
+- src/main.ts: `edgeLabelOffset` default changed `8 → 0` (labels sit on edges, readable via white halo); comment updated; `SETTINGS_VERSION` bumped `22 → 23`
+- src/views/network.ts: `computeEdgePath` gains `labelT` parameter (default 0.55); `drawEdges()` now computes `labelT` per edge type: undirected=0.5, directed=0.67, bidirectional=0.55; `?? 8` fallback changed to `?? 0`
+- Tests: 215 passed, 0 failed
+
+### 2026-02-21 — Layout Settings Modal v2: Full Controls + Jitter Cache Fix
+- src/views/network.ts: Fixed layout cache key to include layout-specific tuning params (`extraParams` arg); saqr layout now includes `j{jitter}` in the key so jitter changes correctly invalidate the cache and recompute positions
+- src/views/dashboard.ts: `injectLayoutSettingsModal()` now has 7 controls — Algorithm select (full list, syncs sidebar `#ns-layout`), Seed input + Randomize + Re-run buttons (sync `#ns-layoutSeed`), Node Spacing (syncs sidebar), Graph Padding (syncs sidebar), Network Height (syncs sidebar + live-resizes container), Saqr Row Jitter (clears cache), Edge Label Offset; click-outside-to-dismiss; scrollable modal with max-height
+- Tests: 215 passed, 0 failed
+
+### 2026-02-21 — Layout Settings Modal + Edge Label Offset Fix
+- src/main.ts: Added `edgeLabelOffset: number` (default 8) and `saqrJitter: number` (default 0.32) to `NetworkSettings` interface and `defaultNetworkSettings()`; bumped `SETTINGS_VERSION` 20 → 21
+- src/views/network.ts: `computeEdgePath` now returns `labelPx`/`labelPy`; `drawEdges()` applies perpendicular offset; `saqrLayout` accepts `jitter` param; `case 'saqr'` passes `settings.saqrJitter ?? 0.32`
+- src/views/dashboard.ts: Added `injectLayoutSettingsModal()` + "⚙ Layout Settings" button in Network Graph panel title
+- Tests: 215 passed, 0 failed
+
 ### 2026-02-21 — Bootstrap Forest Plot: Significance Fix, Original Weight, Grouped View, Edge Threshold
 - src/analysis/bootstrap.ts: Added `bootstrapMean` field to `BootstrapEdge`
 - src/views/chart-utils.ts: `ForestRow` gains `color`, `originalWeight`, `group` fields; non-significant edges get dashed CI line + hollow dot (even with custom color); original weight shown as red diamond marker; new `renderGroupedForestPlot()` — edges grouped by label with parallel per-group CI lines within same row band

@@ -25,3 +25,7 @@ declare module 'cytoscape-avsdf' {
   const ext: cytoscape.Ext;
   export default ext;
 }
+declare module 'elkjs/lib/elk.bundled.js' {
+  const ELK: any;
+  export default ELK;
+}

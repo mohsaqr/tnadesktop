@@ -2,6 +2,11 @@
  * Cytoscape.js layout wrapper — uses cytoscape headlessly for position
  * computation only, then returns {x,y}[] for the D3 renderer.
  *
+ * ELK layouts bypass Cytoscape entirely and call elkjs directly.
+ * This avoids bundling the cytoscape-elk webpack distribution (which trips
+ * Rollup's CJS-to-ESM converter) while still providing access to ELK's
+ * superior layered, stress, and mrtree algorithms.
+ *
  * Positions are extracted raw and rescaled by the caller (rescalePositions).
  */
 import cytoscape from 'cytoscape';
@@ -10,9 +15,10 @@ import dagre from 'cytoscape-dagre';
 import cola from 'cytoscape-cola';
 import euler from 'cytoscape-euler';
 import avsdf from 'cytoscape-avsdf';
+import ELK from 'elkjs/lib/elk.bundled.js';
 import { rescalePositions } from './network';
 
-// Register extensions once
+// Register Cytoscape extensions once
 cytoscape.use(fcose);
 cytoscape.use(dagre);
 cytoscape.use(cola);
@@ -25,13 +31,78 @@ export type CytoscapeLayoutName =
   | 'dagre'
   | 'cola'
   | 'euler'
-  | 'avsdf';
+  | 'avsdf'
+  | 'breadthfirst'
+  | 'elk_layered'
+  | 'elk_stress'
+  | 'elk_mrtree';
+
+// ─── ELK direct implementation ───────────────────────────────────────────────
+
+/**
+ * Build the ELK graph structure from our weight matrix, run the chosen ELK
+ * algorithm, and return normalised {x,y} positions.  Positions are returned
+ * BEFORE rescalePositions — caller must rescale.
+ *
+ * ELK uses top-left corner as node origin; we convert to centre by adding w/2.
+ */
+async function elkLayout(
+  elkAlgorithm: string,
+  elkOptions: Record<string, string | number>,
+  n: number,
+  weights: { get(i: number, j: number): number },
+  width: number,
+  height: number,
+  padding: number,
+): Promise<{ x: number; y: number }[]> {
+  const NODE_W = 30;
+  const NODE_H = 30;
+
+  const children = Array.from({ length: n }, (_, i) => ({
+    id: String(i),
+    width: NODE_W,
+    height: NODE_H,
+  }));
+
+  const edges: { id: string; sources: string[]; targets: string[] }[] = [];
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      if (weights.get(i, j) > 0) {
+        edges.push({ id: `e${i}-${j}`, sources: [String(i)], targets: [String(j)] });
+      }
+    }
+  }
+
+  const graph = {
+    id: 'root',
+    layoutOptions: { 'elk.algorithm': elkAlgorithm, ...elkOptions } as Record<string, string>,
+    children,
+    edges,
+  };
+
+  const elk = new (ELK as any)();
+  const result = await elk.layout(graph);
+
+  const positions = (result.children as any[]).map((node: any) => ({
+    x: node.x + NODE_W / 2,
+    y: node.y + NODE_H / 2,
+  }));
+
+  rescalePositions(positions, width, height, padding);
+  return positions;
+}
+
+// ─── Cytoscape-based layouts ─────────────────────────────────────────────────
 
 /**
  * Compute node positions using a Cytoscape layout algorithm.
  * Returns positions already rescaled to fit [padding, width-padding] x [padding, height-padding].
+ *
+ * ELK-based layouts call elkjs directly and are async; all Cytoscape layouts
+ * (both sync and async extensions) resolve via the layoutstop event.
  */
-export function cytoscapeLayout(
+export async function cytoscapeLayout(
   layoutName: CytoscapeLayoutName,
   n: number,
   weights: { get(i: number, j: number): number },
@@ -39,17 +110,41 @@ export function cytoscapeLayout(
   height: number,
   padding: number,
   seed?: number,
-): { x: number; y: number }[] {
+): Promise<{ x: number; y: number }[]> {
   if (n === 0) return [];
   if (n === 1) return [{ x: width / 2, y: height / 2 }];
 
+  // ── ELK layouts — handled without Cytoscape ──────────────────────────────
+  if (layoutName === 'elk_layered') {
+    return elkLayout('layered', {
+      'elk.direction': 'DOWN',
+      'elk.layered.spacing.nodeNodeBetweenLayers': '60',
+      'elk.spacing.nodeNode': '40',
+      'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF',
+      'elk.layered.cycleBreaking.strategy': 'GREEDY',
+    }, n, weights, width, height, padding);
+  }
+  if (layoutName === 'elk_stress') {
+    return elkLayout('stress', {
+      'elk.stress.desiredEdgeLength': '120',
+      'elk.stress.epsilon': '0.0001',
+      'elk.stress.iterationLimit': '300',
+    }, n, weights, width, height, padding);
+  }
+  if (layoutName === 'elk_mrtree') {
+    return elkLayout('mrtree', {
+      'elk.direction': 'DOWN',
+      'elk.spacing.nodeNode': '50',
+    }, n, weights, width, height, padding);
+  }
+
+  // ── Cytoscape-based layouts ───────────────────────────────────────────────
+
   // Build elements
   const elements: cytoscape.ElementDefinition[] = [];
-
   for (let i = 0; i < n; i++) {
     elements.push({ group: 'nodes', data: { id: String(i) } });
   }
-
   for (let i = 0; i < n; i++) {
     for (let j = 0; j < n; j++) {
       if (i === j) continue;
@@ -63,12 +158,7 @@ export function cytoscapeLayout(
     }
   }
 
-  // Create headless instance
-  const cy = cytoscape({
-    headless: true,
-    styleEnabled: false,
-    elements,
-  });
+  const cy = cytoscape({ headless: true, styleEnabled: false, elements });
 
   // Compute node degrees for concentric layout
   const degreeMap = new Map<string, number>();
@@ -82,11 +172,8 @@ export function cytoscapeLayout(
     }
   }
 
-  // Don't let cytoscape fit — we rescale ourselves for consistent behavior
-  const baseOpts: any = {
-    animate: false,
-    fit: false,
-  };
+  // Don't let cytoscape fit — we rescale ourselves for consistent behaviour
+  const baseOpts: any = { animate: false, fit: false };
 
   let layoutOpts: any;
 
@@ -102,7 +189,6 @@ export function cytoscapeLayout(
       break;
 
     case 'fcose': {
-      // Scale parameters with node count for better SNA layouts
       const isSna = n > 20;
       const idealEdge = isSna ? 60 + 400 / Math.sqrt(n) : 80;
       const repulsion = isSna ? 4000 + n * 50 : 4500;
@@ -169,10 +255,30 @@ export function cytoscapeLayout(
         nodeSeparation: 60,
       };
       break;
+
+    // ─── Breadth-first (built-in Cytoscape, synchronous) ────────────────────
+    // Organises nodes in BFS levels — great for directed flows and DAGs.
+    case 'breadthfirst':
+      layoutOpts = {
+        ...baseOpts,
+        name: 'breadthfirst',
+        directed: true,
+        spacingFactor: 1.75,
+        maximal: false,
+        circle: false,
+      };
+      break;
+
+    default:
+      layoutOpts = { ...baseOpts, name: 'concentric' };
   }
 
-  // Run layout synchronously
-  cy.layout(layoutOpts).run();
+  // Wait for layout completion — works for both sync (layoutstop fires during
+  // .run()) and async Cytoscape extension layouts.
+  await new Promise<void>((resolve) => {
+    cy.one('layoutstop', () => resolve());
+    cy.layout(layoutOpts).run();
+  });
 
   // Extract raw positions
   const positions: { x: number; y: number }[] = [];
@@ -183,7 +289,6 @@ export function cytoscapeLayout(
 
   cy.destroy();
 
-  // Rescale to fit canvas (same as all built-in layouts)
   rescalePositions(positions, width, height, padding);
   return positions;
 }

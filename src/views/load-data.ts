@@ -366,6 +366,27 @@ export function showDataWizard() {
         </div>
       `;
 
+      modelHtml += '<div class="wizard-config-section-title" style="margin-top:14px">Sequence Options</div>';
+
+      modelHtml += `
+        <div class="wizard-config-row">
+          <label>Start State</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="checkbox" id="wiz-add-start" ${state.addStartState ? 'checked' : ''}>
+            <input type="text" id="wiz-start-label" value="${escHtml(state.startStateLabel)}"
+              placeholder="Start" style="width:90px;${state.addStartState ? '' : 'display:none'}">
+          </div>
+        </div>
+        <div class="wizard-config-row">
+          <label>End State</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="checkbox" id="wiz-add-end" ${state.addEndState ? 'checked' : ''}>
+            <input type="text" id="wiz-end-label" value="${escHtml(state.endStateLabel)}"
+              placeholder="End" style="width:90px;${state.addEndState ? '' : 'display:none'}">
+          </div>
+        </div>
+      `;
+
       modelHtml += '</div>';
     } else {
       modelHtml = '<div class="wizard-model-config wizard-model-config-full">';
@@ -432,6 +453,26 @@ export function showDataWizard() {
         const btn = document.getElementById('wiz-group-toggle')!;
         btn.classList.toggle('active', wizardGroupAnalysis);
         btn.textContent = wizardGroupAnalysis ? 'Group Analysis Enabled ✓' : 'Enable Group Analysis';
+      });
+
+      document.getElementById('wiz-add-start')?.addEventListener('change', (e) => {
+        state.addStartState = (e.target as HTMLInputElement).checked;
+        const labelEl = document.getElementById('wiz-start-label') as HTMLInputElement | null;
+        if (labelEl) labelEl.style.display = state.addStartState ? '' : 'none';
+      });
+      document.getElementById('wiz-start-label')?.addEventListener('input', (e) => {
+        const v = (e.target as HTMLInputElement).value;
+        state.startStateLabel = v.trim() || 'Start';
+      });
+
+      document.getElementById('wiz-add-end')?.addEventListener('change', (e) => {
+        state.addEndState = (e.target as HTMLInputElement).checked;
+        const labelEl = document.getElementById('wiz-end-label') as HTMLInputElement | null;
+        if (labelEl) labelEl.style.display = state.addEndState ? '' : 'none';
+      });
+      document.getElementById('wiz-end-label')?.addEventListener('input', (e) => {
+        const v = (e.target as HTMLInputElement).value;
+        state.endStateLabel = v.trim() || 'End';
       });
     }, 0);
 

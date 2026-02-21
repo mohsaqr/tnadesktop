@@ -1,5 +1,25 @@
 # Dynalytics Desktop Learnings
 
+## 2026-02-21 (session 5)
+
+### Edge Label Positioning Rules
+- `computeEdgePath` accepts `labelT` (default 0.55) — the Bezier parameter used for both the label position AND the tangent/perpendicular calculation.
+- Use `t=0.5` for undirected edges (midpoint), `t=0.67` for directed single edges (2/3 toward destination), `t=0.55` for bidirectional curved edges (avoids symmetry ambiguity).
+- Default `edgeLabelOffset` must be `0` (labels ON the edge, readable via white stroke halo). A non-zero default pushes labels perpendicular and can force them into nearby nodes on dense graphs.
+- Perpendicular = `(-tangentY, tangentX) / |tangent|`. For straight edges (curvature=0) the perpendicular points "up" relative to edge direction. Keep the control in the modal but default to 0.
+
+### Layout Cache Key Must Include All Position-Determining Parameters
+- The cache key `layoutName|seed|labels|weights` is sufficient for most layouts, BUT any layout-specific tuning param that changes positions must also be included.
+- `saqrJitter` changes the Y positions of the first middle row → must be in the cache key. Without it, jitter slider changes are silently ignored (cached positions reused).
+- Pattern: add an `extraParams` arg to `layoutCacheKey` and pass `j{jitter}` when layout='saqr'. Scalable to other layout-specific params in the future.
+- graphPadding, networkHeight, layoutSpacing do NOT need to be in the key because they are applied AFTER denormalization, not during the raw position computation.
+
+### Floating Modal on document.body
+- Modals appended to `document.body` (not `#app`) survive `render()` calls since `app.innerHTML = ''` only clears `#app`.
+- Pattern: `document.getElementById('my-modal')?.remove()` at the top of the injection function prevents duplicates on re-render.
+- Modal z-index should be ≥ 2000 to clear the sidebar (z-index ~100) and nav bar.
+- Click-outside-to-dismiss: attach a `document.addEventListener('click', handler)` after the modal is created; inside handler, `removeEventListener` if modal no longer exists to prevent leaks.
+
 ## 2026-02-21 (session 4)
 
 ### Bootstrap Forest Plot Design

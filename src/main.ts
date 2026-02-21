@@ -39,6 +39,8 @@ export interface NetworkSettings {
   edgeColor: string;
   edgeLabelSize: number;
   edgeLabelColor: string;
+  edgeLabelOffset: number;   // perpendicular px offset from edge line, default 0 (labels on edge)
+  edgeLabelT: number;        // Bezier t for label position: 0=source, 1=target, default 0.55
   showEdgeLabels: boolean;
   edgeCurvature: number;
   edgeThreshold: number;
@@ -56,9 +58,11 @@ export interface NetworkSettings {
   showSelfLoops: boolean;
 
   // Layout
-  layout: 'circular' | 'spring' | 'kamada_kawai' | 'spectral' | 'fruchterman_reingold' | 'forceatlas2' | 'fr_shell' | 'concentric' | 'fcose' | 'dagre' | 'cola' | 'euler' | 'avsdf';
+  layout: 'circular' | 'spring' | 'kamada_kawai' | 'spectral' | 'fruchterman_reingold' | 'forceatlas2' | 'fr_shell' | 'concentric' | 'fcose' | 'dagre' | 'cola' | 'euler' | 'avsdf' | 'breadthfirst' | 'elk_layered' | 'elk_stress' | 'elk_mrtree' | 'degree_hierarchical' | 'saqr';
   layoutSeed: number;
   layoutSpacing: number;        // scale positions from center (1 = normal)
+  layoutRotation: number;       // clockwise rotation in degrees (0–360), applied post-layout
+  saqrJitter: number;           // jitter fraction for first Saqr row, default 0.32
   graphPadding: number;
   networkHeight: number;
 
@@ -69,7 +73,7 @@ export interface NetworkSettings {
 }
 
 // Bump this whenever defaults change to force a localStorage reset
-export const SETTINGS_VERSION = 20;
+export const SETTINGS_VERSION = 25;
 
 export function defaultNetworkSettings(): NetworkSettings {
   return {
@@ -96,6 +100,8 @@ export function defaultNetworkSettings(): NetworkSettings {
     edgeColor: '#2B4C7E',
     edgeLabelSize: 9,
     edgeLabelColor: '#2B4C7E',
+    edgeLabelOffset: 0,
+    edgeLabelT: 0.55,
     showEdgeLabels: true,
     edgeCurvature: 22,
     edgeThreshold: 0.05,
@@ -112,6 +118,8 @@ export function defaultNetworkSettings(): NetworkSettings {
     layout: 'circular',
     layoutSeed: 42,
     layoutSpacing: 1.0,
+    layoutRotation: 0,
+    saqrJitter: 0.32,
     graphPadding: 25,
     networkHeight: 580,
 
@@ -172,6 +180,10 @@ export interface AppState {
   snaToCol: number;
   snaWeightCol: number;       // -1 = unweighted
   snaDirected: boolean;
+  addStartState: boolean;       // prepend a synthetic "Start" state to every sequence
+  startStateLabel: string;      // label for the synthetic start state
+  addEndState: boolean;         // append a synthetic "End" state to every sequence
+  endStateLabel: string;        // label for the synthetic end state
   activeMode: 'data' | 'single' | 'clustering' | 'group' | 'onehot' | 'group_onehot' | 'sna';
   activeSubTab: string;
   chartMaxWidth: number;
@@ -199,6 +211,10 @@ export const state: AppState = {
   snaToCol: 1,
   snaWeightCol: -1,
   snaDirected: true,
+  addStartState: false,
+  startStateLabel: 'Start',
+  addEndState: false,
+  endStateLabel: 'End',
   groupLabels: null,
   activeGroup: null,
   modelType: 'tna',
@@ -240,6 +256,24 @@ export function buildSnaModel(): TNA {
   return model;
 }
 
+/**
+ * Prepend/append synthetic Start and/or End states to every sequence
+ * according to the current state flags. Trailing nulls are trimmed before
+ * appending End so the sentinel lands right after the last real state.
+ */
+function applyStartEnd(sequences: SequenceData): SequenceData {
+  if (!state.addStartState && !state.addEndState) return sequences;
+  return sequences.map(seq => {
+    // Trim trailing nulls to find the real end of the sequence
+    let last = seq.length - 1;
+    while (last >= 0 && seq[last] === null) last--;
+    const trimmed: (string | null)[] = seq.slice(0, last + 1);
+    if (state.addStartState) trimmed.unshift(state.startStateLabel || 'Start');
+    if (state.addEndState) trimmed.push(state.endStateLabel || 'End');
+    return trimmed;
+  });
+}
+
 /** Build a single TNA from all sequences (ignoring group labels). */
 export function buildModel(): TNA {
   if (state.activeMode === 'sna') return buildSnaModel();
@@ -247,7 +281,7 @@ export function buildModel(): TNA {
   const opts: Record<string, unknown> = {};
   if (state.scaling) opts.scaling = state.scaling;
   if (state.modelType === 'atna') opts.beta = state.atnaBeta;
-  let model = builders[state.modelType](state.sequenceData, opts as any);
+  let model = builders[state.modelType](applyStartEnd(state.sequenceData), opts as any);
   if (state.threshold > 0) {
     model = prune(model, state.threshold) as TNA;
   }
@@ -260,7 +294,7 @@ export function buildGroupModel(labels: string[]): GroupTNA {
   const opts: Record<string, unknown> = {};
   if (state.scaling) opts.scaling = state.scaling;
   if (state.modelType === 'atna') opts.beta = state.atnaBeta;
-  return groupBuilders[state.modelType](state.sequenceData, labels, opts as any);
+  return groupBuilders[state.modelType](applyStartEnd(state.sequenceData), labels, opts as any);
 }
 
 /** Extract the active single-group TNA from a model (applies pruning for group models). */
@@ -393,6 +427,9 @@ function loadState() {
       state.networkSettings = defaultNetworkSettings();
     } else {
       state.networkSettings = { ...defaultNetworkSettings(), ...(saved.networkSettings ?? {}) };
+      // Always reset edgeLabelOffset to 0 — it defaulted to 8 in an earlier session
+      // and that value may have been persisted. Labels must start on the edge.
+      state.networkSettings.edgeLabelOffset = 0;
     }
 
     // Restore data from separate key

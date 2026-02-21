@@ -4,7 +4,7 @@
 import * as d3 from 'd3';
 import type { TNA, CommunityResult, CentralityResult } from 'tnaj';
 import type { NetworkSettings } from '../main';
-import { showTooltip, hideTooltip } from '../main';
+import { showTooltip, hideTooltip, state } from '../main';
 import { NODE_COLORS, COMMUNITY_COLORS } from './colors';
 import { cytoscapeLayout } from './cytoscape-layouts';
 import type { CytoscapeLayoutName } from './cytoscape-layouts';
@@ -766,11 +766,12 @@ export function shapePathD(shape: string, r: number): string {
 export function computeEdgePath(
   sx: number, sy: number, tx: number, ty: number,
   curvature: number, sourceOuterRadius: number, targetOuterRadius: number, arrowSize: number,
+  labelT = 0.55,
 ) {
   const dx = tx - sx;
   const dy = ty - sy;
   const len = Math.sqrt(dx * dx + dy * dy);
-  if (len < 1) return { path: '', tipX: tx, tipY: ty, tipDx: 0, tipDy: -1, labelX: (sx + tx) / 2, labelY: (sy + ty) / 2 };
+  if (len < 1) return { path: '', tipX: tx, tipY: ty, tipDx: 0, tipDy: -1, labelX: (sx + tx) / 2, labelY: (sy + ty) / 2, labelPx: 0, labelPy: -1 };
 
   const ux = dx / len;
   const uy = dy / len;
@@ -798,13 +799,20 @@ export function computeEdgePath(
   const endX = tx - eux * (targetOuterRadius + arrowSize);
   const endY = ty - euy * (targetOuterRadius + arrowSize);
 
-  const t = 0.55;
+  const t = labelT;
   const labelX = (1 - t) * (1 - t) * startX + 2 * (1 - t) * t * mx + t * t * endX;
   const labelY = (1 - t) * (1 - t) * startY + 2 * (1 - t) * t * my + t * t * endY;
 
+  // Perpendicular unit vector at t (for edgeLabelOffset lifting)
+  const tangentX = 2 * (1 - t) * (mx - startX) + 2 * t * (endX - mx);
+  const tangentY = 2 * (1 - t) * (my - startY) + 2 * t * (endY - my);
+  const tLen = Math.sqrt(tangentX * tangentX + tangentY * tangentY) || 1;
+  const labelPx = -tangentY / tLen;
+  const labelPy =  tangentX / tLen;
+
   return {
     path: `M${startX},${startY} Q${mx},${my} ${endX},${endY}`,
-    tipX, tipY, tipDx: eux, tipDy: euy, labelX, labelY,
+    tipX, tipY, tipDx: eux, tipDy: euy, labelX, labelY, labelPx, labelPy,
   };
 }
 
@@ -843,12 +851,17 @@ function renderSelfLoop(
   const loopR = (actualRadius ?? settings.nodeRadius) * 0.7; // visible loop
   const margin = 3; // clear gap between donut ring and arc
 
-  // Direction outward from graph center
+  // Direction outward from graph center; fall back to "above" when node is at/near center
   let dirX = node.x - cx;
   let dirY = node.y - cy;
-  const dirLen = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
-  dirX /= dirLen;
-  dirY /= dirLen;
+  const dirLen = Math.sqrt(dirX * dirX + dirY * dirY);
+  if (dirLen < 1) {
+    dirX = 0;
+    dirY = -1;
+  } else {
+    dirX /= dirLen;
+    dirY /= dirLen;
+  }
 
   // Place loop center outward, with margin so inner edge doesn't touch donut ring
   const loopCX = node.x + dirX * (outerRadius + margin + loopR);
@@ -943,8 +956,249 @@ function renderSelfLoop(
 let cachedLayoutKey = '';
 let cachedNormPositions: { x: number; y: number }[] = [];
 
+/**
+ * Saqr layout.
+ *
+ * Row 0 — Start node alone (centred).
+ * Middle rows — remaining nodes sorted by outgoing weight from Start
+ *   (strongest connections closest to Start).
+ *   ≤ 10 middle nodes → 2 middle rows (top 50% / bottom 50%)
+ *   > 10 middle nodes → 3 middle rows (≈ ⅓ each)
+ * Last row — End node alone (centred).
+ *
+ * If Start/End are not present in the model the layout still works:
+ * highest-out-degree node is treated as Start and nodes with no
+ * outgoing edges are treated as End.
+ */
+function saqrLayout(
+  n: number,
+  labels: string[],
+  weights: { get(i: number, j: number): number },
+  graphWidth: number,
+  graphHeight: number,
+  padding: number,
+  startLabel?: string,
+  endLabel?: string,
+  jitter = 0.32,
+): { x: number; y: number }[] {
+  // Identify Start / End indices
+  let startIdx = startLabel ? labels.indexOf(startLabel) : -1;
+  let endIdx   = endLabel   ? labels.indexOf(endLabel)   : -1;
+
+  // Compute out-degree sums for fallback root detection
+  const outSum = new Array<number>(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i !== j) outSum[i] += weights.get(i, j);
+    }
+  }
+
+  // Fallback: use highest-out-degree node as Start if not found
+  if (startIdx < 0) {
+    let best = 0;
+    for (let i = 1; i < n; i++) { if (outSum[i] > outSum[best]) best = i; }
+    startIdx = best;
+  }
+
+  // Collect middle nodes (all except Start and End)
+  const middle: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (i !== startIdx && i !== endIdx) middle.push(i);
+  }
+
+  // Sort middle nodes by outgoing weight from Start (descending = strongest first)
+  middle.sort((a, b) => weights.get(startIdx, b) - weights.get(startIdx, a));
+
+  // Split into layers
+  const nm = middle.length;
+  let midLayers: number[][];
+  if (nm === 0) {
+    midLayers = [];
+  } else if (nm <= 10) {
+    const cut = Math.ceil(nm / 2);
+    midLayers = [middle.slice(0, cut), middle.slice(cut)].filter(l => l.length > 0);
+  } else {
+    const cut1 = Math.ceil(nm / 3);
+    const cut2 = Math.ceil(nm * 2 / 3);
+    midLayers = [
+      middle.slice(0, cut1),
+      middle.slice(cut1, cut2),
+      middle.slice(cut2),
+    ].filter(l => l.length > 0);
+  }
+
+  const hasEnd = endIdx >= 0;
+  const totalRows = 1 + midLayers.length + (hasEnd ? 1 : 0);
+  const usableH = graphHeight - 2 * padding;
+  const usableW = graphWidth - 2 * padding;
+  const cx = graphWidth / 2;
+
+  const rowY = (ri: number) =>
+    totalRows === 1 ? graphHeight / 2 : padding + (ri / (totalRows - 1)) * usableH;
+
+  // Row spacing — used for jitter amount on the first middle row.
+  const rowSpacing = totalRows > 1 ? usableH / (totalRows - 1) : usableH;
+  const jitterAmt = rowSpacing * jitter;
+
+  // Circular/diamond envelope: sin(π * ri / (totalRows-1)) narrows rows near
+  // Start/End and widens the middle rows, producing a lens-shaped silhouette.
+  const envelope = (ri: number) =>
+    totalRows > 1 ? Math.sin(Math.PI * ri / (totalRows - 1)) : 1;
+
+  // Spread nodes across the enveloped width for a given row.
+  const spreadX = (pi: number, rowSize: number, ri: number) => {
+    if (rowSize === 1) return cx;
+    const halfW = (usableW / 2) * envelope(ri);
+    return cx + (pi / (rowSize - 1) - 0.5) * 2 * halfW;
+  };
+
+  const positions: { x: number; y: number }[] = new Array(n).fill({ x: cx, y: graphHeight / 2 });
+
+  // Row 0: Start
+  positions[startIdx] = { x: cx, y: rowY(0) };
+
+  // Middle rows
+  for (let li = 0; li < midLayers.length; li++) {
+    const layer = midLayers[li]!;
+    const ri = li + 1;
+    const baseY = rowY(ri);
+    for (let pi = 0; pi < layer.length; pi++) {
+      // Y-jitter only on the first middle row (closest to Start):
+      // alternate up/down by ~one node diameter to give a zigzag feel.
+      const yJitter = li === 0 ? (pi % 2 === 0 ? -jitterAmt : jitterAmt) : 0;
+      positions[layer[pi]!] = { x: spreadX(pi, layer.length, ri), y: baseY + yJitter };
+    }
+  }
+
+  // Last row: End
+  if (hasEnd) {
+    positions[endIdx] = { x: cx, y: rowY(totalRows - 1) };
+  }
+
+  return positions;
+}
+
+/**
+ * Degree Hierarchical layout.
+ *
+ * Assigns BFS depth levels from the Start node (or any zero-in-degree root).
+ * Nodes in each level are spread horizontally and sorted by total degree
+ * descending so high-degree nodes appear centrally. The End node is always
+ * placed in its own final row at the bottom.
+ */
+function degreeHierarchicalLayout(
+  n: number,
+  labels: string[],
+  weights: { get(i: number, j: number): number },
+  graphWidth: number,
+  graphHeight: number,
+  padding: number,
+  startLabel?: string,
+  endLabel?: string,
+): { x: number; y: number }[] {
+  const inDeg = new Array<number>(n).fill(0);
+  const outDeg = new Array<number>(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i !== j && weights.get(i, j) > 0) { outDeg[i]++; inDeg[j]++; }
+    }
+  }
+
+  // Find BFS roots: prefer explicit Start, else zero-in-degree nodes, else max-out-degree
+  const roots: number[] = [];
+  if (startLabel) { const si = labels.indexOf(startLabel); if (si >= 0) roots.push(si); }
+  if (roots.length === 0) {
+    for (let i = 0; i < n; i++) { if (inDeg[i] === 0) roots.push(i); }
+  }
+  if (roots.length === 0) {
+    let best = 0;
+    for (let i = 1; i < n; i++) { if (outDeg[i] > outDeg[best]) best = i; }
+    roots.push(best);
+  }
+
+  // BFS to assign depth levels
+  const level = new Array<number>(n).fill(-1);
+  const queue: number[] = [];
+  for (const r of roots) { level[r] = 0; queue.push(r); }
+  let head = 0;
+  while (head < queue.length) {
+    const cur = queue[head++]!;
+    for (let j = 0; j < n; j++) {
+      if (j !== cur && weights.get(cur, j) > 0 && level[j] === -1) {
+        level[j] = level[cur]! + 1;
+        queue.push(j);
+      }
+    }
+  }
+
+  // Unreachable nodes (disconnected or in pure cycles): append after BFS tree
+  let maxLvl = 0;
+  for (const l of level) if (l > maxLvl) maxLvl = l;
+  for (let i = 0; i < n; i++) { if (level[i] === -1) level[i] = maxLvl + 1; }
+
+  // Force End node to its own bottom-most level
+  const endIdx = endLabel ? labels.indexOf(endLabel) : -1;
+  if (endIdx >= 0) {
+    let mx = 0;
+    for (let i = 0; i < n; i++) { if (i !== endIdx && level[i]! > mx) mx = level[i]!; }
+    level[endIdx] = mx + 1;
+  }
+
+  // Group nodes by level; within each level sort by total degree descending
+  const levels: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    const l = level[i]!;
+    while (levels.length <= l) levels.push([]);
+    levels[l]!.push(i);
+  }
+  const totalDeg = inDeg.map((d, i) => d + outDeg[i]);
+  for (const lvl of levels) lvl.sort((a, b) => totalDeg[b]! - totalDeg[a]!);
+
+  // Assign pixel positions
+  const numLevels = levels.length;
+  const usableW = graphWidth - 2 * padding;
+  const usableH = graphHeight - 2 * padding;
+  const positions: { x: number; y: number }[] = new Array(n);
+  for (let li = 0; li < numLevels; li++) {
+    const lvl = levels[li]!;
+    const y = numLevels === 1 ? graphHeight / 2
+      : padding + (li / (numLevels - 1)) * usableH;
+    for (let pi = 0; pi < lvl.length; pi++) {
+      const x = lvl.length === 1 ? graphWidth / 2
+        : padding + (pi / (lvl.length - 1)) * usableW;
+      positions[lvl[pi]!] = { x, y };
+    }
+  }
+  return positions;
+}
+
+/**
+ * After any layout is computed, snap the synthetic Start state to the top-centre
+ * and the End state to the bottom-centre of the canvas.  This keeps the flow
+ * direction consistent regardless of which algorithm was chosen.
+ *
+ * Only applies when the corresponding state flags are enabled AND the label
+ * is actually present in the model (i.e., start/end were added to the sequences).
+ */
+function pinStartEnd(
+  positions: { x: number; y: number }[],
+  labels: string[],
+  width: number,
+  height: number,
+  padding: number,
+): void {
+  if (state.addStartState) {
+    const si = labels.indexOf(state.startStateLabel || 'Start');
+    if (si >= 0) { positions[si] = { x: width / 2, y: padding }; }
+  }
+  if (state.addEndState) {
+    const ei = labels.indexOf(state.endStateLabel || 'End');
+    if (ei >= 0) { positions[ei] = { x: width / 2, y: height - padding }; }
+  }
+}
+
 function layoutCacheKey(
-  model: TNA, layoutName: string, seed: number,
+  model: TNA, layoutName: string, seed: number, extraParams = '',
 ): string {
   // Include labels + a weight fingerprint so model changes invalidate cache
   const wSample: number[] = [];
@@ -954,7 +1208,8 @@ function layoutCacheKey(
       wSample.push(model.weights.get(i, j));
     }
   }
-  return `${layoutName}|${seed}|${model.labels.join(',')}|${wSample.join(',')}`;
+  const base = `${layoutName}|${seed}|${model.labels.join(',')}|${wSample.join(',')}`;
+  return extraParams ? `${base}|${extraParams}` : base;
 }
 
 /**
@@ -1068,7 +1323,7 @@ export function resolvePositions(labels: string[]): { x: number; y: number }[] {
 //  Core drawing (shared between renderNetwork and renderNetworkIntoGroup)
 // ═══════════════════════════════════════════════════════════
 
-function drawNetwork(
+async function drawNetwork(
   rootGroup: d3.Selection<SVGGElement, unknown, null, undefined>,
   model: TNA,
   settings: NetworkSettings,
@@ -1118,7 +1373,9 @@ function drawNetwork(
   const layoutSeed = settings.layoutSeed ?? 42;
   // Auto-switch circular → fcose for large graphs (SNA scale)
   const effectiveLayout = (settings.layout === 'circular' && n > 20) ? 'fcose' : settings.layout;
-  const key = layoutCacheKey(model, effectiveLayout, layoutSeed);
+  // Include layout-specific tuning params that affect positions in the cache key
+  const layoutExtraParams = effectiveLayout === 'saqr' ? `j${settings.saqrJitter ?? 0.32}` : '';
+  const key = layoutCacheKey(model, effectiveLayout, layoutSeed, layoutExtraParams);
   let positions: { x: number; y: number }[];
   let usedGlobalPositions = false;
 
@@ -1133,9 +1390,12 @@ function drawNetwork(
     usedGlobalPositions = true;
   } else {
     // Compute fresh layout
-    const cyLayouts: CytoscapeLayoutName[] = ['concentric', 'fcose', 'dagre', 'cola', 'euler', 'avsdf'];
+    const cyLayouts: CytoscapeLayoutName[] = [
+      'concentric', 'fcose', 'dagre', 'cola', 'euler', 'avsdf',
+      'breadthfirst', 'elk_layered', 'elk_stress', 'elk_mrtree',
+    ];
     if (cyLayouts.includes(effectiveLayout as CytoscapeLayoutName)) {
-      positions = cytoscapeLayout(
+      positions = await cytoscapeLayout(
         effectiveLayout as CytoscapeLayoutName,
         n, weights, graphWidth, graphHeight, padding, layoutSeed,
       );
@@ -1158,6 +1418,21 @@ function drawNetwork(
           break;
         case 'fr_shell':
           positions = frShellLayout(n, weights, graphWidth, graphHeight, padding, layoutSeed);
+          break;
+        case 'degree_hierarchical':
+          positions = degreeHierarchicalLayout(
+            n, model.labels, weights, graphWidth, graphHeight, padding,
+            state.addStartState ? (state.startStateLabel || 'Start') : undefined,
+            state.addEndState ? (state.endStateLabel || 'End') : undefined,
+          );
+          break;
+        case 'saqr':
+          positions = saqrLayout(
+            n, model.labels, weights, graphWidth, graphHeight, padding,
+            state.addStartState ? (state.startStateLabel || 'Start') : undefined,
+            state.addEndState ? (state.endStateLabel || 'End') : undefined,
+            settings.saqrJitter ?? 0.32,
+          );
           break;
         case 'circular':
         default: {
@@ -1192,6 +1467,24 @@ function drawNetwork(
     for (const p of positions) {
       p.x = cx + (p.x - cx) * spacing;
       p.y = cy + (p.y - cy) * spacing;
+    }
+  }
+
+  // Apply clockwise rotation around the node centroid.
+  // Rotating positions (not the SVG transform) keeps all labels upright.
+  const rotDeg = settings.layoutRotation ?? 0;
+  if (rotDeg !== 0 && n > 0) {
+    const rad = (rotDeg * Math.PI) / 180;
+    const cosA = Math.cos(rad);
+    const sinA = Math.sin(rad);
+    let rcx = 0, rcy = 0;
+    for (const p of positions) { rcx += p.x; rcy += p.y; }
+    rcx /= n; rcy /= n;
+    for (const p of positions) {
+      const dx = p.x - rcx;
+      const dy = p.y - rcy;
+      p.x = rcx + dx * cosA + dy * sinA;   // clockwise rotation matrix
+      p.y = rcy - dx * sinA + dy * cosA;
     }
   }
 
@@ -1331,10 +1624,13 @@ function drawNetwork(
       const isBidir = bidir.has(`${e.fromIdx}-${e.toIdx}`);
       const curvature = isBidir ? settings.edgeCurvature : 0;
       const effectiveArrow = isUndirected ? 0 : settings.arrowSize;
-      const { path, tipX, tipY, tipDx, tipDy, labelX, labelY } = computeEdgePath(
-        src.x, src.y, tgt.x, tgt.y, curvature, nodeOuterRadius(src.radius), nodeOuterRadius(tgt.radius), effectiveArrow,
+      const { path, tipX, tipY, tipDx, tipDy, labelX, labelY, labelPx, labelPy } = computeEdgePath(
+        src.x, src.y, tgt.x, tgt.y, curvature, nodeOuterRadius(src.radius), nodeOuterRadius(tgt.radius), effectiveArrow, settings.edgeLabelT ?? 0.55,
       );
       if (!path) continue;
+      const loff = settings.edgeLabelOffset ?? 0;
+      const offLabelX = labelX + labelPx * loff;
+      const offLabelY = labelY + labelPy * loff;
 
       const op = opacityScale(e.weight);
 
@@ -1375,8 +1671,8 @@ function drawNetwork(
 
       if (settings.showEdgeLabels) {
         edgeLabelGroup.append('text')
-          .attr('x', labelX)
-          .attr('y', labelY)
+          .attr('x', offLabelX)
+          .attr('y', offLabelY)
           .attr('text-anchor', 'middle')
           .attr('dy', '0.3em')
           .attr('font-size', `${settings.edgeLabelSize}px`)
@@ -1517,7 +1813,7 @@ function drawNetwork(
 //  Main render (creates SVG element and delegates to drawNetwork)
 // ═══════════════════════════════════════════════════════════
 
-export function renderNetwork(
+export async function renderNetwork(
   container: HTMLElement, model: TNA, settings: NetworkSettings, comm?: CommunityResult, centData?: CentralityResult,
 ) {
   const rect = container.getBoundingClientRect();
@@ -1534,7 +1830,7 @@ export function renderNetwork(
     .style('cursor', 'grab');
 
   const rootGroup = svg.append('g') as d3.Selection<SVGGElement, unknown, null, undefined>;
-  drawNetwork(rootGroup, model, settings, graphWidth, graphHeight, comm, true, centData);
+  await drawNetwork(rootGroup, model, settings, graphWidth, graphHeight, comm, true, centData);
 
   // Pan & zoom
   const zoom = d3.zoom<SVGSVGElement, unknown>()
@@ -1554,10 +1850,10 @@ export function renderNetwork(
  * Used by the combined canvas mode to compose multiple networks into one SVG.
  * Tooltips are disabled since the layout is for static export.
  */
-export function renderNetworkIntoGroup(
+export async function renderNetworkIntoGroup(
   gEl: SVGGElement, model: TNA, settings: NetworkSettings,
   width: number, height: number, comm?: CommunityResult, centData?: CentralityResult,
 ) {
   const g = d3.select(gEl) as d3.Selection<SVGGElement, unknown, null, undefined>;
-  drawNetwork(g, model, settings, width, height, comm, false, centData);
+  await drawNetwork(g, model, settings, width, height, comm, false, centData);
 }
