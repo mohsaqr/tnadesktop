@@ -163,6 +163,7 @@ export interface AppState {
   showCommunities: boolean;
   communityMethod: CommunityMethod;
   disabledMeasures: string[];
+  disabledIndices: string[];
   centralityLoops: boolean;
   activeSecondaryTab: string;
   clusterK: number;
@@ -209,6 +210,7 @@ export const state: AppState = {
   showCommunities: false,
   communityMethod: 'edge_betweenness',
   disabledMeasures: [],
+  disabledIndices: [],
   centralityLoops: false,
   activeSecondaryTab: '',
   activeMode: 'data',
@@ -383,6 +385,7 @@ function loadState() {
     state.showCommunities = saved.showCommunities ?? false;
     state.communityMethod = saved.communityMethod ?? 'louvain';
     state.disabledMeasures = (saved as any).disabledMeasures ?? [];
+    state.disabledIndices = (saved as any).disabledIndices ?? [];
     state.centralityLoops = saved.centralityLoops ?? false;
     state.activeSecondaryTab = (saved as any).activeSecondaryTab ?? '';
     // Reset network settings to fresh defaults when version bumps

@@ -1,5 +1,31 @@
 # Dynalytics Desktop Learnings
 
+## 2026-02-21 (session 2)
+
+### Statistical Functions (betaI / ANOVA)
+- Incomplete beta function (betaCF): modified Lentz's method must keep `c` as an independent convergent tracker (`c = 1 + aa/c`), NOT `c = 1 + aa/h`. Using `h` instead of `c` causes catastrophic divergence.
+- The `c` variable in Lentz's method is the numerator convergent, `d` is the denominator convergent, and `h` accumulates `d*c` products. Do NOT conflate them.
+- ANOVA F-test p-value via `1 - fDistCDF(F, df1, df2)` and fDistCDF uses betaI with z = d1*x/(d1*x+d2)
+- Student's t CDF via betaI: `I_x(df/2, 1/2)` where `x = df/(df+t²)`, CDF = `1 - 0.5*ib` for positive t
+- Kruskal-Wallis: apply tie correction `1 - Σ(t³-t)/(N³-N)` to H statistic; use chi-squared CDF with k-1 df
+- Abramowitz & Stegun erf approximation (7.1.26) has max error ~1.5e-7, so normalCDF(0) ≈ 0.500000001 not exactly 0.5
+
+### Sequence Indices
+- Gini coefficient: `Σ|x_i - x_j| / (2 * nUnique * n)` for state frequency counts; 0 for uniform, increases with inequality
+- Transition diversity for single-state sequence = 1 (1 unique type / 1 possible), which is mathematically correct even if counterintuitive
+- Integrative complexity (Simpson's diversity of transition pairs): `1 - Σp_ij²`; 0 when all transitions are identical type
+
+## 2026-02-21
+
+### Richer Visualization Chart Types
+- TypeScript strict mode: `??` and `||` cannot be mixed without parentheses — wrap the `||` fallback in parens: `opts.width ?? (container.getBoundingClientRect().width || 400)`
+- D3 `d3.pie()` with `.sort(null)` preserves input order (important for consistent donut colors matching NODE_COLORS index)
+- D3 radar chart: `d3.lineRadial()` expects angle in radians; subtract `Math.PI/2` for top-start orientation
+- Multi-group donut grids: hide legends when >4 groups to save space (`showLabels: nGroups <= 4`)
+- Forest plot: sort edges by weight descending and limit to top 20 for readability; alternating row backgrounds via `#f8f9fa` fill rects
+- Single-model radar centralities: normalize per-measure (min-max 0-1) for comparable axes, otherwise density/pagerank differences make some axes invisible
+- Toggle button pattern: store `getCurrentView()` on parent element or window for detection handlers that need to refresh the active view
+
 ## 2026-02-20
 
 ### Rename: TNA Desktop → Dynalytics Desktop

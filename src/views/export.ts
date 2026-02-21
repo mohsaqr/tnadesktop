@@ -1,5 +1,5 @@
 /**
- * Export functionality: PNG, CSV, HTML, PDF.
+ * Export functionality: PNG, CSV, HTML, PDF, Word.
  */
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
@@ -44,6 +44,20 @@ export function showExportDialog(model: TNA, cent: CentralityResult) {
           <p>Generate complete PDF report with all tabs</p>
         </div>
       </div>
+      <div class="export-option" id="export-word">
+        <div class="icon">&#128221;</div>
+        <div class="info">
+          <h4>Current Analysis (Word)</h4>
+          <p>Editable Word document of tabs you have already viewed</p>
+        </div>
+      </div>
+      <div class="export-option" id="export-full-word">
+        <div class="icon">&#128196;</div>
+        <div class="info">
+          <h4>Full Analysis (Word)</h4>
+          <p>Generate complete editable Word document with all tabs</p>
+        </div>
+      </div>
       <button class="modal-close" id="export-close">Cancel</button>
     </div>
   `;
@@ -69,6 +83,14 @@ export function showExportDialog(model: TNA, cent: CentralityResult) {
   document.getElementById('export-full-pdf')!.addEventListener('click', () => {
     overlay.remove();
     exportPdf(model, cent, false);
+  });
+  document.getElementById('export-word')!.addEventListener('click', () => {
+    overlay.remove();
+    exportWord(model, cent, true);
+  });
+  document.getElementById('export-full-word')!.addEventListener('click', () => {
+    overlay.remove();
+    exportWord(model, cent, false);
   });
 }
 
@@ -178,122 +200,103 @@ function showProgressOverlay(message: string): HTMLElement {
   return overlay;
 }
 
-async function exportHtml(model: TNA, cent: CentralityResult, onlyVisited: boolean) {
-  const label = onlyVisited ? 'current analysis' : 'full analysis';
-  const overlay = showProgressOverlay(`Generating ${label} HTML report...`);
+/** Build the shared report body content (tables + images) used by HTML and Word exports. */
+function buildReportContent(
+  model: TNA,
+  cent: CentralityResult,
+  sections: { section: string; title: string; dataUrl: string }[],
+): { tablesHtml: string; imagesHtml: string; metaInfo: string } {
+  const isGroup = isGroupAnalysisActive();
+  const groupModels = isGroup ? getActiveGroupModels() : null;
+  const groupCents = isGroup ? getActiveGroupCents() : null;
+  const groups = groupModels ? Array.from(groupModels.keys()).sort() : [];
+  const n = model.labels.length;
 
-  try {
-    const sections = await captureAllTabs(onlyVisited, (cur, tot) => {
-      const msg = document.getElementById('export-progress-msg');
-      if (msg) msg.textContent = `Capturing tab ${cur}/${tot}...`;
-    });
+  // --- Build centrality + weight tables ---
+  let tablesHtml = '';
 
-    if (sections.length === 0) {
-      overlay.remove();
-      alert(onlyVisited
-        ? 'No tabs have been viewed yet. Visit some analysis tabs first, or use "Full Analysis" to generate a complete report.'
-        : 'No panels could be captured.');
-      return;
-    }
-
-    const isGroup = isGroupAnalysisActive();
-    const groupModels = isGroup ? getActiveGroupModels() : null;
-    const groupCents = isGroup ? getActiveGroupCents() : null;
-    const groups = groupModels ? Array.from(groupModels.keys()).sort() : [];
-
-    const n = model.labels.length;
-
-    // --- Build centrality + weight tables ---
-    let tablesHtml = '';
-
-    if (isGroup && groupCents && groups.length > 0) {
-      // Per-group centralities
-      for (const gName of groups) {
-        const gc = groupCents.get(gName)!;
-        const measures = Object.keys(gc.measures) as (keyof typeof gc.measures)[];
-        const centHeaders = '<th>State</th>' + measures.map(m => `<th>${m}</th>`).join('');
-        let centRows = '';
-        for (let i = 0; i < gc.labels.length; i++) {
-          const cls = i % 2 === 0 ? 'even' : 'odd';
-          centRows += `<tr class="${cls}"><td>${gc.labels[i]}</td>`;
-          for (const m of measures) {
-            centRows += `<td>${fmtNum(gc.measures[m]![i]!)}</td>`;
-          }
-          centRows += '</tr>';
-        }
-        tablesHtml += `<h2>Centrality Measures — ${gName}</h2>\n`;
-        tablesHtml += `<table><thead><tr>${centHeaders}</tr></thead><tbody>${centRows}</tbody></table>\n`;
-      }
-      // Per-group weight matrices
-      for (const gName of groups) {
-        const gm = groupModels!.get(gName)!;
-        const gn = gm.labels.length;
-        const weightHeaders = '<th></th>' + gm.labels.map(l => `<th>${l}</th>`).join('');
-        let weightRows = '';
-        for (let i = 0; i < gn; i++) {
-          const cls = i % 2 === 0 ? 'even' : 'odd';
-          weightRows += `<tr class="${cls}"><td><strong>${gm.labels[i]}</strong></td>`;
-          for (let j = 0; j < gn; j++) {
-            weightRows += `<td>${fmtNum(gm.weights.get(i, j))}</td>`;
-          }
-          weightRows += '</tr>';
-        }
-        tablesHtml += `<h2>Weight Matrix — ${gName}</h2>\n`;
-        tablesHtml += `<table><thead><tr>${weightHeaders}</tr></thead><tbody>${weightRows}</tbody></table>\n`;
-      }
-    } else {
-      // Single model
-      const measures = Object.keys(cent.measures) as (keyof typeof cent.measures)[];
+  if (isGroup && groupCents && groups.length > 0) {
+    for (const gName of groups) {
+      const gc = groupCents.get(gName)!;
+      const measures = Object.keys(gc.measures) as (keyof typeof gc.measures)[];
       const centHeaders = '<th>State</th>' + measures.map(m => `<th>${m}</th>`).join('');
       let centRows = '';
-      for (let i = 0; i < cent.labels.length; i++) {
+      for (let i = 0; i < gc.labels.length; i++) {
         const cls = i % 2 === 0 ? 'even' : 'odd';
-        centRows += `<tr class="${cls}"><td>${cent.labels[i]}</td>`;
+        centRows += `<tr class="${cls}"><td>${gc.labels[i]}</td>`;
         for (const m of measures) {
-          centRows += `<td>${fmtNum(cent.measures[m]![i]!)}</td>`;
+          centRows += `<td>${fmtNum(gc.measures[m]![i]!)}</td>`;
         }
         centRows += '</tr>';
       }
-      tablesHtml += `<h2>Centrality Measures</h2>\n`;
+      tablesHtml += `<h2>Centrality Measures — ${gName}</h2>\n`;
       tablesHtml += `<table><thead><tr>${centHeaders}</tr></thead><tbody>${centRows}</tbody></table>\n`;
-
-      const weightHeaders = '<th></th>' + model.labels.map(l => `<th>${l}</th>`).join('');
+    }
+    for (const gName of groups) {
+      const gm = groupModels!.get(gName)!;
+      const gn = gm.labels.length;
+      const weightHeaders = '<th></th>' + gm.labels.map(l => `<th>${l}</th>`).join('');
       let weightRows = '';
-      for (let i = 0; i < n; i++) {
+      for (let i = 0; i < gn; i++) {
         const cls = i % 2 === 0 ? 'even' : 'odd';
-        weightRows += `<tr class="${cls}"><td><strong>${model.labels[i]}</strong></td>`;
-        for (let j = 0; j < n; j++) {
-          weightRows += `<td>${fmtNum(model.weights.get(i, j))}</td>`;
+        weightRows += `<tr class="${cls}"><td><strong>${gm.labels[i]}</strong></td>`;
+        for (let j = 0; j < gn; j++) {
+          weightRows += `<td>${fmtNum(gm.weights.get(i, j))}</td>`;
         }
         weightRows += '</tr>';
       }
-      tablesHtml += `<h2>Transition Weight Matrix</h2>\n`;
+      tablesHtml += `<h2>Weight Matrix — ${gName}</h2>\n`;
       tablesHtml += `<table><thead><tr>${weightHeaders}</tr></thead><tbody>${weightRows}</tbody></table>\n`;
     }
-
-    // --- Group captured images by section ---
-    let imagesHtml = '';
-    let lastSection = '';
-    for (const s of sections) {
-      if (s.section !== lastSection) {
-        imagesHtml += `<h2>${s.section}</h2>\n`;
-        lastSection = s.section;
+  } else {
+    const measures = Object.keys(cent.measures) as (keyof typeof cent.measures)[];
+    const centHeaders = '<th>State</th>' + measures.map(m => `<th>${m}</th>`).join('');
+    let centRows = '';
+    for (let i = 0; i < cent.labels.length; i++) {
+      const cls = i % 2 === 0 ? 'even' : 'odd';
+      centRows += `<tr class="${cls}"><td>${cent.labels[i]}</td>`;
+      for (const m of measures) {
+        centRows += `<td>${fmtNum(cent.measures[m]![i]!)}</td>`;
       }
-      if (s.title) imagesHtml += `<h3>${s.title}</h3>\n`;
-      imagesHtml += `<img src="${s.dataUrl}" alt="${s.title || s.section}">\n`;
+      centRows += '</tr>';
     }
+    tablesHtml += `<h2>Centrality Measures</h2>\n`;
+    tablesHtml += `<table><thead><tr>${centHeaders}</tr></thead><tbody>${centRows}</tbody></table>\n`;
 
-    const metaInfo = isGroup && groups.length > 0
-      ? `Model: <strong>${model.type}</strong> &nbsp;|&nbsp; States: <strong>${n}</strong> &nbsp;|&nbsp; Groups: <strong>${groups.length}</strong> (${groups.join(', ')}) &nbsp;|&nbsp; Date: ${new Date().toLocaleDateString()}`
-      : `Model: <strong>${model.type}</strong> &nbsp;|&nbsp; States: <strong>${n}</strong> &nbsp;|&nbsp; Date: ${new Date().toLocaleDateString()}`;
+    const weightHeaders = '<th></th>' + model.labels.map(l => `<th>${l}</th>`).join('');
+    let weightRows = '';
+    for (let i = 0; i < n; i++) {
+      const cls = i % 2 === 0 ? 'even' : 'odd';
+      weightRows += `<tr class="${cls}"><td><strong>${model.labels[i]}</strong></td>`;
+      for (let j = 0; j < n; j++) {
+        weightRows += `<td>${fmtNum(model.weights.get(i, j))}</td>`;
+      }
+      weightRows += '</tr>';
+    }
+    tablesHtml += `<h2>Transition Weight Matrix</h2>\n`;
+    tablesHtml += `<table><thead><tr>${weightHeaders}</tr></thead><tbody>${weightRows}</tbody></table>\n`;
+  }
 
-    const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dynalytics Analysis Report</title>
-<style>
+  // --- Group captured images by section ---
+  let imagesHtml = '';
+  let lastSection = '';
+  for (const s of sections) {
+    if (s.section !== lastSection) {
+      imagesHtml += `<h2>${s.section}</h2>\n`;
+      lastSection = s.section;
+    }
+    if (s.title) imagesHtml += `<h3>${s.title}</h3>\n`;
+    imagesHtml += `<img src="${s.dataUrl}" alt="${s.title || s.section}">\n`;
+  }
+
+  const metaInfo = isGroup && groups.length > 0
+    ? `Model: <strong>${model.type}</strong> &nbsp;|&nbsp; States: <strong>${n}</strong> &nbsp;|&nbsp; Groups: <strong>${groups.length}</strong> (${groups.join(', ')}) &nbsp;|&nbsp; Date: ${new Date().toLocaleDateString()}`
+    : `Model: <strong>${model.type}</strong> &nbsp;|&nbsp; States: <strong>${n}</strong> &nbsp;|&nbsp; Date: ${new Date().toLocaleDateString()}`;
+
+  return { tablesHtml, imagesHtml, metaInfo };
+}
+
+const REPORT_CSS = `
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 1100px; margin: 0 auto; padding: 2rem; color: #1a1a1a; line-height: 1.5; }
   h1 { border-bottom: 2px solid #333; padding-bottom: .4em; }
   h2 { margin-top: 2.5rem; color: #333; border-bottom: 1px solid #ddd; padding-bottom: .3em; }
@@ -306,7 +309,39 @@ async function exportHtml(model: TNA, cent: CentralityResult, onlyVisited: boole
   tr.even td { background: #fff; }
   img { max-width: 100%; height: auto; margin: .5rem 0 1rem; border: 1px solid #e0e0e0; border-radius: 4px; }
   @media print { body { padding: 0; } img { break-inside: avoid; } h2 { break-before: page; } }
-</style>
+`;
+
+async function captureSections(onlyVisited: boolean): Promise<{ section: string; title: string; dataUrl: string }[] | null> {
+  const sections = await captureAllTabs(onlyVisited, (cur, tot) => {
+    const msg = document.getElementById('export-progress-msg');
+    if (msg) msg.textContent = `Capturing tab ${cur}/${tot}...`;
+  });
+  if (sections.length === 0) {
+    alert(onlyVisited
+      ? 'No tabs have been viewed yet. Visit some analysis tabs first, or use "Full Analysis" to generate a complete report.'
+      : 'No panels could be captured.');
+    return null;
+  }
+  return sections;
+}
+
+async function exportHtml(model: TNA, cent: CentralityResult, onlyVisited: boolean) {
+  const label = onlyVisited ? 'current analysis' : 'full analysis';
+  const overlay = showProgressOverlay(`Generating ${label} HTML report...`);
+
+  try {
+    const sections = await captureSections(onlyVisited);
+    if (!sections) { overlay.remove(); return; }
+
+    const { tablesHtml, imagesHtml, metaInfo } = buildReportContent(model, cent, sections);
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dynalytics Analysis Report</title>
+<style>${REPORT_CSS}</style>
 </head>
 <body>
 <h1>Dynalytics Analysis Report</h1>
@@ -319,6 +354,42 @@ ${imagesHtml}
 </html>`;
 
     downloadText(html, 'dynalytics-report.html', 'text/html');
+  } finally {
+    overlay.remove();
+  }
+}
+
+async function exportWord(model: TNA, cent: CentralityResult, onlyVisited: boolean) {
+  const label = onlyVisited ? 'current analysis' : 'full analysis';
+  const overlay = showProgressOverlay(`Generating ${label} Word document...`);
+
+  try {
+    const sections = await captureSections(onlyVisited);
+    if (!sections) { overlay.remove(); return; }
+
+    const { tablesHtml, imagesHtml, metaInfo } = buildReportContent(model, cent, sections);
+
+    // Word-compatible HTML wrapper with Office XML namespace
+    const doc = `<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View></w:WordDocument></xml><![endif]-->
+<style>${REPORT_CSS}</style>
+</head>
+<body>
+<h1>Dynalytics Analysis Report</h1>
+<p class="meta">${metaInfo}</p>
+
+${tablesHtml}
+
+${imagesHtml}
+</body>
+</html>`;
+
+    downloadText(doc, 'dynalytics-report.doc', 'application/msword');
   } finally {
     overlay.remove();
   }

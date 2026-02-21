@@ -9,11 +9,16 @@ import { addPanelDownloadButtons } from './export';
 import { fmtNum } from './network';
 import { createViewToggle } from './dashboard';
 
-const metricDefs: { key: keyof SequenceIndex; label: string }[] = [
+export const metricDefs: { key: keyof SequenceIndex; label: string }[] = [
   { key: 'entropy', label: 'Shannon Entropy' },
   { key: 'turbulence', label: 'Turbulence' },
   { key: 'normalizedEntropy', label: 'Normalized Entropy' },
   { key: 'selfLoopRate', label: 'Self-Loop Rate' },
+  { key: 'gini', label: 'Gini Coefficient' },
+  { key: 'persistence', label: 'State Persistence' },
+  { key: 'transitionDiversity', label: 'Transition Diversity' },
+  { key: 'integrativeComplexity', label: 'Integrative Complexity' },
+  { key: 'routine', label: 'Routine Index' },
 ];
 
 /** Original combined view (kept for multi-group card usage). */
@@ -180,7 +185,7 @@ export function renderIdxHistView(
       detailPanel.innerHTML = `<div class="panel-title">Per-Sequence Indices</div>`;
 
       let detailHtml = '<table class="preview-table" style="font-size:11px"><thead><tr>';
-      detailHtml += '<th>Seq</th><th>Length</th><th>States</th><th>Entropy</th><th>Norm. Entropy</th><th>Transitions</th><th>Turbulence</th><th>Self-Loop Rate</th>';
+      detailHtml += '<th>Seq</th><th>Length</th><th>States</th><th>Entropy</th><th>Norm. Entropy</th><th>Transitions</th><th>Turbulence</th><th>Self-Loop Rate</th><th>Gini</th><th>Persistence</th><th>Trans. Diversity</th><th>Integ. Complexity</th><th>Routine</th>';
       detailHtml += '</tr></thead><tbody>';
       const maxShow = Math.min(indices.length, 200);
       for (let i = 0; i < maxShow; i++) {
@@ -194,10 +199,15 @@ export function renderIdxHistView(
         detailHtml += `<td>${idx.complexity}</td>`;
         detailHtml += `<td>${fmtNum(idx.turbulence, 3)}</td>`;
         detailHtml += `<td>${fmtNum(idx.selfLoopRate, 3)}</td>`;
+        detailHtml += `<td>${fmtNum(idx.gini, 3)}</td>`;
+        detailHtml += `<td>${idx.persistence}</td>`;
+        detailHtml += `<td>${fmtNum(idx.transitionDiversity, 3)}</td>`;
+        detailHtml += `<td>${fmtNum(idx.integrativeComplexity, 3)}</td>`;
+        detailHtml += `<td>${fmtNum(idx.routine, 3)}</td>`;
         detailHtml += '</tr>';
       }
       if (indices.length > maxShow) {
-        detailHtml += `<tr><td colspan="8" style="text-align:center;color:#888;font-style:italic">... ${indices.length - maxShow} more sequences</td></tr>`;
+        detailHtml += `<tr><td colspan="13" style="text-align:center;color:#888;font-style:italic">... ${indices.length - maxShow} more sequences</td></tr>`;
       }
       detailHtml += '</tbody></table>';
       detailPanel.innerHTML += detailHtml;
@@ -282,7 +292,7 @@ function renderSummaryTable(tbl: HTMLElement, indices: SequenceIndex[], summarie
   detailPanel.innerHTML = `<div class="panel-title">Per-Sequence Indices</div>`;
 
   let detailHtml = '<table class="preview-table" style="font-size:11px"><thead><tr>';
-  detailHtml += '<th>Seq</th><th>Length</th><th>States</th><th>Entropy</th><th>Norm. Entropy</th><th>Transitions</th><th>Turbulence</th><th>Self-Loop Rate</th>';
+  detailHtml += '<th>Seq</th><th>Length</th><th>States</th><th>Entropy</th><th>Norm. Entropy</th><th>Transitions</th><th>Turbulence</th><th>Self-Loop Rate</th><th>Gini</th><th>Persistence</th><th>Trans. Diversity</th><th>Integ. Complexity</th><th>Routine</th>';
   detailHtml += '</tr></thead><tbody>';
   const maxShow = Math.min(indices.length, 200);
   for (let i = 0; i < maxShow; i++) {
@@ -299,7 +309,7 @@ function renderSummaryTable(tbl: HTMLElement, indices: SequenceIndex[], summarie
     detailHtml += '</tr>';
   }
   if (indices.length > maxShow) {
-    detailHtml += `<tr><td colspan="8" style="text-align:center;color:#888;font-style:italic">... ${indices.length - maxShow} more sequences</td></tr>`;
+    detailHtml += `<tr><td colspan="13" style="text-align:center;color:#888;font-style:italic">... ${indices.length - maxShow} more sequences</td></tr>`;
   }
   detailHtml += '</tbody></table>';
   detailPanel.innerHTML += detailHtml;

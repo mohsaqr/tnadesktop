@@ -7,11 +7,16 @@ export interface SequenceIndex {
   id: number;
   length: number;
   nUniqueStates: number;
-  entropy: number;         // Shannon entropy of state distribution
-  normalizedEntropy: number; // entropy / log2(nUniqueStates)
-  complexity: number;      // number of state transitions (changes)
-  turbulence: number;      // normalized complexity
-  selfLoopRate: number;    // fraction of consecutive same-state pairs
+  entropy: number;              // Shannon entropy of state distribution
+  normalizedEntropy: number;    // entropy / log2(nUniqueStates)
+  complexity: number;           // number of state transitions (changes)
+  turbulence: number;           // normalized complexity
+  selfLoopRate: number;         // fraction of consecutive same-state pairs
+  gini: number;                 // Gini coefficient of state frequency (0=equal, 1=max inequality)
+  persistence: number;          // length of longest consecutive same-state run
+  transitionDiversity: number;  // unique transitions / max possible unique transitions
+  integrativeComplexity: number; // Simpson's diversity of transition pairs (1 - Σp_ij²)
+  routine: number;              // proportion of time in the single most frequent state
 }
 
 /**
@@ -34,6 +39,11 @@ export function computeSequenceIndices(data: SequenceData): SequenceIndex[] {
         complexity: 0,
         turbulence: 0,
         selfLoopRate: 0,
+        gini: 0,
+        persistence: 0,
+        transitionDiversity: 0,
+        integrativeComplexity: 0,
+        routine: 0,
       });
       continue;
     }
@@ -69,6 +79,61 @@ export function computeSequenceIndices(data: SequenceData): SequenceIndex[] {
     const turbulence = maxTransitions > 0 ? transitions / maxTransitions : 0;
     const selfLoopRate = maxTransitions > 0 ? selfLoops / maxTransitions : 0;
 
+    // Gini coefficient of state frequency distribution
+    const counts = [...freq.values()].sort((a, b) => a - b);
+    let gini = 0;
+    if (nUnique > 1) {
+      let sumAbsDiff = 0;
+      for (let a = 0; a < counts.length; a++) {
+        for (let b = 0; b < counts.length; b++) {
+          sumAbsDiff += Math.abs(counts[a]! - counts[b]!);
+        }
+      }
+      gini = sumAbsDiff / (2 * nUnique * n);
+    }
+
+    // Persistence: longest consecutive same-state run
+    let persistence = 1;
+    let currentRun = 1;
+    for (let j = 1; j < n; j++) {
+      if (seq[j] === seq[j - 1]) {
+        currentRun++;
+        if (currentRun > persistence) persistence = currentRun;
+      } else {
+        currentRun = 1;
+      }
+    }
+
+    // Transition diversity: unique transitions / max possible unique transitions
+    const uniqueTransitions = new Set<string>();
+    for (let j = 1; j < n; j++) {
+      uniqueTransitions.add(`${seq[j - 1]}\0${seq[j]}`);
+    }
+    const maxPossibleTransitions = nUnique * nUnique; // includes self-loops
+    const transitionDiversity = maxPossibleTransitions > 0 && maxTransitions > 0
+      ? uniqueTransitions.size / maxPossibleTransitions
+      : 0;
+
+    // Integrative complexity: Simpson's diversity of transition pairs (1 - Σp_ij²)
+    let integrativeComplexity = 0;
+    if (maxTransitions > 0) {
+      const transFreq = new Map<string, number>();
+      for (let j = 1; j < n; j++) {
+        const key = `${seq[j - 1]}\0${seq[j]}`;
+        transFreq.set(key, (transFreq.get(key) ?? 0) + 1);
+      }
+      let sumPSq = 0;
+      for (const count of transFreq.values()) {
+        const p = count / maxTransitions;
+        sumPSq += p * p;
+      }
+      integrativeComplexity = 1 - sumPSq;
+    }
+
+    // Routine: proportion of time in the single most frequent state
+    const maxFreq = Math.max(...counts);
+    const routine = n > 0 ? maxFreq / n : 0;
+
     results.push({
       id: i,
       length: n,
@@ -78,6 +143,11 @@ export function computeSequenceIndices(data: SequenceData): SequenceIndex[] {
       complexity: transitions,
       turbulence,
       selfLoopRate,
+      gini,
+      persistence,
+      transitionDiversity,
+      integrativeComplexity,
+      routine,
     });
   }
 
@@ -105,6 +175,11 @@ export function summarizeIndices(indices: SequenceIndex[]): IndicesSummary[] {
     { key: 'complexity', label: 'Transitions (Changes)' },
     { key: 'turbulence', label: 'Turbulence' },
     { key: 'selfLoopRate', label: 'Self-Loop Rate' },
+    { key: 'gini', label: 'Gini Coefficient' },
+    { key: 'persistence', label: 'State Persistence' },
+    { key: 'transitionDiversity', label: 'Transition Diversity' },
+    { key: 'integrativeComplexity', label: 'Integrative Complexity' },
+    { key: 'routine', label: 'Routine Index' },
   ];
 
   return metrics.map(({ key, label }) => {

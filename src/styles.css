@@ -1183,6 +1183,9 @@ body {
 }
 .toggle-btn.active { background: var(--blue); color: #fff; }
 
+/* ─── Chart Utilities ─── */
+.radar-axis-label { font-size: 10px; fill: #555; pointer-events: none; }
+
 /* ─── Secondary Tab Bar ─── */
 .secondary-tab-bar {
   display: flex;

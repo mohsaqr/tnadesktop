@@ -4,44 +4,11 @@
 import * as d3 from 'd3';
 import type { TNA } from 'tnaj';
 import { showTooltip, hideTooltip } from '../main';
+import { gammaP } from '../analysis/stats-utils';
 
 /* ──────────────────────────────────────────────────────────
  * Chi-square test helpers
  * ────────────────────────────────────────────────────────── */
-
-/** Log-gamma via Lanczos approximation. */
-function lgamma(x: number): number {
-  const c = [76.18009172947146, -86.50532032941677, 24.01409824083091,
-    -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5];
-  let y = x;
-  let tmp = x + 5.5;
-  tmp -= (x + 0.5) * Math.log(tmp);
-  let ser = 1.000000000190015;
-  for (let j = 0; j < 6; j++) { y += 1; ser += c[j]! / y; }
-  return -tmp + Math.log(2.5066282746310005 * ser / x);
-}
-
-/** Regularized lower incomplete gamma P(a,x). */
-function gammaP(a: number, x: number): number {
-  if (x <= 0) return 0;
-  if (x < a + 1) {
-    let ap = a, sum = 1 / a, del = 1 / a;
-    for (let n = 0; n < 200; n++) {
-      ap += 1; del *= x / ap; sum += del;
-      if (Math.abs(del) < Math.abs(sum) * 1e-14) break;
-    }
-    return sum * Math.exp(-x + a * Math.log(x) - lgamma(a));
-  }
-  let b = x + 1 - a, c2 = 1e30, d = 1 / b, h = d;
-  for (let i = 1; i <= 200; i++) {
-    const an = -i * (i - a); b += 2;
-    d = an * d + b; if (Math.abs(d) < 1e-30) d = 1e-30;
-    c2 = b + an / c2; if (Math.abs(c2) < 1e-30) c2 = 1e-30;
-    d = 1 / d; const del = d * c2; h *= del;
-    if (Math.abs(del - 1) < 1e-14) break;
-  }
-  return 1 - h * Math.exp(-x + a * Math.log(x) - lgamma(a));
-}
 
 export interface ChiSqResult { chiSq: number; df: number; pValue: number; stdRes: number[][] }
 

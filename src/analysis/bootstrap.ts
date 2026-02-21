@@ -10,6 +10,8 @@ export interface BootstrapEdge {
   from: string;
   to: string;
   weight: number;
+  /** Mean of bootstrap resampled weights. */
+  bootstrapMean: number;
   pValue: number;
   significant: boolean;
   crLower: number;
@@ -182,6 +184,7 @@ export function bootstrapTna(
         from: labels[i]!,
         to: labels[j]!,
         weight: w,
+        bootstrapMean: weightsMean[idx]!,
         pValue: pValues[idx]!,
         significant: pValues[idx]! < level,
         crLower: w * consistencyRange[0],

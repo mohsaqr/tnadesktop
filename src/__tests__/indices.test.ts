@@ -19,6 +19,12 @@ describe('computeSequenceIndices', () => {
     expect(idx!.turbulence).toBe(0);
     expect(idx!.selfLoopRate).toBe(1);
     expect(idx!.nUniqueStates).toBe(1);
+    // New metrics
+    expect(idx!.gini).toBe(0); // single state → no inequality
+    expect(idx!.persistence).toBe(5); // whole sequence is one run
+    expect(idx!.transitionDiversity).toBe(1); // 1 unique type (A→A) / 1 possible = 1
+    expect(idx!.integrativeComplexity).toBe(0); // only one transition type → 1 - 1² = 0
+    expect(idx!.routine).toBe(1); // 100% in most frequent state
   });
 
   it('alternating A,B,A,B has turbulence=1, selfLoopRate=0', () => {
@@ -37,6 +43,11 @@ describe('computeSequenceIndices', () => {
     expect(idx!.entropy).toBe(0);
     expect(idx!.turbulence).toBe(0);
     expect(idx!.selfLoopRate).toBe(0);
+    expect(idx!.gini).toBe(0);
+    expect(idx!.persistence).toBe(0);
+    expect(idx!.transitionDiversity).toBe(0);
+    expect(idx!.integrativeComplexity).toBe(0);
+    expect(idx!.routine).toBe(0);
   });
 
   it('mixed with nulls filters nulls before computing', () => {
@@ -134,7 +145,7 @@ describe('summarizeIndices', () => {
     expect(lengthSummary.median).toBe(3);
   });
 
-  it('returns all expected metrics', () => {
+  it('returns all expected metrics including new ones', () => {
     const data: SequenceData = [['A', 'B', 'C']];
     const indices = computeSequenceIndices(data);
     const summary = summarizeIndices(indices);
@@ -146,5 +157,78 @@ describe('summarizeIndices', () => {
     expect(metricNames).toContain('Transitions (Changes)');
     expect(metricNames).toContain('Turbulence');
     expect(metricNames).toContain('Self-Loop Rate');
+    expect(metricNames).toContain('Gini Coefficient');
+    expect(metricNames).toContain('State Persistence');
+    expect(metricNames).toContain('Transition Diversity');
+    expect(metricNames).toContain('Integrative Complexity');
+    expect(metricNames).toContain('Routine Index');
+  });
+});
+
+describe('new sequence indices', () => {
+  it('gini: uniform distribution → 0, skewed → positive', () => {
+    // Uniform: A,B,C,D each once → gini = 0
+    const uniform: SequenceData = [['A', 'B', 'C', 'D']];
+    const [u] = computeSequenceIndices(uniform);
+    expect(u!.gini).toBe(0);
+
+    // Skewed: A appears 4 times, B once → positive gini
+    const skewed: SequenceData = [['A', 'A', 'A', 'A', 'B']];
+    const [s] = computeSequenceIndices(skewed);
+    expect(s!.gini).toBeGreaterThan(0);
+    // Gini = (|4-1| + |1-4|) * 2 / (2 * 2 * 5) = 12/20 = 0.6... let me compute:
+    // counts = [1, 4], n=5, nUnique=2
+    // sumAbsDiff = |1-1| + |1-4| + |4-1| + |4-4| = 0 + 3 + 3 + 0 = 6
+    // gini = 6 / (2 * 2 * 5) = 6/20 = 0.3
+    expect(s!.gini).toBeCloseTo(0.3, 10);
+  });
+
+  it('persistence: longest run length', () => {
+    // A,A,B,B,B → longest run is 3 (B,B,B)
+    const data: SequenceData = [['A', 'A', 'B', 'B', 'B']];
+    const [idx] = computeSequenceIndices(data);
+    expect(idx!.persistence).toBe(3);
+
+    // All different → persistence = 1
+    const allDiff: SequenceData = [['A', 'B', 'C', 'D']];
+    const [idx2] = computeSequenceIndices(allDiff);
+    expect(idx2!.persistence).toBe(1);
+  });
+
+  it('transitionDiversity: all unique transitions → high, few → low', () => {
+    // A,B,C: transitions A→B, B→C → 2 unique out of 3*3=9 possible
+    const data: SequenceData = [['A', 'B', 'C']];
+    const [idx] = computeSequenceIndices(data);
+    expect(idx!.transitionDiversity).toBeCloseTo(2 / 9, 10);
+
+    // A,B,A,B: transitions A→B, B→A → 2 unique out of 2*2=4 possible
+    const alt: SequenceData = [['A', 'B', 'A', 'B']];
+    const [idx2] = computeSequenceIndices(alt);
+    expect(idx2!.transitionDiversity).toBeCloseTo(2 / 4, 10);
+  });
+
+  it('integrativeComplexity: single transition type → 0, diverse → high', () => {
+    // A,A,A: only A→A transitions → 1 - 1² = 0
+    const data: SequenceData = [['A', 'A', 'A']];
+    const [idx] = computeSequenceIndices(data);
+    expect(idx!.integrativeComplexity).toBe(0);
+
+    // A,B,C,D: transitions A→B, B→C, C→D → 3 types, each p=1/3
+    // 1 - 3*(1/3)² = 1 - 1/3 = 2/3
+    const diverse: SequenceData = [['A', 'B', 'C', 'D']];
+    const [idx2] = computeSequenceIndices(diverse);
+    expect(idx2!.integrativeComplexity).toBeCloseTo(2 / 3, 10);
+  });
+
+  it('routine: proportion of most frequent state', () => {
+    // A,A,A,B → routine = 3/4 = 0.75
+    const data: SequenceData = [['A', 'A', 'A', 'B']];
+    const [idx] = computeSequenceIndices(data);
+    expect(idx!.routine).toBeCloseTo(0.75, 10);
+
+    // Uniform A,B,C,D → routine = 1/4 = 0.25
+    const uniform: SequenceData = [['A', 'B', 'C', 'D']];
+    const [idx2] = computeSequenceIndices(uniform);
+    expect(idx2!.routine).toBeCloseTo(0.25, 10);
   });
 });

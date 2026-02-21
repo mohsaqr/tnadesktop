@@ -1,33 +1,40 @@
-# Session Handoff — 2026-02-20
+# Session Handoff — 2026-02-21 (session 4, updated)
 
 ## Completed
-- Renamed app from "TNA Desktop" to "Dynalytics Desktop" with tagline "Analytics of Dynamics"
-- Updated 14 files across package config, UI branding, export filenames, storage keys, and docs
-- Committed as `92142dc` on `main` (not pushed)
+- **Density plots**: Added `renderDensityPlot()` to chart-utils.ts with Gaussian KDE
+- **Indices Distributions tab**: Density/Box Plot toggle, 2-column grid of KDE plots
+- **Combined summary tables**: Figure/Table toggle with Group column
+- **Comparison CSV export**: "Download All (CSV)" button
+- **Word export**: "Current/Full Analysis (Word)" in export dialog
+- **Bootstrap immediate modal**: Modal opens automatically when Bootstrap tab is selected
+- **Bootstrap significance fix**: Non-significant edges now show dashed CI lines + hollow dots even when custom color is set
+- **Bootstrap original weight**: Red diamond marker shows original observed edge weight; blue circle shows bootstrap mean
+- **Bootstrap `bootstrapMean`**: Added to `BootstrapEdge` interface, used as forest plot estimate
+- **Forest Plot Card/Combined/Grouped**: 3 sub-views in multi-group forest plot tab
+  - Card: per-group forest plots with all edges
+  - Combined: one plot, all groups color-coded, group-prefixed labels
+  - Grouped: same edge label once, groups' CI lines side-by-side within row band
+- **`renderGroupedForestPlot`**: New function in chart-utils.ts for parallel per-group CIs
+- **Tab rename**: 'Histograms' → 'Distributions'
 
 ## Current State
-- Build passes (`npm run build` — TypeScript + Vite, zero errors)
-- All 183 tests pass (`npm test`)
-- Commit is local only — not pushed to origin
-- Pre-existing uncommitted changes remain in: `src/styles.css`, `src/views/clustering.ts`, `src/views/sequences.ts`, `src/analysis/simulate.ts` (untracked)
+- Build passes, 215 tests pass
+- All changes in working tree (not committed)
+- Preview server running on port 4173
 
 ## Key Decisions
-- **Fresh storage keys**: no migration from old `tna-desktop-*` localStorage keys — users get a clean slate
-- **Deploy path**: `/dynalytics/` (was `/tnadesktop/`). CNAME file unchanged (`saqr.me`), but DNS/server routing may need updating for the new path
-- **Library names preserved**: all `tnaj` imports, `TNA`/`GroupTNA` types, model type values (`'tna'`, `'ftna'`, etc.) left as-is — they refer to the analysis method, not the app
+- `bootstrapMean` added to BootstrapEdge so forest plot shows bootstrap mean (circle) vs original weight (diamond)
+- Non-significant + custom color: dashed line + hollow dot (not solid)
+- Grouped forest plot: `renderGroupedForestPlot` uses row band subdivision, spacing = bw / (nGroups + 1)
+- Original weight diamond: red (#e15759) for single/card view, group-colored with dark stroke for grouped view
 
 ## Open Issues
-- `src-tauri/target/` build cache still references old `tna-desktop` crate name — will refresh on next `cargo clean` or Tauri build
-- GitHub Pages deploy will serve at `/dynalytics/` after push — verify DNS/routing works
-- Pre-existing uncommitted changes in styles.css, clustering.ts, sequences.ts, simulate.ts need separate review/commit
+- None known
 
 ## Next Steps
-1. Push commit to origin when ready
-2. Verify GitHub Pages deploys correctly at new `/dynalytics/` path
-3. Review and commit the pre-existing uncommitted changes (styles, clustering, sequences, simulate)
+- Manual testing of all three forest sub-views
+- Consider applying same pattern to permutation tab
 
 ## Context
-- Primary repo: `/Users/mohammedsaqr/Documents/Git/tna-desktop`
-- Build: `npm run build` (tsc + vite)
-- Tests: `npm test` (vitest, 183 tests)
-- Sibling repos: tnapy, tna-js (NOT renamed)
+- tna-desktop at `/Users/mohammedsaqr/Documents/Git/tna-desktop`
+- Build: `npm run build`, Test: `npm test`
