@@ -1,5 +1,25 @@
 # Dynalytics Desktop Learnings
 
+## 2026-02-21 (session 6)
+
+### Reliability Analysis: R Equivalence — Critical Differences Found
+Running `R tna:::compare_` on synthetic data revealed 7 bugs in the initial TS implementation.
+Always run the R reference before declaring a port complete.
+
+Key differences between naive implementation and actual R:
+1. **All metrics use full n×n matrix** (including diagonal), flattened column-major via `as.vector()`. Initial implementation used off-diagonal only. Pearson, Kendall, Euclidean, etc. all differ.
+2. **Kendall tau-b not tau-a**: R uses `cor(..., method='kendall')` = tau-b. Formula: `(C-D)/sqrt((n0-Tx)*(n0-Ty))`. Tau-a uses `(C-D)/n0` — different when ties present. With many zeros, tau-a ≈ 0.47 but tau-b = 0.53.
+3. **CV Ratio** = `sd(x)*mean(y) / (mean(x)*sd(y))` (a ratio, not absolute difference).
+4. **Rel. MAD** = `mean(|x-y|) / mean(|y|)` (relative to mean of |y|, not |x|).
+5. **Frobenius** = `sqrt(sum(diff²)) / sqrt(n/2)` — normalised by `sqrt(n/2)` where n = n_states.
+6. **RV coefficient** uses column-centred `tcrossprod` formula, NOT cosine similarity. They only coincide if matrices are already mean-centred.
+7. **Rank Agreement** = `mean(sign(rowDiff(A)) == sign(rowDiff(B)))` (matrix row differences, like R's `diff(matrix)`), NOT `(kendall+1)/2`.
+8. **Distance Correlation**: R returns `v_xy/sqrt(v_x*v_y)` directly (can be negative), not `sqrt(max(0,...))`.
+
+Always pass `a.weights` and `b.weights` (Matrix) to matrix-level helpers, not the TNA object itself.
+- Distance correlation is O(m²) where m = flat vector length = n²; for 10-state TNA m=100, O(10000) ops per iter — fast.
+- SeededRNG.choiceWithoutReplacement for split-half: consistent with stability.ts pattern.
+
 ## 2026-02-21 (session 5)
 
 ### Edge Label Positioning Rules

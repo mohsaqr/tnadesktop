@@ -808,3 +808,248 @@ export function renderGroupedForestPlot(
       .text(opts.xLabel);
   }
 }
+
+// ─── Mean ± SD Bar Chart ───
+
+export interface MeanSDDatum {
+  label: string;
+  mean: number;
+  sd: number;
+  color: string;
+}
+
+export interface MeanSDOpts {
+  width?: number;
+  height?: number;
+  xLabel?: string;
+}
+
+/**
+ * Horizontal bar chart: each datum gets a bar from 0 → mean, with
+ * ±1 SD error bars and a dot at the mean.
+ */
+export function renderMeanSDBar(
+  container: HTMLElement,
+  data: MeanSDDatum[],
+  opts: MeanSDOpts = {},
+): void {
+  const valid = data.filter(d => isFinite(d.mean));
+  if (valid.length === 0) {
+    container.innerHTML = '<div style="text-align:center;color:#888;padding:20px;font-size:12px">No data</div>';
+    return;
+  }
+
+  const rowH = 26;
+  const margin = { top: 8, right: 24, bottom: 30, left: 120 };
+  const height = opts.height ?? (valid.length * rowH + margin.top + margin.bottom);
+  const width  = opts.width  ?? (container.getBoundingClientRect().width || 400);
+  const innerW = width  - margin.left - margin.right;
+  const innerH = height - margin.top  - margin.bottom;
+
+  d3.select(container).selectAll('*').remove();
+
+  const xRaw = valid.flatMap(d => [
+    d.mean - (isFinite(d.sd) ? d.sd : 0),
+    d.mean + (isFinite(d.sd) ? d.sd : 0),
+  ]);
+  const xMin = Math.min(0, d3.min(xRaw) ?? 0);
+  const xMax = d3.max(xRaw) ?? 1;
+  const x = d3.scaleLinear().domain([xMin, xMax * 1.05]).range([0, innerW]).nice();
+
+  const y = d3.scaleBand()
+    .domain(valid.map(d => d.label))
+    .range([0, innerH])
+    .padding(0.4);
+
+  const svg = d3.select(container).append('svg')
+    .attr('width', width).attr('height', height);
+  const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+
+  // Light gridlines
+  g.append('g')
+    .call(d3.axisBottom(x).ticks(5).tickSize(innerH).tickFormat(() => ''))
+    .call(gg => gg.select('.domain').remove())
+    .call(gg => gg.selectAll('line').attr('stroke', '#eee').attr('stroke-width', 1));
+
+  // Bars (0 → mean)
+  g.selectAll('.bar')
+    .data(valid)
+    .join('rect')
+    .attr('class', 'bar')
+    .attr('x', x(Math.min(0, xMin)))
+    .attr('y', d => y(d.label)!)
+    .attr('width', d => Math.abs(x(d.mean) - x(0)))
+    .attr('height', y.bandwidth())
+    .attr('fill', d => d.color)
+    .attr('fill-opacity', 0.65)
+    .attr('rx', 2);
+
+  // Error bars (mean − sd → mean + sd)
+  const errData = valid.filter(d => isFinite(d.sd) && d.sd > 0);
+  const cy = (d: MeanSDDatum) => y(d.label)! + y.bandwidth() / 2;
+  const capH = 6;
+
+  g.selectAll('.err-line')
+    .data(errData)
+    .join('line')
+    .attr('class', 'err-line')
+    .attr('x1', d => x(d.mean - d.sd))
+    .attr('x2', d => x(d.mean + d.sd))
+    .attr('y1', d => cy(d))
+    .attr('y2', d => cy(d))
+    .attr('stroke', d => d.color)
+    .attr('stroke-width', 1.5);
+
+  for (const [suffix, side] of [['lo', -1], ['hi', 1]] as const) {
+    g.selectAll(`.cap-${suffix}`)
+      .data(errData)
+      .join('line')
+      .attr('class', `cap-${suffix}`)
+      .attr('x1', d => x(d.mean + side * d.sd))
+      .attr('x2', d => x(d.mean + side * d.sd))
+      .attr('y1', d => cy(d) - capH / 2)
+      .attr('y2', d => cy(d) + capH / 2)
+      .attr('stroke', d => d.color)
+      .attr('stroke-width', 1.5);
+  }
+
+  // Mean dot
+  g.selectAll('.dot')
+    .data(valid)
+    .join('circle')
+    .attr('class', 'dot')
+    .attr('cx', d => x(d.mean))
+    .attr('cy', d => cy(d))
+    .attr('r', 4)
+    .attr('fill', d => d.color)
+    .attr('stroke', '#fff')
+    .attr('stroke-width', 1.5);
+
+  // Y axis (metric labels)
+  g.append('g')
+    .call(d3.axisLeft(y).tickSize(0).tickPadding(6))
+    .call(gg => gg.select('.domain').remove())
+    .selectAll('text')
+    .attr('font-size', '10px')
+    .attr('fill', '#444');
+
+  // X axis
+  g.append('g')
+    .attr('transform', `translate(0,${innerH})`)
+    .call(d3.axisBottom(x).ticks(5))
+    .selectAll('text')
+    .attr('font-size', '9px');
+
+  if (opts.xLabel) {
+    g.append('text')
+      .attr('x', innerW / 2)
+      .attr('y', innerH + 26)
+      .attr('text-anchor', 'middle')
+      .attr('font-size', '9px')
+      .attr('fill', '#888')
+      .text(opts.xLabel);
+  }
+}
+
+// ─── Density with Mean Line ───
+
+export interface DensityMeanOpts {
+  width?: number;
+  height?: number;
+  nPoints?: number;
+}
+
+/**
+ * Single-metric density panel: KDE fill + stroke, a vertical dashed line at
+ * the mean (with value label), and lighter dashed lines at mean ± SD.
+ */
+export function renderDensityWithMeanLine(
+  container: HTMLElement,
+  values: number[],
+  color: string,
+  mean: number,
+  sd: number,
+  opts: DensityMeanOpts = {},
+): void {
+  const width   = opts.width   ?? (container.getBoundingClientRect().width || 200);
+  const height  = opts.height  ?? 120;
+  const nPoints = opts.nPoints ?? 150;
+  const margin  = { top: 18, right: 10, bottom: 22, left: 10 };
+  const innerW  = width  - margin.left - margin.right;
+  const innerH  = height - margin.top  - margin.bottom;
+
+  d3.select(container).selectAll('*').remove();
+
+  const finite = values.filter(isFinite);
+  if (finite.length < 2) {
+    container.innerHTML = '<div style="text-align:center;color:#888;font-size:10px;padding:8px">No data</div>';
+    return;
+  }
+
+  const xExt = d3.extent(finite) as [number, number];
+  const pad  = (xExt[1] - xExt[0]) * 0.12 || 0.05;
+  const xMin = xExt[0] - pad;
+  const xMax = xExt[1] + pad;
+
+  const kde  = gaussianKDE(finite, nPoints, xMin, xMax);
+  const yMax = d3.max(kde, p => p.y) ?? 1;
+
+  const x = d3.scaleLinear().domain([xMin, xMax]).range([0, innerW]);
+  const y = d3.scaleLinear().domain([0, yMax * 1.1]).range([innerH, 0]);
+
+  const svg = d3.select(container).append('svg')
+    .attr('width', width).attr('height', height);
+  const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+
+  const areaFn = d3.area<{ x: number; y: number }>()
+    .x(d => x(d.x)).y0(innerH).y1(d => y(d.y)).curve(d3.curveBasis);
+  const lineFn = d3.line<{ x: number; y: number }>()
+    .x(d => x(d.x)).y(d => y(d.y)).curve(d3.curveBasis);
+
+  // Density fill + stroke
+  g.append('path').datum(kde).attr('d', areaFn as any)
+    .attr('fill', color).attr('fill-opacity', 0.25);
+  g.append('path').datum(kde).attr('d', lineFn as any)
+    .attr('fill', 'none').attr('stroke', color).attr('stroke-width', 1.5);
+
+  // ± SD lines (lighter)
+  if (isFinite(sd) && sd > 0) {
+    for (const val of [mean - sd, mean + sd]) {
+      if (val >= xMin && val <= xMax) {
+        g.append('line')
+          .attr('x1', x(val)).attr('x2', x(val))
+          .attr('y1', 0).attr('y2', innerH)
+          .attr('stroke', color).attr('stroke-opacity', 0.35)
+          .attr('stroke-width', 1).attr('stroke-dasharray', '3,3');
+      }
+    }
+  }
+
+  // Mean vertical dashed line
+  if (isFinite(mean)) {
+    const mx = Math.max(0, Math.min(innerW, x(mean)));
+    g.append('line')
+      .attr('x1', mx).attr('x2', mx)
+      .attr('y1', 0).attr('y2', innerH)
+      .attr('stroke', color).attr('stroke-width', 1.5)
+      .attr('stroke-dasharray', '4,3');
+
+    // Value label above the line
+    g.append('rect')
+      .attr('x', mx - 16).attr('y', -17)
+      .attr('width', 32).attr('height', 13)
+      .attr('fill', 'white').attr('opacity', 0.8).attr('rx', 2);
+    g.append('text')
+      .attr('x', mx).attr('y', -6)
+      .attr('text-anchor', 'middle')
+      .attr('font-size', '9px').attr('font-weight', '600')
+      .attr('fill', color)
+      .text(mean.toFixed(3));
+  }
+
+  // X axis (minimal)
+  g.append('g')
+    .attr('transform', `translate(0,${innerH})`)
+    .call(d3.axisBottom(x).ticks(4))
+    .selectAll('text').attr('font-size', '8px');
+}

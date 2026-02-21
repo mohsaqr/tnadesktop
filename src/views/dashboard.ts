@@ -28,10 +28,12 @@ import { showClusteringModal, renderGroupSetup, renderGroupGrid, renderCombinedC
 import { renderMosaic, renderClusterMosaic, chiSquareTest } from './mosaic';
 import { renderCompareNetworksTab } from './compare-networks';
 import { estimateCS } from '../analysis/stability';
+import { reliabilityAnalysis, RELIABILITY_METRICS } from '../analysis/reliability';
+import type { ReliabilityResult } from '../analysis/reliability';
 import { computeGraphMetrics } from '../analysis/graph-metrics';
 import type { StabilityResult } from '../analysis/stability';
 import { NODE_COLORS } from './colors';
-import { renderDonut, renderRadar, renderBoxPlots, renderForestPlot, renderGroupedForestPlot, renderDensityPlot } from './chart-utils';
+import { renderDonut, renderRadar, renderBoxPlots, renderForestPlot, renderGroupedForestPlot, renderDensityPlot, renderDensityWithMeanLine } from './chart-utils';
 
 const ALL_MEASURES: string[] = [...AVAILABLE_MEASURES, 'PageRank'];
 import { showDataWizard, closeDataWizard } from './load-data';
@@ -51,6 +53,7 @@ const SINGLE_TABS: SubTabDef[] = [
   { id: 'sequences', label: 'Sequence Visualization' },
   { id: 'patterns', label: 'Transition Patterns' },
   { id: 'indices', label: 'Sequence Indices' },
+  { id: 'reliability', label: 'Reliability' },
 ];
 
 const GROUP_TABS: SubTabDef[] = [
@@ -1709,6 +1712,9 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
         break;
       case 'patterns':
         renderPatternsTab(tabWrapper, model);
+        break;
+      case 'reliability':
+        renderReliabilityTab(tabWrapper, model);
         break;
     }
   } else {
@@ -5840,4 +5846,295 @@ function renderCSChart(container: HTMLElement, result: StabilityResult) {
       .attr('fill', '#555')
       .text(measure);
   });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Reliability tab (single-group)
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Category colours for box-plot panels.
+ * Correlations → blue family, Deviations → orange family, Similarities → green family.
+ */
+const RELIABILITY_COLORS: Record<string, string[]> = {
+  Correlations:    ['#4e79a7', '#76b7b2', '#9ecae1', '#c6dbef'],
+  Deviations:      ['#f28e2b', '#e15759', '#fdae61', '#d62728', '#ff9da7', '#fdd0a2'],
+  Dissimilarities: ['#9467bd', '#c5b0d5', '#8c6d31', '#bd9e39', '#e7ba52'],
+  Similarities:    ['#59a14f', '#8ca252', '#b5cf6b', '#cedb9c', '#637939'],
+  Pattern:         ['#17becf', '#9edae5'],
+};
+
+function renderReliabilityTab(content: HTMLElement, model: TNA): void {
+  if (!state.sequenceData || state.sequenceData.length < 4) {
+    content.innerHTML = '<div class="panel" style="text-align:center;color:#888;padding:40px">Need at least 4 sequences for reliability analysis.</div>';
+    return;
+  }
+
+  // ── Controls panel ──────────────────────────────────────────
+  const controls = document.createElement('div');
+  controls.className = 'panel';
+  controls.style.padding = '14px 16px';
+  controls.innerHTML = `
+    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:8px">
+        <label style="font-size:12px;color:#777;white-space:nowrap">Iterations:</label>
+        <input type="range" id="rel-iter-slider" min="100" max="1000" step="50" value="100"
+          style="width:120px;vertical-align:middle">
+        <span id="rel-iter-val" style="font-size:12px;font-weight:600;min-width:36px">100</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <label style="font-size:12px;color:#777;white-space:nowrap">Split ratio:</label>
+        <input type="range" id="rel-split-slider" min="0.3" max="0.9" step="0.05" value="0.50"
+          style="width:120px;vertical-align:middle">
+        <span id="rel-split-val" style="font-size:12px;font-weight:600;min-width:36px">0.50</span>
+      </div>
+      <button id="run-reliability" class="btn-primary" style="font-size:12px;padding:6px 16px">
+        Run Reliability Analysis
+      </button>
+    </div>
+  `;
+  content.appendChild(controls);
+
+  // ── Results area ────────────────────────────────────────────
+  const resultsArea = document.createElement('div');
+  resultsArea.id = 'reliability-results';
+  resultsArea.style.marginTop = '8px';
+  resultsArea.innerHTML = '<div style="color:#888;font-size:12px;padding:8px 0">Click "Run Reliability Analysis" to begin.</div>';
+  content.appendChild(resultsArea);
+
+  // ── Wire events ─────────────────────────────────────────────
+  setTimeout(() => {
+    const iterSlider = document.getElementById('rel-iter-slider') as HTMLInputElement | null;
+    const iterVal    = document.getElementById('rel-iter-val');
+    const splitSlider = document.getElementById('rel-split-slider') as HTMLInputElement | null;
+    const splitVal   = document.getElementById('rel-split-val');
+
+    iterSlider?.addEventListener('input', () => {
+      if (iterVal) iterVal.textContent = iterSlider.value;
+    });
+    splitSlider?.addEventListener('input', () => {
+      if (splitVal) splitVal.textContent = Number(splitSlider.value).toFixed(2);
+    });
+
+    document.getElementById('run-reliability')?.addEventListener('click', () => {
+      const iter  = parseInt(iterSlider?.value ?? '100', 10);
+      const split = parseFloat(splitSlider?.value ?? '0.5');
+      const area  = document.getElementById('reliability-results');
+      if (!area) return;
+
+      area.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;padding:16px 0">
+          <div class="spinner" style="width:18px;height:18px;border-width:2px"></div>
+          <span style="color:#555;font-size:13px">Running ${iter} split-half iterations…</span>
+        </div>
+      `;
+
+      setTimeout(() => {
+        let result: ReliabilityResult;
+        try {
+          result = reliabilityAnalysis(
+            state.sequenceData!,
+            state.modelType as 'tna' | 'ftna' | 'ctna' | 'atna',
+            { iter, split, atnaBeta: state.atnaBeta, seed: 42 },
+          );
+        } catch (err) {
+          area.innerHTML = `<div class="panel" style="color:#c0392b;padding:16px">Error: ${err instanceof Error ? err.message : String(err)}</div>`;
+          return;
+        }
+
+        area.innerHTML = '';
+        renderReliabilityResults(area, result);
+      }, 50);
+    });
+  }, 0);
+}
+
+/** Render box-plot panels + summary table inside the results area. */
+function renderReliabilityResults(area: HTMLElement, result: ReliabilityResult): void {
+  createViewToggle(
+    area,
+    (fig) => renderReliabilityFigure(fig, result),
+    (tbl) => renderReliabilityTable(tbl, result),
+    'reliability-view',
+  );
+}
+
+/** Three-tab figure view: Box Plots | Density | Mean ± SD — all 5 metric categories. */
+function renderReliabilityFigure(fig: HTMLElement, result: ReliabilityResult): void {
+  type TabId = 'boxplot' | 'density' | 'meansd';
+  const TAB_IDS: TabId[] = ['boxplot', 'density', 'meansd'];
+  const TAB_LABELS: Record<TabId, string> = {
+    boxplot: 'Box Plots',
+    density: 'Density',
+    meansd:  'Mean \u00b1 SD',
+  };
+
+  const ALL_PANELS: Array<{ category: string; title: string; note?: string }> = [
+    { category: 'Deviations',      title: 'Deviations',    note: 'lower = better' },
+    { category: 'Correlations',    title: 'Correlations'                           },
+    { category: 'Dissimilarities', title: 'Dissimilarities', note: 'lower = better' },
+    { category: 'Similarities',    title: 'Similarities'                           },
+    { category: 'Pattern',         title: 'Pattern'                                },
+  ];
+
+  const makeGroups = (category: string) => {
+    const metrics = RELIABILITY_METRICS.filter(m => m.category === category);
+    const colors  = RELIABILITY_COLORS[category] ?? [];
+    return metrics.map((m, idx) => {
+      const vals = (result.iterations[m.key] ?? []).filter(v => isFinite(v));
+      return { label: m.label, values: vals, color: colors[idx % colors.length] ?? '#4e79a7' };
+    });
+  };
+
+  // ── Tab bar ──────────────────────────────────────────────────────────────
+  const bar = document.createElement('div');
+  bar.className = 'panel';
+  bar.style.padding = '8px 16px';
+  bar.innerHTML = `<div class="view-toggle">${
+    TAB_IDS.map((id, i) =>
+      `<button class="toggle-btn ${i === 0 ? 'active' : ''}" data-relfig="${id}">${TAB_LABELS[id]}</button>`
+    ).join('')
+  }</div>`;
+  fig.appendChild(bar);
+
+  // ── Content panes (one per tab) ──────────────────────────────────────────
+  const panes: Record<TabId, HTMLElement> = {} as Record<TabId, HTMLElement>;
+  for (const id of TAB_IDS) {
+    const div = document.createElement('div');
+    div.style.display = id === 'boxplot' ? '' : 'none';
+    fig.appendChild(div);
+    panes[id] = div;
+  }
+
+  // ── Box Plots tab ────────────────────────────────────────────────────────
+  const renderBoxTab = (pane: HTMLElement) => {
+    for (const { category, title, note } of ALL_PANELS) {
+      const groups = makeGroups(category);
+      const panel  = document.createElement('div');
+      panel.className = 'panel';
+      panel.style.marginTop = '8px';
+      const noteHtml = note ? ` <span style="font-size:10px;color:#888;font-weight:400">(${note})</span>` : '';
+      panel.innerHTML = `<div class="panel-title">${title}${noteHtml}</div><div id="rel-bp-${category}" style="width:100%"></div>`;
+      addPanelDownloadButtons(panel, { image: true, filename: `reliability-bp-${category.toLowerCase()}` });
+      pane.appendChild(panel);
+      requestAnimationFrame(() => {
+        const el = document.getElementById(`rel-bp-${category}`);
+        if (el) renderBoxPlots(el, groups, { metricLabel: category });
+      });
+    }
+  };
+
+  // ── Density tab ──────────────────────────────────────────────────────────
+  const renderDensityTab = (pane: HTMLElement) => {
+    for (const { category, title, note } of ALL_PANELS) {
+      const groups = makeGroups(category);
+      const panel  = document.createElement('div');
+      panel.className = 'panel';
+      panel.style.marginTop = '8px';
+      const noteHtml = note ? ` <span style="font-size:10px;color:#888;font-weight:400">(${note})</span>` : '';
+      panel.innerHTML = `<div class="panel-title">${title}${noteHtml}</div><div id="rel-dp-${category}" style="width:100%"></div>`;
+      addPanelDownloadButtons(panel, { image: true, filename: `reliability-density-${category.toLowerCase()}` });
+      pane.appendChild(panel);
+      requestAnimationFrame(() => {
+        const el = document.getElementById(`rel-dp-${category}`);
+        if (el) renderDensityPlot(el, groups);
+      });
+    }
+  };
+
+  // ── Mean ± SD tab: per-metric grid of density+mean-line panels ───────────
+  const renderMeanSDTab = (pane: HTMLElement) => {
+    for (const { category, title } of ALL_PANELS) {
+      const metrics = RELIABILITY_METRICS.filter(m => m.category === category);
+      const colors  = RELIABILITY_COLORS[category] ?? [];
+
+      const catHdr = document.createElement('div');
+      catHdr.style.cssText = 'font-size:11px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.05em;margin:12px 0 4px 2px';
+      catHdr.textContent = title;
+      pane.appendChild(catHdr);
+
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-bottom:4px';
+      pane.appendChild(grid);
+
+      metrics.forEach((m, idx) => {
+        const vals  = (result.iterations[m.key] ?? []).filter(v => isFinite(v));
+        const row   = result.summary.find(r => r.metric === m.label);
+        const color = colors[idx % colors.length] ?? '#4e79a7';
+
+        const card = document.createElement('div');
+        card.className = 'panel';
+        card.style.padding = '8px';
+        card.innerHTML = `<div style="font-size:11px;font-weight:600;color:#444;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${m.label}</div><div id="rel-ms-${m.key}" style="width:100%"></div>`;
+        addPanelDownloadButtons(card, { image: true, filename: `reliability-meansd-${m.key}` });
+        grid.appendChild(card);
+
+        requestAnimationFrame(() => {
+          const el = document.getElementById(`rel-ms-${m.key}`);
+          if (el) renderDensityWithMeanLine(el, vals, color, row?.mean ?? NaN, row?.sd ?? NaN);
+        });
+      });
+    }
+  };
+
+  // ── Render default tab ───────────────────────────────────────────────────
+  renderBoxTab(panes.boxplot);
+  panes.boxplot.dataset.rendered = '1';
+
+  // ── Wire tab-click events ────────────────────────────────────────────────
+  setTimeout(() => {
+    bar.querySelectorAll<HTMLElement>('[data-relfig]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tabId = btn.dataset.relfig as TabId;
+        bar.querySelectorAll('[data-relfig]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        for (const id of TAB_IDS) panes[id].style.display = id === tabId ? '' : 'none';
+        if (!panes[tabId].dataset.rendered) {
+          panes[tabId].dataset.rendered = '1';
+          if (tabId === 'boxplot') renderBoxTab(panes[tabId]);
+          if (tabId === 'density') renderDensityTab(panes[tabId]);
+          if (tabId === 'meansd')  renderMeanSDTab(panes[tabId]);
+        }
+      });
+    });
+  }, 0);
+}
+
+/** 22-row summary table with mean ± SD, median, min, max. */
+function renderReliabilityTable(tbl: HTMLElement, result: ReliabilityResult): void {
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.style.marginTop = '8px';
+  panel.innerHTML = `<div class="panel-title">Reliability Summary (${result.iter} iterations, split = ${result.split.toFixed(2)})</div>`;
+
+  const fmt = (v: number) => isFinite(v) ? v.toFixed(4) : '—';
+
+  let html = `
+    <table class="preview-table" style="font-size:12px">
+      <thead>
+        <tr>
+          <th>Metric</th><th>Category</th>
+          <th>Mean</th><th>SD</th><th>Median</th>
+          <th>Min</th><th>Max</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+  for (const row of result.summary) {
+    html += `
+      <tr>
+        <td>${row.metric}</td>
+        <td style="color:#777">${row.category}</td>
+        <td>${fmt(row.mean)}</td>
+        <td>${fmt(row.sd)}</td>
+        <td>${fmt(row.median)}</td>
+        <td>${fmt(row.min)}</td>
+        <td>${fmt(row.max)}</td>
+      </tr>
+    `;
+  }
+  html += '</tbody></table>';
+  panel.innerHTML += html;
+  addPanelDownloadButtons(panel, { csv: true, filename: 'reliability-summary' });
+  tbl.appendChild(panel);
 }

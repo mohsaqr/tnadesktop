@@ -1,5 +1,15 @@
 # Dynalytics Desktop — Change Log
 
+### 2026-02-21 — Reliability Figure: Density Plots + Mean±SD Bar Charts + Wider Iteration Range
+- src/views/chart-utils.ts: Added `renderMeanSDBar()` — horizontal bar chart with bars from 0→mean, ±1 SD error bars with caps, and a dot at the mean; exports `MeanSDDatum`, `MeanSDOpts`
+- src/views/dashboard.ts: `renderReliabilityFigure` expanded from 3 box-plot panels to 9 panels in 3 labelled sections: Box Plots / Density Distributions / Mean ± SD; imports `renderMeanSDBar`; iteration slider range changed from 10–500 to 100–1000 (step 50)
+- Tests: 239 passed, 0 failed; `npx tsc --noEmit` zero errors
+
+### 2026-02-21 — Reliability Analysis Tab (Single Network) + R Equivalence Verified
+- src/analysis/reliability.ts: New module — `reliabilityAnalysis()` splits sequence data into two halves, builds models on each, and compares weight matrices using all 22 metrics (deviations, correlations, dissimilarities, similarities, pattern); exports `RELIABILITY_METRICS`, `compareWeightMatrices`, and result types. Formulas verified numerically against `R tna:::compare_` (all 22 metrics match to tol 1e-6). Key corrections after R check: Kendall tau-b, CV Ratio = sd(x)*mean(y)/(mean(x)*sd(y)), Rel.MAD = mad/mean(|y|), Frobenius normalised by sqrt(n/2), RV uses column-centred tcrossprod, Rank Agreement uses matrix row-diffs, all metrics use full n×n matrix.
+- src/views/dashboard.ts: Added `{ id: 'reliability', label: 'Reliability' }` to `SINGLE_TABS`; dispatch `case 'reliability'`; new functions `renderReliabilityTab`, `renderReliabilityResults`, `renderReliabilityFigure`, `renderReliabilityTable`; imported `reliabilityAnalysis` and `RELIABILITY_METRICS`
+- src/__tests__/reliability.test.ts: 24 tests including R equivalence regression test (all 22 reference values hard-coded); 238 total pass; `npx tsc --noEmit` zero errors
+
 ### 2026-02-21 — Edge Label Position Fix: On-Edge Placement + Directed 2/3 Rule
 - src/main.ts: `edgeLabelOffset` default changed `8 → 0` (labels sit on edges, readable via white halo); comment updated; `SETTINGS_VERSION` bumped `22 → 23`
 - src/views/network.ts: `computeEdgePath` gains `labelT` parameter (default 0.55); `drawEdges()` now computes `labelT` per edge type: undirected=0.5, directed=0.67, bidirectional=0.55; `?? 8` fallback changed to `?? 0`

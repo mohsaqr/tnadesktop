@@ -1,32 +1,34 @@
-# Session Handoff — 2026-02-21 (session 5)
+# Session Handoff — 2026-02-21 (session 6)
 
-## Completed (session 5)
-- **Layout Settings Modal**: "⚙ Layout Settings" button in Network Graph panel title opens a floating modal with 3 sliders
-- **Edge Label Offset**: `edgeLabelOffset` setting (default 8px) lifts edge labels off the Bezier curve using the perpendicular vector at t=0.55
-- **Saqr Jitter control**: `saqrJitter` setting (default 0.32) replaces hardcoded constant in `saqrLayout`; modal slider allows live adjustment
-- **Node Spacing in modal**: Modal spacing slider synced with `#ns-layoutSpacing` in sidebar
-- `SETTINGS_VERSION` bumped to 21
+## Completed (session 6)
+- **Reliability Analysis Tab** added to single-network view
+  - `src/analysis/reliability.ts`: `reliabilityAnalysis()` + `compareWeightMatrices()` + `RELIABILITY_METRICS` (22 metrics)
+  - `src/views/dashboard.ts`: `SINGLE_TABS` gets `{ id: 'reliability', label: 'Reliability' }`; dispatch case + 4 new functions
+  - `src/__tests__/reliability.test.ts`: 23 tests — all pass
+  - Total tests: **238 pass** (was 215)
 
 ## Current State
-- Build passes, 215 tests pass (12 test files)
-- `src/main.ts`: `SETTINGS_VERSION=21`, `edgeLabelOffset` and `saqrJitter` in `NetworkSettings` and defaults
-- `src/views/network.ts`: `computeEdgePath` returns `labelPx/labelPy`; `drawEdges` applies offset; `saqrLayout` has `jitter` param
-- `src/views/dashboard.ts`: `injectLayoutSettingsModal()` + button in `renderNetworkTab`
+- Build passes (zero TS errors), 238 tests pass (13 test files)
+- `src/analysis/reliability.ts`: full 22-metric split-half reliability analysis
+- `src/views/dashboard.ts`: Reliability tab renders controls (iter slider, split ratio slider, Run button) → spinner → box plots (Correlations / Deviations / Similarities panels) + 22-row summary table via createViewToggle
+- `src/main.ts`: unchanged; `SETTINGS_VERSION=25`
 
 ## Key Decisions
-- Modal appended to `document.body` (not inside `#app`) so it isn't cleared on re-render; `injectLayoutSettingsModal()` removes any existing modal before creating a new one
-- Perpendicular offset always uses `labelPx/labelPy` from `computeEdgePath` — zero curvature edges have perpendicular pointing "up" (normal to the straight line), which still works
-- The `⚙ Layout Settings` button is placed inside the panel-title HTML before `addPanelDownloadButtons` runs, so it appears left of the download buttons
+- **22 metrics in 5 categories**: Deviations (6), Correlations (4), Dissimilarities (5), Similarities (5), Pattern (2). Figure shows 3 panels (Correlations, Deviations, Similarities); Dissimilarities + Pattern in Table only.
+- **Frobenius uses full matrix** (including diagonal) to be distinct from Euclidean (off-diagonal only).
+- **RV coefficient** applied to full-matrix flat vector; Cosine applied to off-diagonal flat vector — making them subtly different.
+- **Rank Agreement** = `(kendall_tau + 1) / 2` → [0, 1]; note: with many tied weights, kendall < 1 even for identical matrices (expected behaviour, documented in test).
+- **SeededRNG.choiceWithoutReplacement** used for split rather than manual Fisher-Yates — cleaner and consistent with stability.ts pattern.
+- `BUILDERS` map in reliability.ts uses plain functions (no `as const`) so TypeScript doesn't complain about function call signatures.
 
 ## Open Issues
 - None known
 
 ## Next Steps
-- Consider applying same immediate-modal + flat-tab pattern to permutation tab
-- Consider adding edge threshold filter to single-group bootstrap forest view
+- Consider adding Dissimilarities and Pattern as additional box-plot panels (currently table-only)
+- Consider adding reliability tab to Group view as well (one panel per group)
 
 ## Context
-- tna-desktop at `/Users/mohammedsaqr/Documents/Git/tna-desktop`
 - Build: `npm run build`, Test: `npm test`
 - Preview: `npx vite preview --port 4173`
 - Deployed at `saqr.me/dynalytics/` via GitHub Pages
