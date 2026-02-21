@@ -30,7 +30,7 @@ import type { StabilityResult } from '../analysis/stability';
 import { NODE_COLORS } from './colors';
 
 const ALL_MEASURES: string[] = [...AVAILABLE_MEASURES, 'PageRank'];
-import { renderLoadPanel } from './load-data';
+import { showDataWizard, closeDataWizard } from './load-data';
 import * as d3 from 'd3';
 
 type Mode = 'data' | 'single' | 'clustering' | 'group' | 'onehot' | 'group_onehot' | 'sna';
@@ -236,10 +236,10 @@ function switchMode(newMode: Mode) {
   state.activeSecondaryTab = '';  // Reset secondary tab on mode change
   const dashboard = document.getElementById('dashboard');
   if (newMode === 'data') {
-    if (dashboard) dashboard.classList.add('data-mode');
     updateNavActive();
-    renderDataView();
+    showDataWizard();
   } else {
+    closeDataWizard();
     if (newMode === 'single' || newMode === 'onehot' || newMode === 'sna') {
       state.activeSubTab = 'network';
     } else if (newMode === 'clustering') {
@@ -1175,11 +1175,11 @@ function wireNavEvents() {
   const nav = document.getElementById('top-nav');
   if (!nav) return;
 
-  // Data button
+  // Data button — opens wizard as overlay (doesn't switch mode)
   const dataBtn = nav.querySelector('[data-navmode="data"]') as HTMLButtonElement;
   if (dataBtn) {
     dataBtn.addEventListener('click', () => {
-      switchMode('data');
+      showDataWizard();
     });
   }
 
@@ -1191,17 +1191,16 @@ function wireNavEvents() {
     trigger.addEventListener('click', (e) => {
       e.stopPropagation();
       if (trigger.disabled) {
-        // When disabled dropdown is clicked, navigate to data mode
-        // with the format pre-selected so the user can load appropriate data
+        // When disabled dropdown is clicked, open wizard with format pre-selected
         if (ddMode === 'onehot') {
           state.format = 'onehot';
-          switchMode('data');
+          showDataWizard();
         } else if (ddMode === 'group_onehot') {
           state.format = 'group_onehot';
-          switchMode('data');
+          showDataWizard();
         } else if (ddMode === 'sna') {
           state.format = 'edgelist';
-          switchMode('data');
+          showDataWizard();
         }
         return;
       }
@@ -1371,13 +1370,7 @@ function updateNavActive() {
 }
 
 function renderDataView() {
-  const content = document.getElementById('tab-content');
-  if (!content) return;
-  content.innerHTML = '';
-  const loadContainer = document.createElement('div');
-  loadContainer.className = 'load-panel-container';
-  content.appendChild(loadContainer);
-  renderLoadPanel(loadContainer);
+  showDataWizard();
 }
 
 // ═══════════════════════════════════════════════════════════

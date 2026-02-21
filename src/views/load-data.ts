@@ -1,6 +1,8 @@
 /**
- * Inline load-data panel: file drop zone + format tabs + options + preview table + analyze.
- * Replaces the old welcome + preview screens as a single inline component.
+ * Data Import Wizard — modal-based 3-step wizard for loading and configuring data.
+ * Step 1: Data Source (upload, sample, generate)
+ * Step 2: Configure (format tabs + column mapping)
+ * Step 3: Preview & Analyze (data table + analyze button)
  */
 import { state, render, showLoading, hideLoading, importOnehot, defaultNetworkSettings } from '../main';
 import { clearLayoutCache } from './network';
@@ -24,7 +26,6 @@ function detectBinaryCols(headers: string[], rawData: string[][]): number[] {
   const binaryCols: number[] = [];
   const sample = rawData.slice(0, 50);
   for (let c = 0; c < headers.length; c++) {
-    // Skip columns whose header matches common metadata names
     if (metaPattern.test(headers[c]!.trim())) continue;
     const allBinary = sample.every(row => {
       const v = (row[c] ?? '').trim();
@@ -40,11 +41,9 @@ function detectBinaryCols(headers: string[], rawData: string[][]): number[] {
  */
 function detectBestFormat(headers: string[], rawData: string[][]): 'wide' | 'long' | 'onehot' {
   const binaryCols = detectBinaryCols(headers, rawData);
-  // If more than half the columns are binary, suggest one-hot
   if (binaryCols.length >= 3 && binaryCols.length >= headers.length * 0.5) {
     return 'onehot';
   }
-  // Fall back to existing heuristic
   if (headers.length <= 5) return 'long';
   if (headers.length >= 6) {
     const sample = rawData.slice(0, 50);
@@ -59,106 +58,694 @@ function detectBestFormat(headers: string[], rawData: string[][]): 'wide' | 'lon
   return 'long';
 }
 
-export function renderLoadPanel(container: HTMLElement) {
-  const panel = document.createElement('div');
-  panel.className = 'load-panel';
-  container.appendChild(panel);
+// ═══════════════════════════════════════════════════════════
+//  Wizard State
+// ═══════════════════════════════════════════════════════════
+let wizardOverlay: HTMLElement | null = null;
+let wizardStep = 1;
+let wizardGoTo: ((step: number) => void) | null = null;
 
-  if (state.rawData.length === 0) {
-    // ─── Welcome landing page ───
-    renderWelcomePage(panel);
+/** Close the data wizard modal if open. */
+export function closeDataWizard() {
+  if (wizardOverlay) {
+    wizardOverlay.remove();
+    wizardOverlay = null;
+  }
+  wizardGoTo = null;
+}
+
+/** Open the data wizard modal. Starts at Step 2 if data is already loaded. */
+export function showDataWizard() {
+  closeDataWizard();
+
+  const hasData = state.rawData.length > 0;
+  wizardStep = hasData ? 2 : 1;
+
+  // ─── Modal structure ───
+  wizardOverlay = document.createElement('div');
+  wizardOverlay.className = 'modal-overlay';
+  wizardOverlay.id = 'wizard-overlay';
+
+  const modal = document.createElement('div');
+  modal.className = 'modal wizard-modal';
+
+  const stepsBar = document.createElement('div');
+  stepsBar.className = 'wizard-steps';
+
+  const body = document.createElement('div');
+  body.className = 'wizard-body';
+
+  const footer = document.createElement('div');
+  footer.className = 'wizard-footer';
+
+  modal.appendChild(stepsBar);
+  modal.appendChild(body);
+  modal.appendChild(footer);
+  wizardOverlay.appendChild(modal);
+
+  // ─── Navigation ───
+  function goTo(step: number) {
+    if (step === 1) {
+      state.rawData = [];
+      state.headers = [];
+      state.filename = '';
+    }
+    wizardStep = step;
+    renderCurrentStep();
+  }
+  wizardGoTo = goTo;
+
+  function updateStepsIndicator() {
+    const steps = [
+      { num: 1, label: 'Data' },
+      { num: 2, label: 'Configure & Analyze' },
+    ];
+    stepsBar.innerHTML = steps.map((s, i) => {
+      const cls = wizardStep === s.num ? 'active' : (wizardStep > s.num ? 'done' : '');
+      const line = i < steps.length - 1
+        ? `<div class="wizard-step-line ${wizardStep > s.num ? 'done' : ''}"></div>`
+        : '';
+      return `<div class="wizard-step ${cls}">
+        <span class="wizard-step-num">${s.num}</span>
+        <span class="wizard-step-label">${s.label}</span>
+      </div>${line}`;
+    }).join('');
+  }
+
+  function renderCurrentStep() {
+    body.innerHTML = '';
+    footer.innerHTML = '';
+    updateStepsIndicator();
+
+    switch (wizardStep) {
+      case 1: renderStep1(body, footer); break;
+      case 2: renderStep2(body, footer); break;
+    }
+  }
+
+  // ─── Step 1: Data Source ───
+  function renderStep1(stepBody: HTMLElement, stepFooter: HTMLElement) {
+    void stepFooter; // no footer for step 1
+
+    stepBody.innerHTML = `
+      <div class="wizard-welcome">
+        <h1>Welcome to Dynalytics</h1>
+        <p class="subtitle">Analytics of Dynamics</p>
+        <div class="export-option" id="wiz-upload-btn">
+          <div class="icon">&#128194;</div>
+          <div class="info">
+            <h4>Upload File</h4>
+            <p>Import a CSV, XLSX, or XLS file</p>
+          </div>
+        </div>
+        <div class="export-option" id="wiz-sample-btn">
+          <div class="icon">&#128202;</div>
+          <div class="info">
+            <h4>Load Sample Data</h4>
+            <p>Try TNA with the built-in group regulation dataset</p>
+          </div>
+        </div>
+        <p class="welcome-generate-title">Generate Random Data</p>
+        <div class="welcome-generate-row">
+          <div class="welcome-generate-card" id="wiz-generate-btn">
+            <div class="icon">&#128279;</div>
+            <div class="label">Random Network</div>
+          </div>
+          <div class="welcome-generate-card" id="wiz-gen-long-btn">
+            <div class="icon">&#128200;</div>
+            <div class="label">Long Data</div>
+          </div>
+          <div class="welcome-generate-card" id="wiz-gen-onehot-btn">
+            <div class="icon">&#9638;</div>
+            <div class="label">One-Hot Data</div>
+          </div>
+        </div>
+        <div class="welcome-drop-hint" id="wiz-drop-area">
+          or drag &amp; drop a file anywhere
+        </div>
+      </div>
+    `;
+
+    // Hidden file input
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.csv,.tsv,.txt,.xlsx,.xls';
+    fileInput.style.display = 'none';
+    stepBody.appendChild(fileInput);
+
+    // Wire events
+    stepBody.querySelector('#wiz-sample-btn')!.addEventListener('click', loadSampleData);
+    stepBody.querySelector('#wiz-upload-btn')!.addEventListener('click', () => fileInput.click());
+    stepBody.querySelector('#wiz-generate-btn')!.addEventListener('click', showGenerateNetworkModal);
+    stepBody.querySelector('#wiz-gen-long-btn')!.addEventListener('click', () => showGenerateDataModal('long'));
+    stepBody.querySelector('#wiz-gen-onehot-btn')!.addEventListener('click', () => showGenerateDataModal('onehot'));
+
+    const dropArea = stepBody.querySelector('#wiz-drop-area')!;
+    dropArea.addEventListener('click', () => fileInput.click());
+    dropArea.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropArea.classList.add('drag-over');
+    });
+    dropArea.addEventListener('dragleave', () => {
+      dropArea.classList.remove('drag-over');
+    });
+    dropArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropArea.classList.remove('drag-over');
+      const file = (e as DragEvent).dataTransfer?.files[0];
+      if (file) handleFile(file);
+    });
+
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files?.[0];
+      if (file) handleFile(file);
+    });
+  }
+
+  // ─── Step 2: Configure & Analyze ───
+  function renderStep2(stepBody: HTMLElement, stepFooter: HTMLElement) {
+    // File info bar
+    const infoHtml = `
+      <div class="load-file-info">
+        <span class="load-filename">${escHtml(state.filename)}</span>
+        <span class="load-stats">${state.rawData.length} rows &middot; ${state.headers.length} columns</span>
+      </div>
+    `;
+    stepBody.innerHTML = infoHtml;
+
+    // Format tabs
+    renderFormatTabs(stepBody);
+    // Format options
+    renderFormatOptions(stepBody);
+    // Preview table
+    renderPreviewTable(stepBody);
+
+    // Footer: Back + Analyze
+    stepFooter.innerHTML = `
+      <button class="btn-secondary" id="wiz-back-2">&larr; Back</button>
+      <button class="btn-primary" id="wiz-analyze">Analyze</button>
+    `;
+    stepFooter.querySelector('#wiz-back-2')!.addEventListener('click', () => goTo(1));
+    stepFooter.querySelector('#wiz-analyze')!.addEventListener('click', () => {
+      runAnalyze();
+    });
+  }
+
+  // ─── Dismiss on overlay click (only if already analyzed data exists) ───
+  wizardOverlay.addEventListener('click', (e) => {
+    if (e.target === wizardOverlay && state.sequenceData) {
+      closeDataWizard();
+    }
+  });
+
+  // Render initial step and show
+  renderCurrentStep();
+  document.body.appendChild(wizardOverlay);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Shared rendering helpers (used within wizard steps)
+// ═══════════════════════════════════════════════════════════
+
+function renderFormatTabs(container: HTMLElement) {
+  const tabs = document.createElement('div');
+  tabs.className = 'format-tabs';
+
+  const formats: { id: string; label: string }[] = [
+    { id: 'long', label: 'Long' },
+    { id: 'onehot', label: 'One-Hot' },
+    { id: 'group_onehot', label: 'Group One-Hot' },
+    { id: 'wide', label: 'Wide' },
+    { id: 'edgelist', label: 'Edge List' },
+  ];
+
+  for (const fmt of formats) {
+    const btn = document.createElement('button');
+    btn.textContent = fmt.label;
+    btn.dataset.format = fmt.id;
+    if (fmt.id === state.format) btn.classList.add('active');
+    btn.addEventListener('click', () => {
+      const prevFormat = state.format;
+      state.format = fmt.id as typeof state.format;
+      const switchedOnehotVariant =
+        (prevFormat === 'onehot' && state.format === 'group_onehot') ||
+        (prevFormat === 'group_onehot' && state.format === 'onehot');
+      if (switchedOnehotVariant || state.format === 'edgelist' || prevFormat === 'edgelist') {
+        // Full re-render of step 2
+        if (wizardGoTo) wizardGoTo(2);
+      } else {
+        tabs.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        updateFormatOptions();
+      }
+    });
+    tabs.appendChild(btn);
+  }
+  container.appendChild(tabs);
+}
+
+function updateFormatOptions() {
+  const longOpts = document.getElementById('load-long-opts');
+  const onehotOpts = document.getElementById('load-onehot-opts');
+  const edgeOpts = document.getElementById('load-edgelist-opts');
+  if (longOpts) longOpts.style.display = state.format === 'long' ? 'grid' : 'none';
+  if (onehotOpts) onehotOpts.style.display = (state.format === 'onehot' || state.format === 'group_onehot') ? 'block' : 'none';
+  if (edgeOpts) edgeOpts.style.display = state.format === 'edgelist' ? 'grid' : 'none';
+}
+
+function renderFormatOptions(container: HTMLElement) {
+  // ─── Long format options ───
+  const longOpts = document.createElement('div');
+  longOpts.className = 'load-format-options';
+  longOpts.id = 'load-long-opts';
+  longOpts.style.display = state.format === 'long' ? 'grid' : 'none';
+
+  const makeColOpts = (selected: number, includeNone = false) => {
+    let opts = includeNone ? `<option value="-1" ${selected === -1 ? 'selected' : ''}>None (row order)</option>` : '';
+    opts += state.headers.map((h, i) =>
+      `<option value="${i}" ${i === selected ? 'selected' : ''}>${escHtml(h)}</option>`
+    ).join('');
+    return opts;
+  };
+
+  const makeGroupOpts = (selected: number) => {
+    let opts = `<option value="-1" ${selected === -1 ? 'selected' : ''}>None (single TNA)</option>`;
+    opts += state.headers.map((h, i) =>
+      `<option value="${i}" ${i === selected ? 'selected' : ''}>${escHtml(h)}</option>`
+    ).join('');
+    return opts;
+  };
+
+  longOpts.innerHTML = `
+    <div class="format-opt-pair">
+      <label>Actor/ID:</label>
+      <select id="load-long-id">${makeColOpts(state.longIdCol)}</select>
+    </div>
+    <div class="format-opt-pair">
+      <label>Time:</label>
+      <select id="load-long-time">${makeColOpts(state.longTimeCol, true)}</select>
+    </div>
+    <div class="format-opt-pair">
+      <label>Action:</label>
+      <select id="load-long-state">${makeColOpts(state.longStateCol)}</select>
+    </div>
+    <div class="format-opt-pair">
+      <label>Group:</label>
+      <select id="load-long-group">${makeGroupOpts(state.longGroupCol)}</select>
+    </div>
+  `;
+  container.appendChild(longOpts);
+
+  setTimeout(() => {
+    document.getElementById('load-long-id')?.addEventListener('change', (e) => {
+      state.longIdCol = parseInt((e.target as HTMLSelectElement).value);
+    });
+    document.getElementById('load-long-time')?.addEventListener('change', (e) => {
+      state.longTimeCol = parseInt((e.target as HTMLSelectElement).value);
+    });
+    document.getElementById('load-long-state')?.addEventListener('change', (e) => {
+      state.longStateCol = parseInt((e.target as HTMLSelectElement).value);
+    });
+    document.getElementById('load-long-group')?.addEventListener('change', (e) => {
+      state.longGroupCol = parseInt((e.target as HTMLSelectElement).value);
+    });
+  }, 0);
+
+  // ─── One-Hot options (shared by onehot and group_onehot) ───
+  const onehotOpts = document.createElement('div');
+  onehotOpts.className = 'load-onehot-options';
+  onehotOpts.id = 'load-onehot-opts';
+  onehotOpts.style.display = (state.format === 'onehot' || state.format === 'group_onehot') ? 'block' : 'none';
+
+  const binaryCols = detectBinaryCols(state.headers, state.rawData);
+
+  let colChecksHtml = '<div class="load-onehot-label">Select binary state columns:</div>';
+  if (binaryCols.length === 0) {
+    colChecksHtml += '<div class="load-onehot-empty">No binary (0/1) columns detected.</div>';
   } else {
-    // ─── File loaded: show format tabs + options + table + analyze ───
-    renderFileInfo(panel);
-    renderFormatTabs(panel);
-    renderFormatOptions(panel);
-    renderAnalyzeButton(panel);
-    renderPreviewTable(panel);
+    colChecksHtml += '<div class="load-onehot-checks">';
+    for (const c of binaryCols) {
+      const checked = state.onehotCols.includes(state.headers[c]!) ? 'checked' : '';
+      colChecksHtml += `<label class="load-onehot-check-label">
+        <input type="checkbox" class="onehot-col-check" data-col="${escHtml(state.headers[c]!)}" ${checked}>
+        ${escHtml(state.headers[c]!)}
+      </label>`;
+    }
+    colChecksHtml += `<button class="load-onehot-select-all" id="load-onehot-select-all">Select All</button>`;
+    colChecksHtml += '</div>';
+  }
+
+  const nonBinaryColOpts = (selected: number) => {
+    let opts = `<option value="-1" ${selected === -1 ? 'selected' : ''}>None</option>`;
+    for (let i = 0; i < state.headers.length; i++) {
+      if (!binaryCols.includes(i)) {
+        opts += `<option value="${i}" ${i === selected ? 'selected' : ''}>${escHtml(state.headers[i]!)}</option>`;
+      }
+    }
+    return opts;
+  };
+
+  const isGroupOnehot = state.format === 'group_onehot';
+  const groupColHtml = isGroupOnehot
+    ? `<div class="format-opt-pair">
+        <label>Group:</label>
+        <select id="load-onehot-group">${nonBinaryColOpts(state.onehotGroupCol)}</select>
+       </div>`
+    : '';
+
+  onehotOpts.innerHTML = `
+    ${colChecksHtml}
+    <div class="load-onehot-dropdowns">
+      <div class="format-opt-pair">
+        <label>Actor:</label>
+        <select id="load-onehot-actor">${nonBinaryColOpts(state.onehotActorCol)}</select>
+      </div>
+      ${groupColHtml}
+      <div class="format-opt-pair">
+        <label>Session:</label>
+        <select id="load-onehot-session">${nonBinaryColOpts(state.onehotSessionCol)}</select>
+      </div>
+      <div class="format-opt-pair">
+        <label>Window size:</label>
+        <input type="number" id="load-onehot-window-size" value="${state.onehotWindowSize}" min="1" max="100" style="width:60px">
+      </div>
+      <div class="format-opt-pair">
+        <label>Window type:</label>
+        <select id="load-onehot-window-type">
+          <option value="tumbling" ${state.onehotWindowType === 'tumbling' ? 'selected' : ''}>Tumbling</option>
+          <option value="sliding" ${state.onehotWindowType === 'sliding' ? 'selected' : ''}>Sliding</option>
+        </select>
+      </div>
+    </div>
+  `;
+  container.appendChild(onehotOpts);
+
+  setTimeout(() => {
+    document.getElementById('load-onehot-select-all')?.addEventListener('click', () => {
+      const checks = document.querySelectorAll('.onehot-col-check') as NodeListOf<HTMLInputElement>;
+      const allChecked = Array.from(checks).every(c => c.checked);
+      checks.forEach(c => { c.checked = !allChecked; });
+    });
+    document.getElementById('load-onehot-actor')?.addEventListener('change', (e) => {
+      state.onehotActorCol = parseInt((e.target as HTMLSelectElement).value);
+    });
+    document.getElementById('load-onehot-group')?.addEventListener('change', (e) => {
+      state.onehotGroupCol = parseInt((e.target as HTMLSelectElement).value);
+    });
+    document.getElementById('load-onehot-session')?.addEventListener('change', (e) => {
+      state.onehotSessionCol = parseInt((e.target as HTMLSelectElement).value);
+    });
+    document.getElementById('load-onehot-window-size')?.addEventListener('change', (e) => {
+      state.onehotWindowSize = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 1);
+    });
+    document.getElementById('load-onehot-window-type')?.addEventListener('change', (e) => {
+      state.onehotWindowType = (e.target as HTMLSelectElement).value as 'tumbling' | 'sliding';
+    });
+  }, 0);
+
+  // ─── Edge List format options ───
+  const edgeOpts = document.createElement('div');
+  edgeOpts.className = 'load-format-options';
+  edgeOpts.id = 'load-edgelist-opts';
+  edgeOpts.style.display = state.format === 'edgelist' ? 'grid' : 'none';
+
+  if (state.format === 'edgelist' && state.headers.length >= 2) {
+    const guessed = guessEdgeListColumns(state.headers);
+    if (state.snaFromCol === 0 && state.snaToCol === 1) {
+      state.snaFromCol = guessed.fromCol;
+      state.snaToCol = guessed.toCol;
+      state.snaWeightCol = guessed.weightCol;
+    }
+  }
+
+  const makeEdgeColOpts = (selected: number, includeNone = false) => {
+    let opts = includeNone ? `<option value="-1" ${selected === -1 ? 'selected' : ''}>None (unweighted)</option>` : '';
+    opts += state.headers.map((h, i) =>
+      `<option value="${i}" ${i === selected ? 'selected' : ''}>${escHtml(h)}</option>`
+    ).join('');
+    return opts;
+  };
+
+  edgeOpts.innerHTML = `
+    <div class="format-opt-pair">
+      <label>From:</label>
+      <select id="load-edge-from">${makeEdgeColOpts(state.snaFromCol)}</select>
+    </div>
+    <div class="format-opt-pair">
+      <label>To:</label>
+      <select id="load-edge-to">${makeEdgeColOpts(state.snaToCol)}</select>
+    </div>
+    <div class="format-opt-pair">
+      <label>Weight:</label>
+      <select id="load-edge-weight">${makeEdgeColOpts(state.snaWeightCol, true)}</select>
+    </div>
+    <div class="format-opt-pair">
+      <label style="display:flex;align-items:center;gap:4px">
+        <input type="checkbox" id="load-edge-directed" ${state.snaDirected ? 'checked' : ''}>
+        Directed
+      </label>
+    </div>
+  `;
+  container.appendChild(edgeOpts);
+
+  setTimeout(() => {
+    document.getElementById('load-edge-from')?.addEventListener('change', (e) => {
+      state.snaFromCol = parseInt((e.target as HTMLSelectElement).value);
+    });
+    document.getElementById('load-edge-to')?.addEventListener('change', (e) => {
+      state.snaToCol = parseInt((e.target as HTMLSelectElement).value);
+    });
+    document.getElementById('load-edge-weight')?.addEventListener('change', (e) => {
+      state.snaWeightCol = parseInt((e.target as HTMLSelectElement).value);
+    });
+    document.getElementById('load-edge-directed')?.addEventListener('change', (e) => {
+      state.snaDirected = (e.target as HTMLInputElement).checked;
+    });
+  }, 0);
+}
+
+function renderPreviewTable(container: HTMLElement) {
+  const nRows = state.rawData.length;
+  const nCols = state.headers.length;
+  const maxPreview = Math.min(nRows, 50);
+
+  const tableWrap = document.createElement('div');
+  tableWrap.className = 'load-table-wrap';
+
+  let tableHtml = '<table class="preview-table"><thead><tr>';
+  for (const h of state.headers) {
+    tableHtml += `<th>${escHtml(h)}</th>`;
+  }
+  tableHtml += '</tr></thead><tbody>';
+  for (let i = 0; i < maxPreview; i++) {
+    tableHtml += '<tr>';
+    for (const cell of state.rawData[i]!) {
+      tableHtml += `<td>${escHtml(cell)}</td>`;
+    }
+    tableHtml += '</tr>';
+  }
+  if (nRows > maxPreview) {
+    tableHtml += `<tr><td colspan="${nCols}" style="text-align:center;color:#888;font-style:italic;">... ${nRows - maxPreview} more rows</td></tr>`;
+  }
+  tableHtml += '</tbody></table>';
+  tableWrap.innerHTML = tableHtml;
+  container.appendChild(tableWrap);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Analysis logic (unchanged from original)
+// ═══════════════════════════════════════════════════════════
+
+function runAnalyze() {
+  try {
+    clearGroupAnalysisData();
+    state.networkSettings = defaultNetworkSettings();
+    clearLayoutCache();
+
+    if (state.format === 'edgelist') {
+      const { matrix, labels } = edgeListToMatrix(
+        state.rawData, state.snaFromCol, state.snaToCol, state.snaWeightCol, state.snaDirected,
+      );
+      if (labels.length === 0) {
+        alert('No valid nodes found in edge list. Check your From/To column selections.');
+        return;
+      }
+      state.sequenceData = [[]]; // sentinel
+      state.groupLabels = null;
+      state.activeGroup = null;
+      state.activeMode = 'sna';
+      state.activeSubTab = 'network';
+      state.networkSettings.edgeWidthMax = 2;
+      state.networkSettings.edgeWidthMin = 0.2;
+      state.networkSettings.showEdgeLabels = false;
+      closeDataWizard();
+      render();
+      return;
+    } else if (state.format === 'wide') {
+      state.sequenceData = wideToSequences(state.rawData);
+      state.groupLabels = null;
+      state.longGroupCol = -1;
+    } else if (state.format === 'onehot' || state.format === 'group_onehot') {
+      analyzeOnehot();
+    } else {
+      const idCol = state.longIdCol;
+      const timeCol = state.longTimeCol;
+      const stateCol = state.longStateCol;
+      const groupCol = state.longGroupCol;
+      const result = longToSequences(state.rawData, idCol, timeCol, stateCol, groupCol);
+      state.sequenceData = result.sequences;
+      state.groupLabels = result.groups;
+    }
+
+    if (!state.sequenceData || state.sequenceData.length === 0) {
+      alert('No valid sequences found. Check your data format.');
+      return;
+    }
+
+    state.activeGroup = null;
+    if (state.format === 'onehot') {
+      state.activeMode = 'onehot';
+      state.activeSubTab = 'network';
+    } else if (state.format === 'group_onehot') {
+      state.activeMode = 'group_onehot';
+      state.activeSubTab = 'setup';
+    } else {
+      state.activeMode = 'single';
+      state.activeSubTab = 'network';
+    }
+    closeDataWizard();
+    render();
+  } catch (err) {
+    if ((err as Error).message !== 'cancelled') {
+      alert('Error building sequences: ' + (err as Error).message);
+    }
   }
 }
 
-function renderWelcomePage(panel: HTMLElement) {
-  const welcome = document.createElement('div');
-  welcome.className = 'welcome-entry';
+function analyzeOnehot() {
+  const checks = document.querySelectorAll('.onehot-col-check') as NodeListOf<HTMLInputElement>;
+  const selectedCols: string[] = [];
+  checks.forEach(c => { if (c.checked) selectedCols.push(c.dataset.col!); });
+  if (selectedCols.length < 2) {
+    alert('Select at least 2 binary columns for one-hot analysis.');
+    throw new Error('cancelled');
+  }
+  state.onehotCols = selectedCols;
 
-  welcome.innerHTML = `
-    <h1>Welcome to Dynalytics</h1>
-    <p class="subtitle">Analytics of Dynamics</p>
-    <div class="export-option" id="welcome-upload-btn">
-      <div class="icon">&#128194;</div>
-      <div class="info">
-        <h4>Upload File</h4>
-        <p>Import a CSV, XLSX, or XLS file</p>
-      </div>
-    </div>
-    <div class="export-option" id="welcome-sample-btn">
-      <div class="icon">&#128202;</div>
-      <div class="info">
-        <h4>Load Sample Data</h4>
-        <p>Try TNA with the built-in group regulation dataset</p>
-      </div>
-    </div>
-    <p class="welcome-generate-title">Generate Random Data</p>
-    <div class="welcome-generate-row">
-      <div class="welcome-generate-card" id="welcome-generate-btn">
-        <div class="icon">&#128279;</div>
-        <div class="label">Random Network</div>
-      </div>
-      <div class="welcome-generate-card" id="welcome-gen-long-btn">
-        <div class="icon">&#128200;</div>
-        <div class="label">Long Data</div>
-      </div>
-      <div class="welcome-generate-card" id="welcome-gen-onehot-btn">
-        <div class="icon">&#9638;</div>
-        <div class="label">One-Hot Data</div>
-      </div>
-    </div>
-    <div class="welcome-drop-hint" id="welcome-drop-area">
-      or drag &amp; drop a file anywhere
-    </div>
-  `;
-
-  panel.appendChild(welcome);
-
-  // Hidden file input
-  const fileInput = document.createElement('input');
-  fileInput.type = 'file';
-  fileInput.accept = '.csv,.tsv,.txt,.xlsx,.xls';
-  fileInput.style.display = 'none';
-  fileInput.id = 'welcome-file-input';
-  panel.appendChild(fileInput);
-
-  // Wire events
-  welcome.querySelector('#welcome-sample-btn')!.addEventListener('click', loadSampleData);
-  welcome.querySelector('#welcome-upload-btn')!.addEventListener('click', () => fileInput.click());
-  welcome.querySelector('#welcome-generate-btn')!.addEventListener('click', showGenerateNetworkModal);
-  welcome.querySelector('#welcome-gen-long-btn')!.addEventListener('click', () => showGenerateDataModal('long'));
-  welcome.querySelector('#welcome-gen-onehot-btn')!.addEventListener('click', () => showGenerateDataModal('onehot'));
-
-  const dropArea = welcome.querySelector('#welcome-drop-area')!;
-  dropArea.addEventListener('click', () => fileInput.click());
-  dropArea.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropArea.classList.add('drag-over');
-  });
-  dropArea.addEventListener('dragleave', () => {
-    dropArea.classList.remove('drag-over');
-  });
-  dropArea.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dropArea.classList.remove('drag-over');
-    const file = (e as DragEvent).dataTransfer?.files[0];
-    if (file) handleFile(file);
+  const records: Record<string, number>[] = state.rawData.map(row => {
+    const rec: Record<string, number> = {};
+    for (let c = 0; c < state.headers.length; c++) {
+      rec[state.headers[c]!] = parseInt(row[c] ?? '0', 10) || 0;
+    }
+    return rec;
   });
 
-  fileInput.addEventListener('change', () => {
-    const file = fileInput.files?.[0];
-    if (file) handleFile(file);
-  });
+  const opts: { actor?: string; session?: string; windowSize?: number; windowType?: 'tumbling' | 'sliding' } = {};
+  if (state.onehotActorCol >= 0) {
+    opts.actor = state.headers[state.onehotActorCol]!;
+    for (let i = 0; i < state.rawData.length; i++) {
+      const val = (state.rawData[i]![state.onehotActorCol] ?? '').trim();
+      (records[i] as any)[state.headers[state.onehotActorCol]!] = val as any;
+    }
+  }
+  if (state.onehotSessionCol >= 0) {
+    opts.session = state.headers[state.onehotSessionCol]!;
+    for (let i = 0; i < state.rawData.length; i++) {
+      const val = (state.rawData[i]![state.onehotSessionCol] ?? '').trim();
+      (records[i] as any)[state.headers[state.onehotSessionCol]!] = val as any;
+    }
+  }
+  if (state.onehotWindowSize > 1) opts.windowSize = state.onehotWindowSize;
+  opts.windowType = state.onehotWindowType;
+
+  state.sequenceData = importOnehot(records, selectedCols, opts);
+  state.modelType = 'ctna';
+
+  if (state.format === 'group_onehot' && state.onehotGroupCol >= 0 && state.onehotActorCol >= 0) {
+    const groupColIdx = state.onehotGroupCol;
+    const actorColIdx = state.onehotActorCol;
+    const labels: string[] = [];
+    const seenActors = new Set<string>();
+    for (const row of state.rawData) {
+      const actorVal = (row[actorColIdx] ?? '').trim();
+      if (!seenActors.has(actorVal)) {
+        seenActors.add(actorVal);
+        const groupVal = (row[groupColIdx] ?? '').trim();
+        labels.push(groupVal);
+      }
+    }
+    if (labels.length === state.sequenceData.length) {
+      state.groupLabels = labels;
+    } else {
+      state.groupLabels = labels.slice(0, state.sequenceData.length);
+    }
+  } else if (state.format === 'group_onehot') {
+    alert('Please select both an Actor column and a Group column for Group One-Hot analysis.');
+    throw new Error('cancelled');
+  } else {
+    state.groupLabels = null;
+  }
 }
 
+// ═══════════════════════════════════════════════════════════
+//  File / Sample loading
+// ═══════════════════════════════════════════════════════════
+
+function loadSampleData() {
+  showLoading('Loading sample data...');
+  try {
+    const lines = sampleCsv.split('\n').filter((l: string) => l.trim());
+    const headers = lines[0]!.split(',').map((h: string) => h.trim());
+    const rows = lines.slice(1).map((line: string) => line.split(',').map((c: string) => c.trim()));
+    state.filename = 'group_regulation_long.csv';
+    state.headers = headers;
+    state.rawData = rows;
+    state.format = 'long';
+    const guessed = guessColumns(state.headers, state.rawData);
+    state.longIdCol = guessed.idCol;
+    state.longTimeCol = guessed.timeCol;
+    state.longStateCol = guessed.stateCol;
+    hideLoading();
+    if (wizardGoTo) wizardGoTo(2);
+  } catch (err) {
+    hideLoading();
+    alert('Error loading sample data: ' + (err as Error).message);
+  }
+}
+
+async function handleFile(file: File) {
+  showLoading('Parsing file...');
+  try {
+    const result = await parseFile(file);
+    state.filename = file.name;
+    state.headers = result.headers;
+    state.rawData = result.rows;
+    const detected = detectBestFormat(state.headers, state.rawData);
+    state.format = detected;
+    if (detected === 'long') {
+      const guessed = guessColumns(state.headers, state.rawData);
+      state.longIdCol = guessed.idCol;
+      state.longTimeCol = guessed.timeCol;
+      state.longStateCol = guessed.stateCol;
+    }
+    if (detected === 'onehot' || detected === 'wide') {
+      const binaryCols = detectBinaryCols(state.headers, state.rawData);
+      state.onehotCols = binaryCols.map(c => state.headers[c]!);
+    }
+    hideLoading();
+    if (wizardGoTo) wizardGoTo(2);
+  } catch (err) {
+    hideLoading();
+    alert('Error parsing file: ' + (err as Error).message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Generate modals (close wizard on success)
+// ═══════════════════════════════════════════════════════════
+
 function showGenerateNetworkModal() {
-  const existing = document.querySelector('.modal-overlay');
+  const existing = document.querySelector('.modal-overlay:not(#wizard-overlay)');
   if (existing) existing.remove();
 
   const overlay = document.createElement('div');
@@ -223,13 +810,11 @@ function showGenerateNetworkModal() {
   `;
   document.body.appendChild(overlay);
 
-  // Dismiss on overlay click or Cancel
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) overlay.remove();
   });
   document.getElementById('gen-modal-close')!.addEventListener('click', () => overlay.remove());
 
-  // Wire model selector to show/hide param groups
   const modelSel = document.getElementById('gen-model') as HTMLSelectElement;
   const dirCheck = document.getElementById('gen-directed') as HTMLInputElement;
   modelSel.addEventListener('change', () => {
@@ -238,7 +823,6 @@ function showGenerateNetworkModal() {
     document.getElementById('gen-ba-params')!.style.display = m === 'ba' ? '' : 'none';
     document.getElementById('gen-ws-params')!.style.display = m === 'ws' ? '' : 'none';
     document.getElementById('gen-sbm-params')!.style.display = m === 'sbm' ? '' : 'none';
-    // Watts-Strogatz is always undirected
     if (m === 'ws') { dirCheck.checked = false; dirCheck.disabled = true; }
     else { dirCheck.disabled = false; }
   });
@@ -287,16 +871,14 @@ function showGenerateNetworkModal() {
       }
 
       overlay.remove();
+      closeDataWizard();
 
-      // Convert matrix to edge list rows for rawData
       const edgeRows = matrixToEdgeRows(result.matrix, result.labels, directed);
 
-      // Clear any stale group analysis and reset network settings for new dataset
       clearGroupAnalysisData();
       state.networkSettings = defaultNetworkSettings();
       clearLayoutCache();
 
-      // Set state for SNA mode
       state.rawData = edgeRows;
       state.headers = ['From', 'To', 'Weight'];
       state.format = 'edgelist';
@@ -310,7 +892,6 @@ function showGenerateNetworkModal() {
       state.activeGroup = null;
       state.activeMode = 'sna';
       state.activeSubTab = 'network';
-      // SNA defaults: thinner edges, no edge labels
       state.networkSettings.edgeWidthMax = 2;
       state.networkSettings.edgeWidthMin = 0.2;
       state.networkSettings.showEdgeLabels = false;
@@ -322,7 +903,7 @@ function showGenerateNetworkModal() {
 }
 
 function showGenerateDataModal(format: 'long' | 'onehot') {
-  const existing = document.querySelector('.modal-overlay');
+  const existing = document.querySelector('.modal-overlay:not(#wizard-overlay)');
   if (existing) existing.remove();
 
   const title = format === 'long' ? 'Generate Long Data' : 'Generate One-Hot Data';
@@ -367,7 +948,6 @@ function showGenerateDataModal(format: 'long' | 'onehot') {
   });
   document.getElementById('sim-modal-close')!.addEventListener('click', () => overlay.remove());
 
-  // Toggle groups input visibility
   const useGroupsCheck = document.getElementById('sim-use-groups') as HTMLInputElement;
   const groupsWrap = document.getElementById('sim-groups-wrap')!;
   useGroupsCheck.addEventListener('change', () => {
@@ -383,10 +963,7 @@ function showGenerateDataModal(format: 'long' | 'onehot') {
       const nStates = parseInt((document.getElementById('sim-nstates') as HTMLInputElement).value) || 9;
       const seed = parseInt((document.getElementById('sim-seed') as HTMLInputElement).value) || 42;
 
-      // Derive per-actor sequence length from total rows / actors
       const seqLen = Math.max(1, Math.round(totalRows / nActors));
-
-      // Distribute actors across groups
       const actorsPerGroup = Math.max(1, Math.round(nActors / nGroups));
 
       const params = {
@@ -397,51 +974,47 @@ function showGenerateDataModal(format: 'long' | 'onehot') {
         seed,
       };
 
-      const result = format === 'long'
+      const simResult = format === 'long'
         ? simulateLongData(params)
         : simulateOnehotData(params);
 
       overlay.remove();
+      closeDataWizard();
 
-      // Set raw data into state
       state.filename = format === 'long'
         ? `simulated_long_${nActors}a.csv`
         : `simulated_onehot_${nActors}a.csv`;
-      state.headers = result.headers;
-      state.rawData = result.rows;
+      state.headers = simResult.headers;
+      state.rawData = simResult.rows;
 
-      // Clear stale analysis state
       clearGroupAnalysisData();
       state.networkSettings = defaultNetworkSettings();
       clearLayoutCache();
 
       if (format === 'long') {
-        // Build sequences directly and go to analysis
-        const idCol = result.headers.indexOf('Actor');
-        const timeCol = result.headers.indexOf('Time');
-        const stateCol = result.headers.indexOf('Action');
-        const groupCol = useGroups ? result.headers.indexOf('Group') : -1;
+        const idCol = simResult.headers.indexOf('Actor');
+        const timeCol = simResult.headers.indexOf('Time');
+        const stateCol = simResult.headers.indexOf('Action');
+        const groupCol = useGroups ? simResult.headers.indexOf('Group') : -1;
         state.format = 'long';
         state.longIdCol = idCol;
         state.longTimeCol = timeCol;
         state.longStateCol = stateCol;
         state.longGroupCol = groupCol;
-        const seqResult = longToSequences(result.rows, idCol, timeCol, stateCol, groupCol);
+        const seqResult = longToSequences(simResult.rows, idCol, timeCol, stateCol, groupCol);
         state.sequenceData = seqResult.sequences;
         state.groupLabels = seqResult.groups;
       } else {
-        // One-hot: build records and import
         state.format = 'onehot';
-        const stateCols = result.headers.filter(h => !['Actor', 'Group', 'Time'].includes(h));
+        const stateCols = simResult.headers.filter(h => !['Actor', 'Group', 'Time'].includes(h));
         state.onehotCols = stateCols;
 
-        const records: Record<string, number>[] = result.rows.map(row => {
+        const records: Record<string, number>[] = simResult.rows.map(row => {
           const rec: Record<string, number> = {};
-          for (let c = 0; c < result.headers.length; c++) {
-            rec[result.headers[c]!] = parseInt(row[c] ?? '0', 10) || 0;
+          for (let c = 0; c < simResult.headers.length; c++) {
+            rec[simResult.headers[c]!] = parseInt(row[c] ?? '0', 10) || 0;
           }
-          // Actor column needs string value for grouping
-          const actorIdx = result.headers.indexOf('Actor');
+          const actorIdx = simResult.headers.indexOf('Actor');
           if (actorIdx >= 0) (rec as any)['Actor'] = (row[actorIdx] ?? '').trim();
           return rec;
         });
@@ -452,12 +1025,11 @@ function showGenerateDataModal(format: 'long' | 'onehot') {
         state.modelType = 'ctna';
 
         if (useGroups) {
-          // Extract group labels: one per actor
-          const actorIdx = result.headers.indexOf('Actor');
-          const groupIdx = result.headers.indexOf('Group');
+          const actorIdx = simResult.headers.indexOf('Actor');
+          const groupIdx = simResult.headers.indexOf('Group');
           const labels: string[] = [];
           const seenActors = new Set<string>();
-          for (const row of result.rows) {
+          for (const row of simResult.rows) {
             const actorVal = (row[actorIdx] ?? '').trim();
             if (!seenActors.has(actorVal)) {
               seenActors.add(actorVal);
@@ -475,7 +1047,6 @@ function showGenerateDataModal(format: 'long' | 'onehot') {
         return;
       }
 
-      // Go directly to analysis
       state.activeGroup = null;
       state.activeMode = 'single';
       state.activeSubTab = 'network';
@@ -485,499 +1056,3 @@ function showGenerateDataModal(format: 'long' | 'onehot') {
     }
   });
 }
-
-function loadSampleData() {
-  showLoading('Loading sample data...');
-  try {
-    const lines = sampleCsv.split('\n').filter((l: string) => l.trim());
-    const headers = lines[0]!.split(',').map((h: string) => h.trim());
-    const rows = lines.slice(1).map((line: string) => line.split(',').map((c: string) => c.trim()));
-    state.filename = 'group_regulation_long.csv';
-    state.headers = headers;
-    state.rawData = rows;
-    state.format = 'long';
-    // Guess columns for long format
-    const guessed = guessColumns(state.headers, state.rawData);
-    state.longIdCol = guessed.idCol;
-    state.longTimeCol = guessed.timeCol;
-    state.longStateCol = guessed.stateCol;
-    hideLoading();
-    rerenderPanel();
-  } catch (err) {
-    hideLoading();
-    alert('Error loading sample data: ' + (err as Error).message);
-  }
-}
-
-async function handleFile(file: File) {
-  showLoading('Parsing file...');
-  try {
-    const result = await parseFile(file);
-    state.filename = file.name;
-    state.headers = result.headers;
-    state.rawData = result.rows;
-    // Use enhanced format detection
-    const detected = detectBestFormat(state.headers, state.rawData);
-    state.format = detected;
-    if (detected === 'long') {
-      const guessed = guessColumns(state.headers, state.rawData);
-      state.longIdCol = guessed.idCol;
-      state.longTimeCol = guessed.timeCol;
-      state.longStateCol = guessed.stateCol;
-    }
-    // Auto-select all binary columns for one-hot
-    if (detected === 'onehot' || detected === 'wide') {
-      const binaryCols = detectBinaryCols(state.headers, state.rawData);
-      state.onehotCols = binaryCols.map(c => state.headers[c]!);
-    }
-    hideLoading();
-    rerenderPanel();
-  } catch (err) {
-    hideLoading();
-    alert('Error parsing file: ' + (err as Error).message);
-  }
-}
-
-/** Re-render just the load panel (no full render() call). */
-function rerenderPanel() {
-  const existing = document.querySelector('.load-panel');
-  if (existing) {
-    existing.innerHTML = '';
-    if (state.rawData.length > 0) {
-      renderFileInfo(existing as HTMLElement);
-      renderFormatTabs(existing as HTMLElement);
-      renderFormatOptions(existing as HTMLElement);
-      renderAnalyzeButton(existing as HTMLElement);
-      renderPreviewTable(existing as HTMLElement);
-    }
-  }
-}
-
-function renderFileInfo(panel: HTMLElement) {
-  const info = document.createElement('div');
-  info.className = 'load-file-info';
-  info.innerHTML = `
-    <span class="load-filename">${escHtml(state.filename)}</span>
-    <span class="load-stats">${state.rawData.length} rows &middot; ${state.headers.length} columns</span>
-  `;
-  panel.appendChild(info);
-}
-
-function renderFormatTabs(panel: HTMLElement) {
-  const tabs = document.createElement('div');
-  tabs.className = 'format-tabs';
-  tabs.id = 'format-tabs';
-
-  const formats: { id: string; label: string }[] = [
-    { id: 'long', label: 'Long' },
-    { id: 'onehot', label: 'One-Hot' },
-    { id: 'group_onehot', label: 'Group One-Hot' },
-    { id: 'wide', label: 'Wide' },
-    { id: 'edgelist', label: 'Edge List' },
-  ];
-
-  for (const fmt of formats) {
-    const btn = document.createElement('button');
-    btn.textContent = fmt.label;
-    btn.dataset.format = fmt.id;
-    if (fmt.id === state.format) btn.classList.add('active');
-    btn.addEventListener('click', () => {
-      const prevFormat = state.format;
-      state.format = fmt.id as typeof state.format;
-      // Switching between onehot and group_onehot needs a full re-render
-      // (Group column dropdown only exists for group_onehot)
-      const switchedOnehotVariant =
-        (prevFormat === 'onehot' && state.format === 'group_onehot') ||
-        (prevFormat === 'group_onehot' && state.format === 'onehot');
-      if (switchedOnehotVariant || state.format === 'edgelist' || prevFormat === 'edgelist') {
-        rerenderPanel();
-      } else {
-        tabs.querySelectorAll('button').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        updateFormatOptions();
-      }
-    });
-    tabs.appendChild(btn);
-  }
-  panel.appendChild(tabs);
-}
-
-function updateFormatOptions() {
-  const longOpts = document.getElementById('load-long-opts');
-  const onehotOpts = document.getElementById('load-onehot-opts');
-  const edgeOpts = document.getElementById('load-edgelist-opts');
-  if (longOpts) longOpts.style.display = state.format === 'long' ? 'flex' : 'none';
-  if (onehotOpts) onehotOpts.style.display = (state.format === 'onehot' || state.format === 'group_onehot') ? 'block' : 'none';
-  if (edgeOpts) edgeOpts.style.display = state.format === 'edgelist' ? 'flex' : 'none';
-}
-
-function renderFormatOptions(panel: HTMLElement) {
-  // ─── Long format options ───
-  const longOpts = document.createElement('div');
-  longOpts.className = 'load-format-options';
-  longOpts.id = 'load-long-opts';
-  longOpts.style.display = state.format === 'long' ? 'flex' : 'none';
-
-  const makeColOpts = (selected: number, includeNone = false) => {
-    let opts = includeNone ? `<option value="-1" ${selected === -1 ? 'selected' : ''}>None (row order)</option>` : '';
-    opts += state.headers.map((h, i) =>
-      `<option value="${i}" ${i === selected ? 'selected' : ''}>${escHtml(h)}</option>`
-    ).join('');
-    return opts;
-  };
-
-  const makeGroupOpts = (selected: number) => {
-    let opts = `<option value="-1" ${selected === -1 ? 'selected' : ''}>None (single TNA)</option>`;
-    opts += state.headers.map((h, i) =>
-      `<option value="${i}" ${i === selected ? 'selected' : ''}>${escHtml(h)}</option>`
-    ).join('');
-    return opts;
-  };
-
-  longOpts.innerHTML = `
-    <label>Actor/ID:</label>
-    <select id="load-long-id">${makeColOpts(state.longIdCol)}</select>
-    <label>Time:</label>
-    <select id="load-long-time">${makeColOpts(state.longTimeCol, true)}</select>
-    <label>Action:</label>
-    <select id="load-long-state">${makeColOpts(state.longStateCol)}</select>
-    <label>Group:</label>
-    <select id="load-long-group">${makeGroupOpts(state.longGroupCol)}</select>
-  `;
-  panel.appendChild(longOpts);
-
-  // Wire long-format change handlers
-  setTimeout(() => {
-    document.getElementById('load-long-id')?.addEventListener('change', (e) => {
-      state.longIdCol = parseInt((e.target as HTMLSelectElement).value);
-    });
-    document.getElementById('load-long-time')?.addEventListener('change', (e) => {
-      state.longTimeCol = parseInt((e.target as HTMLSelectElement).value);
-    });
-    document.getElementById('load-long-state')?.addEventListener('change', (e) => {
-      state.longStateCol = parseInt((e.target as HTMLSelectElement).value);
-    });
-    document.getElementById('load-long-group')?.addEventListener('change', (e) => {
-      state.longGroupCol = parseInt((e.target as HTMLSelectElement).value);
-    });
-  }, 0);
-
-  // ─── One-Hot options (shared by onehot and group_onehot) ───
-  const onehotOpts = document.createElement('div');
-  onehotOpts.className = 'load-onehot-options';
-  onehotOpts.id = 'load-onehot-opts';
-  onehotOpts.style.display = (state.format === 'onehot' || state.format === 'group_onehot') ? 'block' : 'none';
-
-  const binaryCols = detectBinaryCols(state.headers, state.rawData);
-
-  let colChecksHtml = '<div class="load-onehot-label">Select binary state columns:</div>';
-  if (binaryCols.length === 0) {
-    colChecksHtml += '<div class="load-onehot-empty">No binary (0/1) columns detected.</div>';
-  } else {
-    colChecksHtml += '<div class="load-onehot-checks">';
-    for (const c of binaryCols) {
-      const checked = state.onehotCols.includes(state.headers[c]!) ? 'checked' : '';
-      colChecksHtml += `<label class="load-onehot-check-label">
-        <input type="checkbox" class="onehot-col-check" data-col="${escHtml(state.headers[c]!)}" ${checked}>
-        ${escHtml(state.headers[c]!)}
-      </label>`;
-    }
-    colChecksHtml += `<button class="load-onehot-select-all" id="load-onehot-select-all">Select All</button>`;
-    colChecksHtml += '</div>';
-  }
-
-  // Non-binary columns for actor/session dropdowns
-  const nonBinaryColOpts = (selected: number) => {
-    let opts = `<option value="-1" ${selected === -1 ? 'selected' : ''}>None</option>`;
-    for (let i = 0; i < state.headers.length; i++) {
-      if (!binaryCols.includes(i)) {
-        opts += `<option value="${i}" ${i === selected ? 'selected' : ''}>${escHtml(state.headers[i]!)}</option>`;
-      }
-    }
-    return opts;
-  };
-
-  const isGroupOnehot = state.format === 'group_onehot';
-  const groupColHtml = isGroupOnehot
-    ? `<label>Group:</label>
-       <select id="load-onehot-group">${nonBinaryColOpts(state.onehotGroupCol)}</select>`
-    : '';
-
-  onehotOpts.innerHTML = `
-    ${colChecksHtml}
-    <div class="load-onehot-dropdowns">
-      <label>Actor:</label>
-      <select id="load-onehot-actor">${nonBinaryColOpts(state.onehotActorCol)}</select>
-      ${groupColHtml}
-      <label>Session:</label>
-      <select id="load-onehot-session">${nonBinaryColOpts(state.onehotSessionCol)}</select>
-      <label>Window size:</label>
-      <input type="number" id="load-onehot-window-size" value="${state.onehotWindowSize}" min="1" max="100" style="width:60px">
-      <label>Window type:</label>
-      <select id="load-onehot-window-type">
-        <option value="tumbling" ${state.onehotWindowType === 'tumbling' ? 'selected' : ''}>Tumbling</option>
-        <option value="sliding" ${state.onehotWindowType === 'sliding' ? 'selected' : ''}>Sliding</option>
-      </select>
-    </div>
-  `;
-  panel.appendChild(onehotOpts);
-
-  // Wire one-hot event handlers
-  setTimeout(() => {
-    document.getElementById('load-onehot-select-all')?.addEventListener('click', () => {
-      const checks = document.querySelectorAll('.onehot-col-check') as NodeListOf<HTMLInputElement>;
-      const allChecked = Array.from(checks).every(c => c.checked);
-      checks.forEach(c => { c.checked = !allChecked; });
-    });
-    document.getElementById('load-onehot-actor')?.addEventListener('change', (e) => {
-      state.onehotActorCol = parseInt((e.target as HTMLSelectElement).value);
-    });
-    document.getElementById('load-onehot-group')?.addEventListener('change', (e) => {
-      state.onehotGroupCol = parseInt((e.target as HTMLSelectElement).value);
-    });
-    document.getElementById('load-onehot-session')?.addEventListener('change', (e) => {
-      state.onehotSessionCol = parseInt((e.target as HTMLSelectElement).value);
-    });
-    document.getElementById('load-onehot-window-size')?.addEventListener('change', (e) => {
-      state.onehotWindowSize = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 1);
-    });
-    document.getElementById('load-onehot-window-type')?.addEventListener('change', (e) => {
-      state.onehotWindowType = (e.target as HTMLSelectElement).value as 'tumbling' | 'sliding';
-    });
-  }, 0);
-
-  // ─── Edge List format options ───
-  const edgeOpts = document.createElement('div');
-  edgeOpts.className = 'load-format-options';
-  edgeOpts.id = 'load-edgelist-opts';
-  edgeOpts.style.display = state.format === 'edgelist' ? 'flex' : 'none';
-
-  // Auto-guess edge list columns
-  if (state.format === 'edgelist' && state.headers.length >= 2) {
-    const guessed = guessEdgeListColumns(state.headers);
-    if (state.snaFromCol === 0 && state.snaToCol === 1) {
-      state.snaFromCol = guessed.fromCol;
-      state.snaToCol = guessed.toCol;
-      state.snaWeightCol = guessed.weightCol;
-    }
-  }
-
-  const makeEdgeColOpts = (selected: number, includeNone = false) => {
-    let opts = includeNone ? `<option value="-1" ${selected === -1 ? 'selected' : ''}>None (unweighted)</option>` : '';
-    opts += state.headers.map((h, i) =>
-      `<option value="${i}" ${i === selected ? 'selected' : ''}>${escHtml(h)}</option>`
-    ).join('');
-    return opts;
-  };
-
-  edgeOpts.innerHTML = `
-    <label>From:</label>
-    <select id="load-edge-from">${makeEdgeColOpts(state.snaFromCol)}</select>
-    <label>To:</label>
-    <select id="load-edge-to">${makeEdgeColOpts(state.snaToCol)}</select>
-    <label>Weight:</label>
-    <select id="load-edge-weight">${makeEdgeColOpts(state.snaWeightCol, true)}</select>
-    <label style="display:flex;align-items:center;gap:4px">
-      <input type="checkbox" id="load-edge-directed" ${state.snaDirected ? 'checked' : ''}>
-      Directed
-    </label>
-  `;
-  panel.appendChild(edgeOpts);
-
-  // Wire edge list event handlers
-  setTimeout(() => {
-    document.getElementById('load-edge-from')?.addEventListener('change', (e) => {
-      state.snaFromCol = parseInt((e.target as HTMLSelectElement).value);
-    });
-    document.getElementById('load-edge-to')?.addEventListener('change', (e) => {
-      state.snaToCol = parseInt((e.target as HTMLSelectElement).value);
-    });
-    document.getElementById('load-edge-weight')?.addEventListener('change', (e) => {
-      state.snaWeightCol = parseInt((e.target as HTMLSelectElement).value);
-    });
-    document.getElementById('load-edge-directed')?.addEventListener('change', (e) => {
-      state.snaDirected = (e.target as HTMLInputElement).checked;
-    });
-  }, 0);
-}
-
-function renderPreviewTable(panel: HTMLElement) {
-  const nRows = state.rawData.length;
-  const nCols = state.headers.length;
-  const maxPreview = Math.min(nRows, 50);
-
-  const tableWrap = document.createElement('div');
-  tableWrap.className = 'load-table-wrap';
-
-  let tableHtml = '<table class="preview-table"><thead><tr>';
-  for (const h of state.headers) {
-    tableHtml += `<th>${escHtml(h)}</th>`;
-  }
-  tableHtml += '</tr></thead><tbody>';
-  for (let i = 0; i < maxPreview; i++) {
-    tableHtml += '<tr>';
-    for (const cell of state.rawData[i]!) {
-      tableHtml += `<td>${escHtml(cell)}</td>`;
-    }
-    tableHtml += '</tr>';
-  }
-  if (nRows > maxPreview) {
-    tableHtml += `<tr><td colspan="${nCols}" style="text-align:center;color:#888;font-style:italic;">... ${nRows - maxPreview} more rows</td></tr>`;
-  }
-  tableHtml += '</tbody></table>';
-  tableWrap.innerHTML = tableHtml;
-  panel.appendChild(tableWrap);
-}
-
-function renderAnalyzeButton(panel: HTMLElement) {
-  const actions = document.createElement('div');
-  actions.className = 'load-actions';
-  actions.innerHTML = `<button class="btn-primary" id="load-analyze-btn">Analyze</button>`;
-  panel.appendChild(actions);
-
-  actions.querySelector('#load-analyze-btn')!.addEventListener('click', () => {
-    try {
-      // Clear any stale group analysis and reset network settings for new dataset
-      clearGroupAnalysisData();
-      state.networkSettings = defaultNetworkSettings();
-      clearLayoutCache();
-
-      if (state.format === 'edgelist') {
-        // Edge list: validate columns, set SNA mode
-        const { matrix, labels } = edgeListToMatrix(
-          state.rawData, state.snaFromCol, state.snaToCol, state.snaWeightCol, state.snaDirected,
-        );
-        if (labels.length === 0) {
-          alert('No valid nodes found in edge list. Check your From/To column selections.');
-          return;
-        }
-        state.sequenceData = [[]]; // sentinel
-        state.groupLabels = null;
-        state.activeGroup = null;
-        state.activeMode = 'sna';
-        state.activeSubTab = 'network';
-        // SNA defaults: thinner edges, no edge labels
-        state.networkSettings.edgeWidthMax = 2;
-        state.networkSettings.edgeWidthMin = 0.2;
-        state.networkSettings.showEdgeLabels = false;
-        render();
-        return;
-      } else if (state.format === 'wide') {
-        state.sequenceData = wideToSequences(state.rawData);
-        state.groupLabels = null;
-        state.longGroupCol = -1;
-      } else if (state.format === 'onehot' || state.format === 'group_onehot') {
-        analyzeOnehot();
-      } else {
-        // Long format
-        const idCol = state.longIdCol;
-        const timeCol = state.longTimeCol;
-        const stateCol = state.longStateCol;
-        const groupCol = state.longGroupCol;
-        const result = longToSequences(state.rawData, idCol, timeCol, stateCol, groupCol);
-        state.sequenceData = result.sequences;
-        state.groupLabels = result.groups;
-      }
-
-      if (!state.sequenceData || state.sequenceData.length === 0) {
-        alert('No valid sequences found. Check your data format.');
-        return;
-      }
-
-      // Reset active group when loading new data
-      state.activeGroup = null;
-      // Route to the correct analysis mode based on format
-      if (state.format === 'onehot') {
-        state.activeMode = 'onehot';
-        state.activeSubTab = 'network';
-      } else if (state.format === 'group_onehot') {
-        state.activeMode = 'group_onehot';
-        state.activeSubTab = 'setup';
-      } else {
-        state.activeMode = 'single';
-        state.activeSubTab = 'network';
-      }
-      render();
-    } catch (err) {
-      alert('Error building sequences: ' + (err as Error).message);
-    }
-  });
-}
-
-function analyzeOnehot() {
-  // Gather selected binary columns
-  const checks = document.querySelectorAll('.onehot-col-check') as NodeListOf<HTMLInputElement>;
-  const selectedCols: string[] = [];
-  checks.forEach(c => { if (c.checked) selectedCols.push(c.dataset.col!); });
-  if (selectedCols.length < 2) {
-    alert('Select at least 2 binary columns for one-hot analysis.');
-    throw new Error('cancelled');
-  }
-  state.onehotCols = selectedCols;
-
-  // Build records for importOnehot
-  const records: Record<string, number>[] = state.rawData.map(row => {
-    const rec: Record<string, number> = {};
-    for (let c = 0; c < state.headers.length; c++) {
-      rec[state.headers[c]!] = parseInt(row[c] ?? '0', 10) || 0;
-    }
-    return rec;
-  });
-
-  // Build options
-  const opts: { actor?: string; session?: string; windowSize?: number; windowType?: 'tumbling' | 'sliding' } = {};
-  if (state.onehotActorCol >= 0) {
-    opts.actor = state.headers[state.onehotActorCol]!;
-    // Actor column values need to be in records as strings mapped to numbers — but actor is a string column.
-    // We need to put the actual string values back for grouping. importOnehot uses the actor field as a
-    // column name to group by, so we need to include it in the records even if not numeric.
-    for (let i = 0; i < state.rawData.length; i++) {
-      const val = (state.rawData[i]![state.onehotActorCol] ?? '').trim();
-      // Use a hash-like numeric mapping so importOnehot can group by it
-      // Actually importOnehot reads the raw value from the record, so we need it there
-      (records[i] as any)[state.headers[state.onehotActorCol]!] = val as any;
-    }
-  }
-  if (state.onehotSessionCol >= 0) {
-    opts.session = state.headers[state.onehotSessionCol]!;
-    for (let i = 0; i < state.rawData.length; i++) {
-      const val = (state.rawData[i]![state.onehotSessionCol] ?? '').trim();
-      (records[i] as any)[state.headers[state.onehotSessionCol]!] = val as any;
-    }
-  }
-  if (state.onehotWindowSize > 1) opts.windowSize = state.onehotWindowSize;
-  opts.windowType = state.onehotWindowType;
-
-  state.sequenceData = importOnehot(records, selectedCols, opts);
-  state.modelType = 'ctna';
-
-  if (state.format === 'group_onehot' && state.onehotGroupCol >= 0 && state.onehotActorCol >= 0) {
-    // Extract group labels: one per sequence (actor), using the group column.
-    // Each unique actor maps to one sequence; the group label for that actor is taken
-    // from the group column of their first row.
-    const groupColIdx = state.onehotGroupCol;
-    const actorColIdx = state.onehotActorCol;
-    const labels: string[] = [];
-    const seenActors = new Set<string>();
-    for (const row of state.rawData) {
-      const actorVal = (row[actorColIdx] ?? '').trim();
-      if (!seenActors.has(actorVal)) {
-        seenActors.add(actorVal);
-        const groupVal = (row[groupColIdx] ?? '').trim();
-        labels.push(groupVal);
-      }
-    }
-    // Ensure labels array matches sequenceData length
-    if (labels.length === state.sequenceData.length) {
-      state.groupLabels = labels;
-    } else {
-      state.groupLabels = labels.slice(0, state.sequenceData.length);
-    }
-  } else if (state.format === 'group_onehot') {
-    alert('Please select both an Actor column and a Group column for Group One-Hot analysis.');
-    throw new Error('cancelled');
-  } else {
-    state.groupLabels = null;
-  }
-}
-
