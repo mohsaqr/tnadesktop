@@ -79,7 +79,7 @@ async function exportPng() {
   try {
     const canvas = await html2canvas(networkEl, { backgroundColor: '#fff', scale: 1.5 });
     const link = document.createElement('a');
-    link.download = 'tna-network.png';
+    link.download = 'dynalytics-network.png';
     link.href = canvas.toDataURL('image/png');
     link.click();
   } catch (err) {
@@ -88,7 +88,7 @@ async function exportPng() {
     const data = new XMLSerializer().serializeToString(svg);
     const blob = new Blob([data], { type: 'image/svg+xml' });
     const link = document.createElement('a');
-    link.download = 'tna-network.svg';
+    link.download = 'dynalytics-network.svg';
     link.href = URL.createObjectURL(blob);
     link.click();
   }
@@ -112,7 +112,7 @@ function exportCentralitiesCsv(model: TNA, cent: CentralityResult) {
           csv += '\n';
         }
       }
-      downloadText(csv, 'tna-centralities-groups.csv', 'text/csv');
+      downloadText(csv, 'dynalytics-centralities-groups.csv', 'text/csv');
       return;
     }
   }
@@ -125,7 +125,7 @@ function exportCentralitiesCsv(model: TNA, cent: CentralityResult) {
     }
     csv += '\n';
   }
-  downloadText(csv, 'tna-centralities.csv', 'text/csv');
+  downloadText(csv, 'dynalytics-centralities.csv', 'text/csv');
 }
 
 function exportWeightsCsv(model: TNA) {
@@ -148,7 +148,7 @@ function exportWeightsCsv(model: TNA) {
         }
         csv += '\n';
       }
-      downloadText(csv, 'tna-weights-groups.csv', 'text/csv');
+      downloadText(csv, 'dynalytics-weights-groups.csv', 'text/csv');
       return;
     }
   }
@@ -161,7 +161,7 @@ function exportWeightsCsv(model: TNA) {
     }
     csv += '\n';
   }
-  downloadText(csv, 'tna-weights.csv', 'text/csv');
+  downloadText(csv, 'dynalytics-weights.csv', 'text/csv');
 }
 
 function showProgressOverlay(message: string): HTMLElement {
@@ -292,7 +292,7 @@ async function exportHtml(model: TNA, cent: CentralityResult, onlyVisited: boole
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TNA Analysis Report</title>
+<title>Dynalytics Analysis Report</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 1100px; margin: 0 auto; padding: 2rem; color: #1a1a1a; line-height: 1.5; }
   h1 { border-bottom: 2px solid #333; padding-bottom: .4em; }
@@ -309,7 +309,7 @@ async function exportHtml(model: TNA, cent: CentralityResult, onlyVisited: boole
 </style>
 </head>
 <body>
-<h1>TNA Analysis Report</h1>
+<h1>Dynalytics Analysis Report</h1>
 <p class="meta">${metaInfo}</p>
 
 ${tablesHtml}
@@ -318,7 +318,7 @@ ${imagesHtml}
 </body>
 </html>`;
 
-    downloadText(html, 'tna-report.html', 'text/html');
+    downloadText(html, 'dynalytics-report.html', 'text/html');
   } finally {
     overlay.remove();
   }
@@ -351,7 +351,7 @@ async function exportPdf(model: TNA, cent: CentralityResult, onlyVisited: boolea
 
     // Title page
     doc.setFontSize(24);
-    doc.text('TNA Analysis Report', 20, 30);
+    doc.text('Dynalytics Analysis Report', 20, 30);
     doc.setFontSize(12);
     doc.text(`Model: ${model.type}`, 20, 45);
     doc.text(`States: ${model.labels.length}`, 20, 52);
@@ -469,7 +469,7 @@ async function exportPdf(model: TNA, cent: CentralityResult, onlyVisited: boolea
       }
     }
 
-    doc.save('tna-report.pdf');
+    doc.save('dynalytics-report.pdf');
   } finally {
     overlay.remove();
   }
@@ -519,7 +519,7 @@ export function addTabExportBar(container: HTMLElement, tabLabel: string) {
       const html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${tabLabel} — TNA</title>
+<title>${tabLabel} — Dynalytics</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 1100px; margin: 0 auto; padding: 2rem; color: #1a1a1a; }
   h1 { border-bottom: 2px solid #333; padding-bottom: .4em; }
@@ -533,7 +533,7 @@ export function addTabExportBar(container: HTMLElement, tabLabel: string) {
 ${imagesHtml}
 </body></html>`;
 
-      downloadText(html, `tna-${slug}.html`, 'text/html');
+      downloadText(html, `dynalytics-${slug}.html`, 'text/html');
     } finally { overlay.remove(); }
   });
 
@@ -568,7 +568,7 @@ ${imagesHtml}
         } catch { /* skip */ }
       }
 
-      doc.save(`tna-${slug}.pdf`);
+      doc.save(`dynalytics-${slug}.pdf`);
     } finally { overlay.remove(); }
   });
 }

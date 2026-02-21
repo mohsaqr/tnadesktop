@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Default capabilities for TNA Desktop",
+  "description": "Default capabilities for Dynalytics Desktop",
   "windows": ["*"],
   "permissions": [
     "core:default",

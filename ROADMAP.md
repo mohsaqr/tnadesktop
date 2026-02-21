@@ -1,6 +1,6 @@
-# TNA Desktop — Feature Roadmap
+# Dynalytics Desktop — Feature Roadmap
 
-A phased plan for expanding TNA Desktop from its current core analysis capabilities to full feature parity with the `tnaj` library (and by extension, the R TNA package). Each phase builds on the previous, and every feature targets numerical equivalence with R TNA.
+A phased plan for expanding Dynalytics Desktop from its current core analysis capabilities to full feature parity with the `tnaj` library (and by extension, the R TNA package). Each phase builds on the previous, and every feature targets numerical equivalence with R TNA.
 
 ---
 

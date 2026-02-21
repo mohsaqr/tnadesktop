@@ -8,6 +8,7 @@ import { parseFile, wideToSequences, longToSequences, guessColumns, guessEdgeLis
 import { clearGroupAnalysisData } from './dashboard';
 import { erdosRenyi, barabasiAlbert, wattsStrogatz, stochasticBlockModel, matrixToEdgeRows } from '../analysis/random-networks';
 import type { GeneratorResult } from '../analysis/random-networks';
+import { simulateLongData, simulateOnehotData } from '../analysis/simulate';
 import sampleCsv from '../sample-data.csv?raw';
 
 function escHtml(s: string): string {
@@ -16,11 +17,15 @@ function escHtml(s: string): string {
 
 /**
  * Detect binary columns (all values 0 or 1) from raw data.
+ * Excludes columns whose headers look like metadata (id, actor, group, time, etc.).
  */
 function detectBinaryCols(headers: string[], rawData: string[][]): number[] {
+  const metaPattern = /^(id|actor|group|course|time|date|timestamp|session|achiever|user|name|student|subject|seq)$/i;
   const binaryCols: number[] = [];
   const sample = rawData.slice(0, 50);
   for (let c = 0; c < headers.length; c++) {
+    // Skip columns whose header matches common metadata names
+    if (metaPattern.test(headers[c]!.trim())) continue;
     const allBinary = sample.every(row => {
       const v = (row[c] ?? '').trim();
       return v === '0' || v === '1' || v === '';
@@ -64,82 +69,56 @@ export function renderLoadPanel(container: HTMLElement) {
     renderWelcomePage(panel);
   } else {
     // ─── File loaded: show format tabs + options + table + analyze ───
-    renderDropZone(panel);
     renderFileInfo(panel);
     renderFormatTabs(panel);
     renderFormatOptions(panel);
     renderAnalyzeButton(panel);
     renderPreviewTable(panel);
-    // ─── Generate Random Network (below data when file is loaded) ───
-    renderGenerateNetworkPanel(panel);
   }
 }
 
 function renderWelcomePage(panel: HTMLElement) {
   const welcome = document.createElement('div');
-  welcome.className = 'welcome-landing';
+  welcome.className = 'welcome-entry';
 
   welcome.innerHTML = `
-    <div class="welcome-hero">
-      <h1 class="welcome-title">Welcome to TNA Desktop</h1>
-      <p class="welcome-subtitle">Upload a CSV file or load sample data to get started with Transition Network Analysis</p>
-      <div class="welcome-buttons">
-        <button class="welcome-btn welcome-btn-sample" id="welcome-sample-btn">
-          <span class="welcome-btn-icon">&#9654;</span>
-          Load Sample Data
-        </button>
-        <button class="welcome-btn welcome-btn-upload" id="welcome-upload-btn">
-          <span class="welcome-btn-icon">&#128194;</span>
-          Upload CSV
-        </button>
-      </div>
-      <div class="welcome-drop-hint" id="welcome-drop-area">
-        or drag &amp; drop a file here (.csv, .xlsx, .xls)
+    <h1>Welcome to Dynalytics</h1>
+    <p class="subtitle">Analytics of Dynamics</p>
+    <div class="export-option" id="welcome-upload-btn">
+      <div class="icon">&#128194;</div>
+      <div class="info">
+        <h4>Upload File</h4>
+        <p>Import a CSV, XLSX, or XLS file</p>
       </div>
     </div>
-
-    <div id="gen-network-placeholder"></div>
-
-    <div class="welcome-cards">
-      <div class="welcome-card">
-        <h3 class="welcome-card-title">How to Get Started</h3>
-        <ol class="welcome-steps">
-          <li><strong>Load your data</strong> &mdash; Upload a CSV file or use the built-in sample dataset</li>
-          <li><strong>Choose a format</strong> &mdash; Select Wide, Long, One-Hot, or Group One-Hot</li>
-          <li><strong>Configure columns</strong> &mdash; Map your columns to Actor, Time, Action, and Group</li>
-          <li><strong>Analyze</strong> &mdash; Build transition networks, compute centralities, detect communities, and more</li>
-        </ol>
+    <div class="export-option" id="welcome-sample-btn">
+      <div class="icon">&#128202;</div>
+      <div class="info">
+        <h4>Load Sample Data</h4>
+        <p>Try TNA with the built-in group regulation dataset</p>
       </div>
-
-      <div class="welcome-card">
-        <h3 class="welcome-card-title">Your Data Should Include</h3>
-        <div class="welcome-formats">
-          <div class="welcome-format">
-            <div class="welcome-format-name">Wide Format</div>
-            <div class="welcome-format-desc">Each row is one sequence. Columns are time steps with state values.</div>
-          </div>
-          <div class="welcome-format">
-            <div class="welcome-format-name">Long Format</div>
-            <div class="welcome-format-desc">Each row is one event with Actor/ID, Time, and Action columns.</div>
-          </div>
-          <div class="welcome-format">
-            <div class="welcome-format-name">One-Hot Format</div>
-            <div class="welcome-format-desc">Binary (0/1) columns indicating state presence at each time step.</div>
-          </div>
-          <div class="welcome-format">
-            <div class="welcome-format-name">Group One-Hot</div>
-            <div class="welcome-format-desc">One-Hot with an actor/group column for per-group analysis.</div>
-          </div>
-        </div>
+    </div>
+    <p class="welcome-generate-title">Generate Random Data</p>
+    <div class="welcome-generate-row">
+      <div class="welcome-generate-card" id="welcome-generate-btn">
+        <div class="icon">&#128279;</div>
+        <div class="label">Random Network</div>
       </div>
+      <div class="welcome-generate-card" id="welcome-gen-long-btn">
+        <div class="icon">&#128200;</div>
+        <div class="label">Long Data</div>
+      </div>
+      <div class="welcome-generate-card" id="welcome-gen-onehot-btn">
+        <div class="icon">&#9638;</div>
+        <div class="label">One-Hot Data</div>
+      </div>
+    </div>
+    <div class="welcome-drop-hint" id="welcome-drop-area">
+      or drag &amp; drop a file anywhere
     </div>
   `;
 
   panel.appendChild(welcome);
-
-  // ─── Generate Random Network (inside welcome page, between hero and info cards) ───
-  const genPlaceholder = welcome.querySelector('#gen-network-placeholder') as HTMLElement;
-  if (genPlaceholder) renderGenerateNetworkPanel(genPlaceholder);
 
   // Hidden file input
   const fileInput = document.createElement('input');
@@ -152,6 +131,9 @@ function renderWelcomePage(panel: HTMLElement) {
   // Wire events
   welcome.querySelector('#welcome-sample-btn')!.addEventListener('click', loadSampleData);
   welcome.querySelector('#welcome-upload-btn')!.addEventListener('click', () => fileInput.click());
+  welcome.querySelector('#welcome-generate-btn')!.addEventListener('click', showGenerateNetworkModal);
+  welcome.querySelector('#welcome-gen-long-btn')!.addEventListener('click', () => showGenerateDataModal('long'));
+  welcome.querySelector('#welcome-gen-onehot-btn')!.addEventListener('click', () => showGenerateDataModal('onehot'));
 
   const dropArea = welcome.querySelector('#welcome-drop-area')!;
   dropArea.addEventListener('click', () => fileInput.click());
@@ -175,59 +157,332 @@ function renderWelcomePage(panel: HTMLElement) {
   });
 }
 
-function renderDropZone(panel: HTMLElement) {
-  const zone = document.createElement('div');
-  zone.className = 'load-drop-zone';
-  zone.innerHTML = `
-    <div class="load-drop-area" id="load-drop-area">
-      <div class="drop-zone-inner">
-        <div class="icon">&#128194;</div>
-        <div>
-          <div class="label">Drag & drop a file here</div>
-          <div class="sublabel">or click to browse (.csv, .xlsx, .xls)</div>
+function showGenerateNetworkModal() {
+  const existing = document.querySelector('.modal-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal" style="width:480px">
+      <h3>Generate Random Network</h3>
+      <div class="generate-network-body">
+        <div class="generate-network-row">
+          <label>Model:</label>
+          <select id="gen-model">
+            <option value="er">Erdos-Renyi</option>
+            <option value="ba">Barabasi-Albert</option>
+            <option value="ws">Watts-Strogatz</option>
+            <option value="sbm">Stochastic Block Model</option>
+          </select>
+        </div>
+        <div class="generate-network-params">
+          <div id="gen-er-params" class="gen-param-group">
+            <label>Edge prob:</label>
+            <input type="number" id="gen-er-p" value="0.15" min="0" max="1" step="0.01" style="width:70px">
+            <label style="display:flex;align-items:center;gap:4px">
+              <input type="checkbox" id="gen-er-weighted">
+              Weighted
+            </label>
+          </div>
+          <div id="gen-ba-params" class="gen-param-group" style="display:none">
+            <label>Edges/node:</label>
+            <input type="number" id="gen-ba-m" value="2" min="1" max="20" style="width:60px">
+          </div>
+          <div id="gen-ws-params" class="gen-param-group" style="display:none">
+            <label>Neighbors (k):</label>
+            <input type="number" id="gen-ws-k" value="4" min="2" max="20" style="width:60px">
+            <label>Rewiring (beta):</label>
+            <input type="number" id="gen-ws-beta" value="0.3" min="0" max="1" step="0.05" style="width:70px">
+          </div>
+          <div id="gen-sbm-params" class="gen-param-group" style="display:none">
+            <label>Communities:</label>
+            <input type="number" id="gen-sbm-k" value="3" min="2" max="10" style="width:60px">
+            <label>P_in:</label>
+            <input type="number" id="gen-sbm-pin" value="0.3" min="0" max="1" step="0.01" style="width:70px">
+            <label>P_out:</label>
+            <input type="number" id="gen-sbm-pout" value="0.05" min="0" max="1" step="0.01" style="width:70px">
+          </div>
+        </div>
+        <div class="generate-network-row">
+          <label>Nodes:</label>
+          <input type="number" id="gen-nodes" value="30" min="3" max="200" style="width:60px">
+          <label style="display:flex;align-items:center;gap:4px">
+            <input type="checkbox" id="gen-directed" checked>
+            Directed
+          </label>
+          <label>Seed:</label>
+          <input type="number" id="gen-seed" value="42" min="0" style="width:60px">
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+          <button class="btn-primary" id="gen-analyze-btn">Generate &amp; Analyze</button>
         </div>
       </div>
-    </div>
-    <div class="load-drop-buttons">
-      <button class="btn-primary" id="load-open-btn">Open File</button>
-      <button class="btn-primary load-sample-btn" id="load-sample-btn">Sample Data</button>
+      <button class="modal-close" id="gen-modal-close">Cancel</button>
     </div>
   `;
-  panel.appendChild(zone);
+  document.body.appendChild(overlay);
 
-  // Hidden file input
-  const fileInput = document.createElement('input');
-  fileInput.type = 'file';
-  fileInput.accept = '.csv,.tsv,.txt,.xlsx,.xls';
-  fileInput.style.display = 'none';
-  fileInput.id = 'load-file-input';
-  panel.appendChild(fileInput);
-
-  const dropArea = zone.querySelector('#load-drop-area')!;
-  const openBtn = zone.querySelector('#load-open-btn')!;
-  const sampleBtn = zone.querySelector('#load-sample-btn')!;
-
-  dropArea.addEventListener('click', () => fileInput.click());
-  openBtn.addEventListener('click', () => fileInput.click());
-  sampleBtn.addEventListener('click', loadSampleData);
-
-  dropArea.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropArea.classList.add('drag-over');
+  // Dismiss on overlay click or Cancel
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
   });
-  dropArea.addEventListener('dragleave', () => {
-    dropArea.classList.remove('drag-over');
-  });
-  dropArea.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dropArea.classList.remove('drag-over');
-    const file = (e as DragEvent).dataTransfer?.files[0];
-    if (file) handleFile(file);
+  document.getElementById('gen-modal-close')!.addEventListener('click', () => overlay.remove());
+
+  // Wire model selector to show/hide param groups
+  const modelSel = document.getElementById('gen-model') as HTMLSelectElement;
+  const dirCheck = document.getElementById('gen-directed') as HTMLInputElement;
+  modelSel.addEventListener('change', () => {
+    const m = modelSel.value;
+    document.getElementById('gen-er-params')!.style.display = m === 'er' ? '' : 'none';
+    document.getElementById('gen-ba-params')!.style.display = m === 'ba' ? '' : 'none';
+    document.getElementById('gen-ws-params')!.style.display = m === 'ws' ? '' : 'none';
+    document.getElementById('gen-sbm-params')!.style.display = m === 'sbm' ? '' : 'none';
+    // Watts-Strogatz is always undirected
+    if (m === 'ws') { dirCheck.checked = false; dirCheck.disabled = true; }
+    else { dirCheck.disabled = false; }
   });
 
-  fileInput.addEventListener('change', () => {
-    const file = fileInput.files?.[0];
-    if (file) handleFile(file);
+  document.getElementById('gen-analyze-btn')!.addEventListener('click', () => {
+    try {
+      const model = modelSel.value;
+      const n = parseInt((document.getElementById('gen-nodes') as HTMLInputElement).value) || 30;
+      const directed = dirCheck.checked;
+      const seed = parseInt((document.getElementById('gen-seed') as HTMLInputElement).value) || 42;
+
+      let result: GeneratorResult;
+      let description: string;
+
+      switch (model) {
+        case 'er': {
+          const p = parseFloat((document.getElementById('gen-er-p') as HTMLInputElement).value) || 0.15;
+          const weighted = (document.getElementById('gen-er-weighted') as HTMLInputElement).checked;
+          result = erdosRenyi({ n, p, directed, weighted, seed });
+          description = `Generated: Erdos-Renyi (n=${n}, p=${p})`;
+          break;
+        }
+        case 'ba': {
+          const m = parseInt((document.getElementById('gen-ba-m') as HTMLInputElement).value) || 2;
+          result = barabasiAlbert({ n, m, directed, seed });
+          description = `Generated: Barabasi-Albert (n=${n}, m=${m})`;
+          break;
+        }
+        case 'ws': {
+          const k = parseInt((document.getElementById('gen-ws-k') as HTMLInputElement).value) || 4;
+          const beta = parseFloat((document.getElementById('gen-ws-beta') as HTMLInputElement).value) || 0.3;
+          result = wattsStrogatz({ n, k, beta, seed });
+          description = `Generated: Watts-Strogatz (n=${n}, k=${k}, beta=${beta})`;
+          break;
+        }
+        case 'sbm': {
+          const k = parseInt((document.getElementById('gen-sbm-k') as HTMLInputElement).value) || 3;
+          const pIn = parseFloat((document.getElementById('gen-sbm-pin') as HTMLInputElement).value) || 0.3;
+          const pOut = parseFloat((document.getElementById('gen-sbm-pout') as HTMLInputElement).value) || 0.05;
+          result = stochasticBlockModel({ n, k, pIn, pOut, directed, seed });
+          description = `Generated: SBM (n=${n}, k=${k}, p_in=${pIn}, p_out=${pOut})`;
+          break;
+        }
+        default:
+          return;
+      }
+
+      overlay.remove();
+
+      // Convert matrix to edge list rows for rawData
+      const edgeRows = matrixToEdgeRows(result.matrix, result.labels, directed);
+
+      // Clear any stale group analysis and reset network settings for new dataset
+      clearGroupAnalysisData();
+      state.networkSettings = defaultNetworkSettings();
+      clearLayoutCache();
+
+      // Set state for SNA mode
+      state.rawData = edgeRows;
+      state.headers = ['From', 'To', 'Weight'];
+      state.format = 'edgelist';
+      state.snaFromCol = 0;
+      state.snaToCol = 1;
+      state.snaWeightCol = 2;
+      state.snaDirected = directed;
+      state.filename = description;
+      state.sequenceData = [[]]; // sentinel
+      state.groupLabels = null;
+      state.activeGroup = null;
+      state.activeMode = 'sna';
+      state.activeSubTab = 'network';
+      // SNA defaults: thinner edges, no edge labels
+      state.networkSettings.edgeWidthMax = 2;
+      state.networkSettings.edgeWidthMin = 0.2;
+      state.networkSettings.showEdgeLabels = false;
+      render();
+    } catch (err) {
+      alert('Error generating network: ' + (err as Error).message);
+    }
+  });
+}
+
+function showGenerateDataModal(format: 'long' | 'onehot') {
+  const existing = document.querySelector('.modal-overlay');
+  if (existing) existing.remove();
+
+  const title = format === 'long' ? 'Generate Long Data' : 'Generate One-Hot Data';
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal" style="width:480px">
+      <h3>${title}</h3>
+      <div class="generate-network-body">
+        <div class="generate-network-row">
+          <label>Rows:</label>
+          <input type="number" id="sim-rows" value="1000" min="2" max="100000" style="width:80px">
+          <label>Actors:</label>
+          <input type="number" id="sim-actors" value="50" min="1" max="500" style="width:60px">
+          <label>States:</label>
+          <input type="number" id="sim-nstates" value="9" min="2" max="26" style="width:60px">
+        </div>
+        <div class="generate-network-row">
+          <label>Seed:</label>
+          <input type="number" id="sim-seed" value="42" min="0" style="width:60px">
+          <label style="display:flex;align-items:center;gap:4px">
+            <input type="checkbox" id="sim-use-groups">
+            Group column
+          </label>
+          <span id="sim-groups-wrap" style="display:none">
+            <label>Groups:</label>
+            <input type="number" id="sim-groups" value="5" min="2" max="50" style="width:60px">
+          </span>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+          <button class="btn-primary" id="sim-generate-btn">Generate &amp; Analyze</button>
+        </div>
+      </div>
+      <button class="modal-close" id="sim-modal-close">Cancel</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+  document.getElementById('sim-modal-close')!.addEventListener('click', () => overlay.remove());
+
+  // Toggle groups input visibility
+  const useGroupsCheck = document.getElementById('sim-use-groups') as HTMLInputElement;
+  const groupsWrap = document.getElementById('sim-groups-wrap')!;
+  useGroupsCheck.addEventListener('change', () => {
+    groupsWrap.style.display = useGroupsCheck.checked ? '' : 'none';
+  });
+
+  document.getElementById('sim-generate-btn')!.addEventListener('click', () => {
+    try {
+      const useGroups = useGroupsCheck.checked;
+      const nGroups = useGroups ? (parseInt((document.getElementById('sim-groups') as HTMLInputElement).value) || 5) : 1;
+      const totalRows = parseInt((document.getElementById('sim-rows') as HTMLInputElement).value) || 1000;
+      const nActors = parseInt((document.getElementById('sim-actors') as HTMLInputElement).value) || 50;
+      const nStates = parseInt((document.getElementById('sim-nstates') as HTMLInputElement).value) || 9;
+      const seed = parseInt((document.getElementById('sim-seed') as HTMLInputElement).value) || 42;
+
+      // Derive per-actor sequence length from total rows / actors
+      const seqLen = Math.max(1, Math.round(totalRows / nActors));
+
+      // Distribute actors across groups
+      const actorsPerGroup = Math.max(1, Math.round(nActors / nGroups));
+
+      const params = {
+        nGroups,
+        nActors: actorsPerGroup,
+        nStates,
+        seqLengthRange: [seqLen, seqLen] as [number, number],
+        seed,
+      };
+
+      const result = format === 'long'
+        ? simulateLongData(params)
+        : simulateOnehotData(params);
+
+      overlay.remove();
+
+      // Set raw data into state
+      state.filename = format === 'long'
+        ? `simulated_long_${nActors}a.csv`
+        : `simulated_onehot_${nActors}a.csv`;
+      state.headers = result.headers;
+      state.rawData = result.rows;
+
+      // Clear stale analysis state
+      clearGroupAnalysisData();
+      state.networkSettings = defaultNetworkSettings();
+      clearLayoutCache();
+
+      if (format === 'long') {
+        // Build sequences directly and go to analysis
+        const idCol = result.headers.indexOf('Actor');
+        const timeCol = result.headers.indexOf('Time');
+        const stateCol = result.headers.indexOf('Action');
+        const groupCol = useGroups ? result.headers.indexOf('Group') : -1;
+        state.format = 'long';
+        state.longIdCol = idCol;
+        state.longTimeCol = timeCol;
+        state.longStateCol = stateCol;
+        state.longGroupCol = groupCol;
+        const seqResult = longToSequences(result.rows, idCol, timeCol, stateCol, groupCol);
+        state.sequenceData = seqResult.sequences;
+        state.groupLabels = seqResult.groups;
+      } else {
+        // One-hot: build records and import
+        state.format = 'onehot';
+        const stateCols = result.headers.filter(h => !['Actor', 'Group', 'Time'].includes(h));
+        state.onehotCols = stateCols;
+
+        const records: Record<string, number>[] = result.rows.map(row => {
+          const rec: Record<string, number> = {};
+          for (let c = 0; c < result.headers.length; c++) {
+            rec[result.headers[c]!] = parseInt(row[c] ?? '0', 10) || 0;
+          }
+          // Actor column needs string value for grouping
+          const actorIdx = result.headers.indexOf('Actor');
+          if (actorIdx >= 0) (rec as any)['Actor'] = (row[actorIdx] ?? '').trim();
+          return rec;
+        });
+
+        const opts: { actor?: string; windowSize?: number; windowType?: 'tumbling' | 'sliding' } = {};
+        opts.actor = 'Actor';
+        state.sequenceData = importOnehot(records, stateCols, opts);
+        state.modelType = 'ctna';
+
+        if (useGroups) {
+          // Extract group labels: one per actor
+          const actorIdx = result.headers.indexOf('Actor');
+          const groupIdx = result.headers.indexOf('Group');
+          const labels: string[] = [];
+          const seenActors = new Set<string>();
+          for (const row of result.rows) {
+            const actorVal = (row[actorIdx] ?? '').trim();
+            if (!seenActors.has(actorVal)) {
+              seenActors.add(actorVal);
+              labels.push((row[groupIdx] ?? '').trim());
+            }
+          }
+          state.groupLabels = labels.slice(0, state.sequenceData.length);
+        } else {
+          state.groupLabels = null;
+        }
+      }
+
+      if (!state.sequenceData || state.sequenceData.length === 0) {
+        alert('No valid sequences generated.');
+        return;
+      }
+
+      // Go directly to analysis
+      state.activeGroup = null;
+      state.activeMode = 'single';
+      state.activeSubTab = 'network';
+      render();
+    } catch (err) {
+      alert('Error generating data: ' + (err as Error).message);
+    }
   });
 }
 
@@ -288,14 +543,12 @@ function rerenderPanel() {
   const existing = document.querySelector('.load-panel');
   if (existing) {
     existing.innerHTML = '';
-    renderDropZone(existing as HTMLElement);
     if (state.rawData.length > 0) {
       renderFileInfo(existing as HTMLElement);
       renderFormatTabs(existing as HTMLElement);
       renderFormatOptions(existing as HTMLElement);
       renderAnalyzeButton(existing as HTMLElement);
       renderPreviewTable(existing as HTMLElement);
-      renderGenerateNetworkPanel(existing as HTMLElement);
     }
   }
 }
@@ -728,158 +981,3 @@ function analyzeOnehot() {
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Generate Random Network panel
-// ═══════════════════════════════════════════════════════════
-
-function renderGenerateNetworkPanel(panel: HTMLElement) {
-  const section = document.createElement('div');
-  section.className = 'generate-network-section';
-  section.innerHTML = `
-    <div class="generate-network-header">
-      <span class="generate-network-title">Generate Random Network</span>
-    </div>
-    <div class="generate-network-body">
-      <div class="generate-network-row">
-        <label>Model:</label>
-        <select id="gen-model">
-          <option value="er">Erdos-Renyi</option>
-          <option value="ba">Barabasi-Albert</option>
-          <option value="ws">Watts-Strogatz</option>
-          <option value="sbm">Stochastic Block Model</option>
-        </select>
-        <label>Nodes:</label>
-        <input type="number" id="gen-nodes" value="30" min="3" max="200" style="width:60px">
-        <label style="display:flex;align-items:center;gap:4px">
-          <input type="checkbox" id="gen-directed" checked>
-          Directed
-        </label>
-        <label>Seed:</label>
-        <input type="number" id="gen-seed" value="42" min="0" style="width:60px">
-      </div>
-      <div class="generate-network-params">
-        <div id="gen-er-params" class="gen-param-group">
-          <label>Edge prob:</label>
-          <input type="number" id="gen-er-p" value="0.15" min="0" max="1" step="0.01" style="width:70px">
-          <label style="display:flex;align-items:center;gap:4px">
-            <input type="checkbox" id="gen-er-weighted">
-            Weighted
-          </label>
-        </div>
-        <div id="gen-ba-params" class="gen-param-group" style="display:none">
-          <label>Edges/node:</label>
-          <input type="number" id="gen-ba-m" value="2" min="1" max="20" style="width:60px">
-        </div>
-        <div id="gen-ws-params" class="gen-param-group" style="display:none">
-          <label>Neighbors (k):</label>
-          <input type="number" id="gen-ws-k" value="4" min="2" max="20" style="width:60px">
-          <label>Rewiring (beta):</label>
-          <input type="number" id="gen-ws-beta" value="0.3" min="0" max="1" step="0.05" style="width:70px">
-        </div>
-        <div id="gen-sbm-params" class="gen-param-group" style="display:none">
-          <label>Communities:</label>
-          <input type="number" id="gen-sbm-k" value="3" min="2" max="10" style="width:60px">
-          <label>P_in:</label>
-          <input type="number" id="gen-sbm-pin" value="0.3" min="0" max="1" step="0.01" style="width:70px">
-          <label>P_out:</label>
-          <input type="number" id="gen-sbm-pout" value="0.05" min="0" max="1" step="0.01" style="width:70px">
-        </div>
-      </div>
-      <button class="btn-primary" id="gen-analyze-btn">Generate &amp; Analyze</button>
-    </div>
-  `;
-  panel.appendChild(section);
-
-  // Wire model selector to show/hide param groups
-  setTimeout(() => {
-    const modelSel = document.getElementById('gen-model') as HTMLSelectElement | null;
-    const dirCheck = document.getElementById('gen-directed') as HTMLInputElement | null;
-    if (modelSel) {
-      modelSel.addEventListener('change', () => {
-        const m = modelSel.value;
-        document.getElementById('gen-er-params')!.style.display = m === 'er' ? '' : 'none';
-        document.getElementById('gen-ba-params')!.style.display = m === 'ba' ? '' : 'none';
-        document.getElementById('gen-ws-params')!.style.display = m === 'ws' ? '' : 'none';
-        document.getElementById('gen-sbm-params')!.style.display = m === 'sbm' ? '' : 'none';
-        // Watts-Strogatz is always undirected
-        if (m === 'ws' && dirCheck) { dirCheck.checked = false; dirCheck.disabled = true; }
-        else if (dirCheck) { dirCheck.disabled = false; }
-      });
-    }
-
-    document.getElementById('gen-analyze-btn')?.addEventListener('click', () => {
-      try {
-        const model = (document.getElementById('gen-model') as HTMLSelectElement).value;
-        const n = parseInt((document.getElementById('gen-nodes') as HTMLInputElement).value) || 30;
-        const directed = (document.getElementById('gen-directed') as HTMLInputElement).checked;
-        const seed = parseInt((document.getElementById('gen-seed') as HTMLInputElement).value) || 42;
-
-        let result: GeneratorResult;
-        let description: string;
-
-        switch (model) {
-          case 'er': {
-            const p = parseFloat((document.getElementById('gen-er-p') as HTMLInputElement).value) || 0.15;
-            const weighted = (document.getElementById('gen-er-weighted') as HTMLInputElement).checked;
-            result = erdosRenyi({ n, p, directed, weighted, seed });
-            description = `Generated: Erdos-Renyi (n=${n}, p=${p})`;
-            break;
-          }
-          case 'ba': {
-            const m = parseInt((document.getElementById('gen-ba-m') as HTMLInputElement).value) || 2;
-            result = barabasiAlbert({ n, m, directed, seed });
-            description = `Generated: Barabasi-Albert (n=${n}, m=${m})`;
-            break;
-          }
-          case 'ws': {
-            const k = parseInt((document.getElementById('gen-ws-k') as HTMLInputElement).value) || 4;
-            const beta = parseFloat((document.getElementById('gen-ws-beta') as HTMLInputElement).value) || 0.3;
-            result = wattsStrogatz({ n, k, beta, seed });
-            description = `Generated: Watts-Strogatz (n=${n}, k=${k}, beta=${beta})`;
-            break;
-          }
-          case 'sbm': {
-            const k = parseInt((document.getElementById('gen-sbm-k') as HTMLInputElement).value) || 3;
-            const pIn = parseFloat((document.getElementById('gen-sbm-pin') as HTMLInputElement).value) || 0.3;
-            const pOut = parseFloat((document.getElementById('gen-sbm-pout') as HTMLInputElement).value) || 0.05;
-            result = stochasticBlockModel({ n, k, pIn, pOut, directed, seed });
-            description = `Generated: SBM (n=${n}, k=${k}, p_in=${pIn}, p_out=${pOut})`;
-            break;
-          }
-          default:
-            return;
-        }
-
-        // Convert matrix to edge list rows for rawData
-        const edgeRows = matrixToEdgeRows(result.matrix, result.labels, directed);
-
-        // Clear any stale group analysis and reset network settings for new dataset
-        clearGroupAnalysisData();
-        state.networkSettings = defaultNetworkSettings();
-        clearLayoutCache();
-
-        // Set state for SNA mode
-        state.rawData = edgeRows;
-        state.headers = ['From', 'To', 'Weight'];
-        state.format = 'edgelist';
-        state.snaFromCol = 0;
-        state.snaToCol = 1;
-        state.snaWeightCol = 2;
-        state.snaDirected = directed;
-        state.filename = description;
-        state.sequenceData = [[]]; // sentinel
-        state.groupLabels = null;
-        state.activeGroup = null;
-        state.activeMode = 'sna';
-        state.activeSubTab = 'network';
-        // SNA defaults: thinner edges, no edge labels
-        state.networkSettings.edgeWidthMax = 2;
-        state.networkSettings.edgeWidthMin = 0.2;
-        state.networkSettings.showEdgeLabels = false;
-        render();
-      } catch (err) {
-        alert('Error generating network: ' + (err as Error).message);
-      }
-    });
-  }, 0);
-}

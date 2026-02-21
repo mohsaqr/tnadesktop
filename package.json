@@ -1,7 +1,7 @@
 {
-  "name": "tna-desktop",
+  "name": "dynalytics-desktop",
   "version": "0.1.0",
-  "description": "TNA Desktop – Transition Network Analysis for researchers",
+  "description": "Dynalytics Desktop – Analytics of Dynamics",
   "private": true,
   "type": "module",
   "scripts": {

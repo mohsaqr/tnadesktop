@@ -1,9 +1,9 @@
 /**
- * TNA Desktop – Main entry point.
+ * Dynalytics Desktop – Main entry point.
  * Manages app state and routes between views: welcome → preview → dashboard.
  */
 import type { TNA, GroupTNA, CentralityResult, CommunityResult, CentralityMeasure, CommunityMethod, SequenceData } from 'tnaj';
-import { tna, ftna, ctna, atna, centralities, prune, summary, AVAILABLE_MEASURES, AVAILABLE_METHODS, groupTna, groupFtna, groupCtna, groupAtna, isGroupTNA, clusterSequences, importOnehot, buildModel as tnajBuildModel } from 'tnaj';
+import { tna, ftna, ctna, atna, centralities, prune, summary, AVAILABLE_MEASURES, AVAILABLE_METHODS, groupTna, groupFtna, groupCtna, groupAtna, isGroupTNA, clusterSequences, clusterData, importOnehot, buildModel as tnajBuildModel } from 'tnaj';
 import { edgeListToMatrix } from './data';
 import { detectCommunities } from './analysis/communities';
 import { computePageRank } from './analysis/pagerank';
@@ -166,7 +166,7 @@ export interface AppState {
   centralityLoops: boolean;
   activeSecondaryTab: string;
   clusterK: number;
-  clusterDissimilarity: 'hamming' | 'lv' | 'osa' | 'lcs';
+  clusterDissimilarity: 'hamming' | 'lv' | 'osa' | 'dl' | 'lcs' | 'qgram' | 'cosine' | 'jaccard' | 'jw' | 'euclidean' | 'manhattan';
   snaFromCol: number;
   snaToCol: number;
   snaWeightCol: number;       // -1 = unweighted
@@ -303,14 +303,14 @@ export function computeSummary(model: TNA) {
   return summary(model);
 }
 
-export { AVAILABLE_MEASURES, AVAILABLE_METHODS, clusterSequences, prune, importOnehot };
+export { AVAILABLE_MEASURES, AVAILABLE_METHODS, clusterSequences, clusterData, prune, importOnehot };
 
 // ═══════════════════════════════════════════════════════════
 //  State persistence
 // ═══════════════════════════════════════════════════════════
-const STORAGE_KEY = 'tna-desktop-state';
-const DATA_STORAGE_KEY = 'tna-desktop-data';
-const VERSION_KEY = 'tna-desktop-settings-version';
+const STORAGE_KEY = 'dynalytics-desktop-state';
+const DATA_STORAGE_KEY = 'dynalytics-desktop-data';
+const VERSION_KEY = 'dynalytics-desktop-settings-version';
 
 /** Whether the last data save succeeded (false = quota exceeded). */
 let dataPersisted = true;

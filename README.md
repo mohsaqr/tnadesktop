@@ -1,6 +1,6 @@
-# TNA Desktop
+# Dynalytics Desktop
 
-Native desktop application for **Transition Network Analysis** (TNA) — analyze sequential data as transition networks with interactive visualizations.
+**Analytics of Dynamics** — analyze sequential data as transition networks with interactive visualizations.
 
 Built with [Tauri v2](https://v2.tauri.app/), [Vite](https://vite.dev/), TypeScript, and [D3.js](https://d3js.org/). Uses [tnaj](https://github.com/mohsaqr/tna-js) for TNA computations.
 
@@ -194,7 +194,7 @@ package.json              # Node dependencies
 
 ## Live Demo
 
-The app is deployed at **[saqr.me/tnadesktop](https://saqr.me/tnadesktop/)** via GitHub Pages, automatically updated on every push to `main`.
+The app is deployed at **[saqr.me/dynalytics](https://saqr.me/dynalytics/)** via GitHub Pages, automatically updated on every push to `main`.
 
 ## License
 

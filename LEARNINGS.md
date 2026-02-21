@@ -1,4 +1,4 @@
-# TNA Desktop Learnings
+# Dynalytics Desktop Learnings
 
 ## 2026-02-17
 
@@ -143,8 +143,8 @@ Every panel that displays a visualization or data table should have download but
 ### Deployment: GitHub Pages
 - Deployed via GitHub Actions workflow (`.github/workflows/deploy.yml`)
 - Build: `npx vite build` → uploads `dist/` as Pages artifact
-- Custom domain: `saqr.me/tnadesktop/` via `public/CNAME`
-- `vite.config.ts` sets `base: '/tnadesktop/'` in production for correct asset paths
+- Custom domain: `saqr.me/dynalytics/` via `public/CNAME`
+- `vite.config.ts` sets `base: '/dynalytics/'` in production for correct asset paths
 - `tnaj` dependency changed from `file:../tna-js` to `github:mohsaqr/tna-js` for CI compatibility
 - The tna-js `prepare` script (`tsup`) runs automatically when npm installs from GitHub
 - Pages configured as `build_type: "workflow"` (not legacy gh-pages branch)

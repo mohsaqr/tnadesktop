@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default capabilities for TNA Desktop","local":true,"windows":["*"],"permissions":["core:default","dialog:default","dialog:allow-open","dialog:allow-save","fs:default","fs:allow-read-file","fs:allow-write-file"]}}
+{"default":{"identifier":"default","description":"Default capabilities for Dynalytics Desktop","local":true,"windows":["*"],"permissions":["core:default","dialog:default","dialog:allow-open","dialog:allow-save","fs:default","fs:allow-read-file","fs:allow-write-file"]}}

@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicerapp/tauri/tauri-v2.x/crates/tauri-utils/schema.json",
-  "productName": "TNA Desktop",
+  "productName": "Dynalytics Desktop",
   "version": "0.1.0",
-  "identifier": "me.saqr.tna-desktop",
+  "identifier": "me.saqr.dynalytics-desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "TNA – Transition Network Analysis",
+        "title": "Dynalytics — Analytics of Dynamics",
         "width": 1400,
         "height": 900,
         "minWidth": 900,

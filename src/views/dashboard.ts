@@ -21,7 +21,7 @@ import { bootstrapTna } from '../analysis/bootstrap';
 import type { BootstrapOptions, BootstrapResult } from '../analysis/bootstrap';
 import { renderPatternsTab } from './patterns';
 import { renderIndicesTab, renderIdxHistView, renderIdxSummaryView } from './indices';
-import { renderClusteringSetup, renderGroupSetup, renderGroupGrid, renderCombinedCanvas, buildColumnGroups } from './clustering';
+import { showClusteringModal, renderGroupSetup, renderGroupGrid, renderCombinedCanvas, buildColumnGroups } from './clustering';
 import { renderMosaic, renderClusterMosaic, chiSquareTest } from './mosaic';
 import { renderCompareNetworksTab } from './compare-networks';
 import { estimateCS } from '../analysis/stability';
@@ -87,6 +87,10 @@ const GROUP_ONEHOT_TABS: SubTabDef[] = [
   { id: 'permutation', label: 'Permutation Test' },
   { id: 'compare-networks', label: 'Compare Networks' },
 ];
+
+// Clustering tabs (no 'setup' — modal-based)
+const CLUSTER_SEQ_TABS: SubTabDef[] = GROUP_TABS.filter(t => t.id !== 'setup');
+const CLUSTER_ONEHOT_TABS: SubTabDef[] = GROUP_ONEHOT_TABS.filter(t => t.id !== 'setup');
 
 const SNA_TABS: SubTabDef[] = [
   { id: 'network', label: 'Network Graph' },
@@ -192,6 +196,10 @@ export function getActiveGroupCents(): Map<string, CentralityResult> {
 function getSubTabs(): SubTabDef[] {
   switch (state.activeMode) {
     case 'single': return SINGLE_TABS;
+    case 'clustering': {
+      const isOnehot = state.format === 'onehot' || state.format === 'group_onehot';
+      return isOnehot ? CLUSTER_ONEHOT_TABS : CLUSTER_SEQ_TABS;
+    }
     case 'onehot': return ONEHOT_TABS;
     case 'group_onehot': return GROUP_ONEHOT_TABS;
     case 'sna': return SNA_TABS;
@@ -234,8 +242,17 @@ function switchMode(newMode: Mode) {
   } else {
     if (newMode === 'single' || newMode === 'onehot' || newMode === 'sna') {
       state.activeSubTab = 'network';
+    } else if (newMode === 'clustering') {
+      const groupsActive = isGroupAnalysisActive();
+      if (groupsActive) {
+        state.activeSubTab = 'network';
+      } else {
+        // No groups yet — open modal, default to network (modal will navigate on success)
+        state.activeSubTab = 'network';
+        setTimeout(() => showClusteringModal(), 50);
+      }
     } else {
-      // clustering, group, group_onehot
+      // group, group_onehot
       const groupsActive = isGroupAnalysisActive();
       // Auto-activate group analysis if group labels exist but groups not yet built
       if (!groupsActive && (newMode === 'group' || newMode === 'group_onehot') && state.groupLabels && state.groupLabels.length > 0) {
@@ -1052,7 +1069,7 @@ function buildTopNav(nav: HTMLElement) {
 
   const brand = document.createElement('span');
   brand.className = 'top-nav-brand';
-  brand.textContent = 'TNA Desktop';
+  brand.textContent = 'Dynalytics';
   nav.appendChild(brand);
 
   const items = document.createElement('div');
@@ -1074,7 +1091,8 @@ function buildTopNav(nav: HTMLElement) {
   // Sequence-based analysis dropdowns
   const isOnehotData = state.format === 'onehot' || state.format === 'group_onehot';
   items.appendChild(buildNavDropdown('single', 'Single Network', SINGLE_TABS, !hasData || isOnehotData));
-  items.appendChild(buildNavDropdown('clustering', 'Clustering', GROUP_TABS, !hasData || isOnehotData));
+  const clusterTabs = isOnehotData ? CLUSTER_ONEHOT_TABS : CLUSTER_SEQ_TABS;
+  items.appendChild(buildNavDropdown('clustering', 'Clustering', clusterTabs, !hasData));
   items.appendChild(buildNavDropdown('group', 'Group Analysis', GROUP_TABS, !hasData || !hasGroups || isOnehotData));
 
   // Separator before co-occurrence modes
@@ -1187,6 +1205,12 @@ function wireNavEvents() {
         }
         return;
       }
+      // Clustering: open modal directly when no groups built yet
+      if (ddMode === 'clustering' && !isGroupAnalysisActive()) {
+        closeAllDropdowns();
+        switchMode('clustering');
+        return;
+      }
       const wasOpen = dd.classList.contains('open');
       closeAllDropdowns();
       if (!wasOpen) dd.classList.add('open');
@@ -1202,6 +1226,15 @@ function wireNavEvents() {
         state.activeMode = mode;
         state.activeSubTab = subtab;
         state.activeSecondaryTab = '';  // Reset secondary tab on subtab change
+        // Clustering mode: open modal if groups not yet built
+        if (mode === 'clustering' && !isGroupAnalysisActive()) {
+          const dashboard = document.getElementById('dashboard');
+          if (dashboard) dashboard.classList.remove('data-mode');
+          updateNavActive();
+          saveState();
+          showClusteringModal();
+          return;
+        }
         // Auto-activate group analysis if group labels exist but groups not yet built
         if (!isGroupAnalysisActive() && (mode === 'group' || mode === 'group_onehot') && state.groupLabels && state.groupLabels.length > 0) {
           buildColumnGroups(state.networkSettings);
@@ -1298,11 +1331,11 @@ function updateNavActive() {
            : 'Single Network requires sequence data — current format is not compatible')
         : '';
     } else if (mode === 'clustering') {
-      trigger.disabled = !hasData || isOnehotData || isSnaData;
+      trigger.disabled = !hasData || isSnaData;
       trigger.title = trigger.disabled
-        ? (!hasData ? 'Load sequence data to perform cluster analysis'
-           : 'Clustering requires sequence data — current format is not compatible')
-        : '';
+        ? (!hasData ? 'Load data to perform cluster analysis'
+           : 'Clustering is not available for edge list data')
+        : (isOnehotData ? 'Cluster one-hot observations into groups' : 'Cluster sequences into groups');
     } else if (mode === 'group') {
       trigger.disabled = !hasData || !hasGroups || isOnehotData || isSnaData;
       trigger.title = trigger.disabled
@@ -1379,7 +1412,13 @@ function updateAll() {
 
     // If group analysis is active, rebuild group models with current settings
     if (isGroupAnalysisActive() && activeGroupLabels) {
-      const groupModel = buildGroupModel(activeGroupLabels);
+      // One-hot clustering builds its own GroupTNA (labels don't map to sequenceData),
+      // so reuse the stored model and only re-apply pruning/centralities.
+      const isOnehotClustering = activeGroupSource === 'clustering'
+        && (state.format === 'onehot' || state.format === 'group_onehot');
+      const groupModel = isOnehotClustering && activeGroupFullModel
+        ? activeGroupFullModel
+        : buildGroupModel(activeGroupLabels);
       const models = new Map<string, TNA>();
       const cents = new Map<string, CentralityResult>();
       for (const name of Object.keys(groupModel.models)) {
@@ -1390,7 +1429,7 @@ function updateAll() {
       }
       activeGroupModels = models;
       activeGroupCents = cents;
-      activeGroupFullModel = groupModel;
+      if (!isOnehotClustering) activeGroupFullModel = groupModel;
     }
 
     // Update summary — always single model, with a line if groups are active
@@ -1632,7 +1671,7 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
   } else {
     switch (sub) {
       case 'setup':
-        if (mode === 'clustering') renderClusteringSetup(tabWrapper, model, state.networkSettings);
+        if (mode === 'clustering') { showClusteringModal(); return; }
         else renderGroupSetup(tabWrapper, model, state.networkSettings);
         break;
       case 'network':
