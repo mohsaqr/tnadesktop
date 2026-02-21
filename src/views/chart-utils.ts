@@ -16,6 +16,8 @@ export interface DensityOpts {
   width?: number;
   height?: number;
   nPoints?: number;
+  /** Draw a vertical dashed mean line + label for each group. */
+  showMeans?: boolean;
 }
 
 /** Gaussian kernel density estimator with Silverman bandwidth. */
@@ -122,6 +124,35 @@ export function renderDensityPlot(
   g.append('g')
     .call(d3.axisLeft(y).ticks(4))
     .selectAll('text').attr('font-size', '9px');
+
+  // Optional mean lines
+  if (opts.showMeans) {
+    kdeData.forEach(gd => {
+      const finite = gd.values.filter(isFinite);
+      if (finite.length === 0) return;
+      const mn = finite.reduce((s, v) => s + v, 0) / finite.length;
+      if (!isFinite(mn)) return;
+      const mx = Math.max(0, Math.min(innerW, x(mn)));
+      g.append('line')
+        .attr('x1', mx).attr('x2', mx)
+        .attr('y1', 0).attr('y2', innerH)
+        .attr('stroke', gd.color).attr('stroke-width', 1.5)
+        .attr('stroke-dasharray', '4,3');
+      // White-backed value label
+      const label = mn.toFixed(3);
+      const lx = mx + 3;
+      g.append('text')
+        .attr('x', lx).attr('y', 8)
+        .attr('font-size', '8px').attr('font-weight', '600')
+        .attr('fill', 'white').attr('stroke', 'white').attr('stroke-width', 3)
+        .text(label);
+      g.append('text')
+        .attr('x', lx).attr('y', 8)
+        .attr('font-size', '8px').attr('font-weight', '600')
+        .attr('fill', gd.color)
+        .text(label);
+    });
+  }
 
   // Legend (top-right)
   const legend = g.append('g')

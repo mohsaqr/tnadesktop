@@ -33,7 +33,7 @@ import type { ReliabilityResult } from '../analysis/reliability';
 import { computeGraphMetrics } from '../analysis/graph-metrics';
 import type { StabilityResult } from '../analysis/stability';
 import { NODE_COLORS } from './colors';
-import { renderDonut, renderRadar, renderBoxPlots, renderForestPlot, renderGroupedForestPlot, renderDensityPlot, renderDensityWithMeanLine } from './chart-utils';
+import { renderDonut, renderRadar, renderBoxPlots, renderForestPlot, renderGroupedForestPlot, renderDensityPlot, renderDensityWithMeanLine, renderMeanSDBar } from './chart-utils';
 
 const ALL_MEASURES: string[] = [...AVAILABLE_MEASURES, 'PageRank'];
 import { showDataWizard, closeDataWizard } from './load-data';
@@ -5935,7 +5935,15 @@ function renderReliabilityTab(content: HTMLElement, model: TNA): void {
           result = reliabilityAnalysis(
             state.sequenceData!,
             state.modelType as 'tna' | 'ftna' | 'ctna' | 'atna',
-            { iter, split, atnaBeta: state.atnaBeta, seed: 42 },
+            {
+              iter, split, seed: 42,
+              atnaBeta:       state.atnaBeta,
+              scaling:        state.scaling || undefined,
+              addStartState:  state.addStartState,
+              startStateLabel: state.startStateLabel,
+              addEndState:    state.addEndState,
+              endStateLabel:  state.endStateLabel,
+            },
           );
         } catch (err) {
           area.innerHTML = `<div class="panel" style="color:#c0392b;padding:16px">Error: ${err instanceof Error ? err.message : String(err)}</div>`;
@@ -5970,11 +5978,11 @@ function renderReliabilityFigure(fig: HTMLElement, result: ReliabilityResult): v
   };
 
   const ALL_PANELS: Array<{ category: string; title: string; note?: string }> = [
-    { category: 'Deviations',      title: 'Deviations',    note: 'lower = better' },
-    { category: 'Correlations',    title: 'Correlations'                           },
-    { category: 'Dissimilarities', title: 'Dissimilarities', note: 'lower = better' },
-    { category: 'Similarities',    title: 'Similarities'                           },
-    { category: 'Pattern',         title: 'Pattern'                                },
+    { category: 'Deviations',      title: 'Deviations',      note: 'lower = better' },
+    { category: 'Correlations',    title: 'Correlations'                             },
+    { category: 'Dissimilarities', title: 'Dissimilarities',  note: 'lower = better' },
+    { category: 'Similarities',    title: 'Similarities'                             },
+    { category: 'Pattern',         title: 'Pattern'                                  },
   ];
 
   const makeGroups = (category: string) => {
@@ -5997,7 +6005,7 @@ function renderReliabilityFigure(fig: HTMLElement, result: ReliabilityResult): v
   }</div>`;
   fig.appendChild(bar);
 
-  // ── Content panes (one per tab) ──────────────────────────────────────────
+  // ── Content panes ────────────────────────────────────────────────────────
   const panes: Record<TabId, HTMLElement> = {} as Record<TabId, HTMLElement>;
   for (const id of TAB_IDS) {
     const div = document.createElement('div');
@@ -6024,11 +6032,11 @@ function renderReliabilityFigure(fig: HTMLElement, result: ReliabilityResult): v
     }
   };
 
-  // ── Density tab ──────────────────────────────────────────────────────────
+  // ── Density tab: one combined KDE+mean-line panel per category ──────────
   const renderDensityTab = (pane: HTMLElement) => {
     for (const { category, title, note } of ALL_PANELS) {
-      const groups = makeGroups(category);
-      const panel  = document.createElement('div');
+      const groups   = makeGroups(category);
+      const panel    = document.createElement('div');
       panel.className = 'panel';
       panel.style.marginTop = '8px';
       const noteHtml = note ? ` <span style="font-size:10px;color:#888;font-weight:400">(${note})</span>` : '';
@@ -6037,42 +6045,36 @@ function renderReliabilityFigure(fig: HTMLElement, result: ReliabilityResult): v
       pane.appendChild(panel);
       requestAnimationFrame(() => {
         const el = document.getElementById(`rel-dp-${category}`);
-        if (el) renderDensityPlot(el, groups);
+        if (el) renderDensityPlot(el, groups, { showMeans: true });
       });
     }
   };
 
-  // ── Mean ± SD tab: per-metric grid of density+mean-line panels ───────────
+  // ── Mean ± SD tab: one combined bar chart per category ───────────────────
   const renderMeanSDTab = (pane: HTMLElement) => {
-    for (const { category, title } of ALL_PANELS) {
+    for (const { category, title, note } of ALL_PANELS) {
       const metrics = RELIABILITY_METRICS.filter(m => m.category === category);
       const colors  = RELIABILITY_COLORS[category] ?? [];
+      const data = metrics.map((m, idx) => {
+        const row = result.summary.find(r => r.metric === m.label);
+        return {
+          label: m.label,
+          mean:  row?.mean ?? NaN,
+          sd:    row?.sd   ?? NaN,
+          color: colors[idx % colors.length] ?? '#4e79a7',
+        };
+      });
 
-      const catHdr = document.createElement('div');
-      catHdr.style.cssText = 'font-size:11px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.05em;margin:12px 0 4px 2px';
-      catHdr.textContent = title;
-      pane.appendChild(catHdr);
-
-      const grid = document.createElement('div');
-      grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-bottom:4px';
-      pane.appendChild(grid);
-
-      metrics.forEach((m, idx) => {
-        const vals  = (result.iterations[m.key] ?? []).filter(v => isFinite(v));
-        const row   = result.summary.find(r => r.metric === m.label);
-        const color = colors[idx % colors.length] ?? '#4e79a7';
-
-        const card = document.createElement('div');
-        card.className = 'panel';
-        card.style.padding = '8px';
-        card.innerHTML = `<div style="font-size:11px;font-weight:600;color:#444;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${m.label}</div><div id="rel-ms-${m.key}" style="width:100%"></div>`;
-        addPanelDownloadButtons(card, { image: true, filename: `reliability-meansd-${m.key}` });
-        grid.appendChild(card);
-
-        requestAnimationFrame(() => {
-          const el = document.getElementById(`rel-ms-${m.key}`);
-          if (el) renderDensityWithMeanLine(el, vals, color, row?.mean ?? NaN, row?.sd ?? NaN);
-        });
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+      panel.style.marginTop = '8px';
+      const noteHtml = note ? ` <span style="font-size:10px;color:#888;font-weight:400">(${note})</span>` : '';
+      panel.innerHTML = `<div class="panel-title">${title}${noteHtml}</div><div id="rel-ms-${category}" style="width:100%"></div>`;
+      addPanelDownloadButtons(panel, { image: true, filename: `reliability-meansd-${category.toLowerCase()}` });
+      pane.appendChild(panel);
+      requestAnimationFrame(() => {
+        const el = document.getElementById(`rel-ms-${category}`);
+        if (el) renderMeanSDBar(el, data, { xLabel: 'Mean metric value' });
       });
     }
   };
@@ -6100,7 +6102,7 @@ function renderReliabilityFigure(fig: HTMLElement, result: ReliabilityResult): v
   }, 0);
 }
 
-/** 22-row summary table with mean ± SD, median, min, max. */
+/** 22-row summary table grouped by category, Mean ± SD combined. */
 function renderReliabilityTable(tbl: HTMLElement, result: ReliabilityResult): void {
   const panel = document.createElement('div');
   panel.className = 'panel';
@@ -6108,30 +6110,37 @@ function renderReliabilityTable(tbl: HTMLElement, result: ReliabilityResult): vo
   panel.innerHTML = `<div class="panel-title">Reliability Summary (${result.iter} iterations, split = ${result.split.toFixed(2)})</div>`;
 
   const fmt = (v: number) => isFinite(v) ? v.toFixed(4) : '—';
+  const fmtMeanSD = (mean: number, sd: number) =>
+    isFinite(mean) ? `${mean.toFixed(4)} ± ${isFinite(sd) ? sd.toFixed(4) : '—'}` : '—';
+
+  // Group rows by category (preserves RELIABILITY_METRICS order: Deviations first)
+  const categories = [...new Set(result.summary.map(r => r.category))];
 
   let html = `
     <table class="preview-table" style="font-size:12px">
       <thead>
         <tr>
-          <th>Metric</th><th>Category</th>
-          <th>Mean</th><th>SD</th><th>Median</th>
+          <th>Metric</th>
+          <th>Mean ± SD</th><th>Median</th>
           <th>Min</th><th>Max</th>
         </tr>
       </thead>
       <tbody>
   `;
-  for (const row of result.summary) {
-    html += `
-      <tr>
-        <td>${row.metric}</td>
-        <td style="color:#777">${row.category}</td>
-        <td>${fmt(row.mean)}</td>
-        <td>${fmt(row.sd)}</td>
-        <td>${fmt(row.median)}</td>
-        <td>${fmt(row.min)}</td>
-        <td>${fmt(row.max)}</td>
-      </tr>
-    `;
+  for (const cat of categories) {
+    const rows = result.summary.filter(r => r.category === cat);
+    html += `<tr><td colspan="5" style="background:#f5f5f5;font-size:10px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:.05em;padding:4px 8px">${cat}</td></tr>`;
+    for (const row of rows) {
+      html += `
+        <tr>
+          <td style="padding-left:14px">${row.metric}</td>
+          <td style="font-variant-numeric:tabular-nums">${fmtMeanSD(row.mean, row.sd)}</td>
+          <td>${fmt(row.median)}</td>
+          <td>${fmt(row.min)}</td>
+          <td>${fmt(row.max)}</td>
+        </tr>
+      `;
+    }
   }
   html += '</tbody></table>';
   panel.innerHTML += html;

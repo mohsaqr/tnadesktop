@@ -430,19 +430,33 @@ const BUILDERS: Record<string, (data: SequenceData, opts: Record<string, unknown
  *
  * @param sequenceData - Raw sequence data (array of sequences).
  * @param modelType    - Which TNA builder to use: 'tna'|'ftna'|'ctna'|'atna'.
- * @param opts         - iter (default 100), split (default 0.5), atnaBeta, seed.
+ * @param opts         - iter, split, atnaBeta, seed, scaling, addStartState,
+ *                       startStateLabel, addEndState, endStateLabel.
  * @returns ReliabilityResult with per-metric iteration arrays and summary stats.
  */
 export function reliabilityAnalysis(
   sequenceData: SequenceData,
   modelType: 'tna' | 'ftna' | 'ctna' | 'atna',
-  opts: { iter?: number; split?: number; atnaBeta?: number; seed?: number } = {},
+  opts: {
+    iter?: number;
+    split?: number;
+    atnaBeta?: number;
+    seed?: number;
+    scaling?: string;
+    addStartState?: boolean;
+    startStateLabel?: string;
+    addEndState?: boolean;
+    endStateLabel?: string;
+  } = {},
 ): ReliabilityResult {
   if (sequenceData.length < 4) {
     throw new Error('Need at least 4 sequences for reliability analysis');
   }
 
-  const { iter = 100, split = 0.5, atnaBeta = 0.1, seed = 42 } = opts;
+  const {
+    iter = 100, split = 0.5, atnaBeta = 0.1, seed = 42,
+    scaling, addStartState, startStateLabel, addEndState, endStateLabel,
+  } = opts;
   const n  = sequenceData.length;
   const nA = Math.floor(n * split);
 
@@ -450,10 +464,24 @@ export function reliabilityAnalysis(
     throw new Error('Each split half must have at least 2 sequences');
   }
 
+  // Mirror buildModel()'s applyStartEnd — prepend/append sentinel states if configured
+  const applyStartEnd = (seqs: SequenceData): SequenceData => {
+    if (!addStartState && !addEndState) return seqs;
+    return seqs.map(seq => {
+      let last = seq.length - 1;
+      while (last >= 0 && seq[last] === null) last--;
+      const trimmed: (string | null)[] = seq.slice(0, last + 1);
+      if (addStartState) trimmed.unshift(startStateLabel || 'Start');
+      if (addEndState)   trimmed.push(endStateLabel   || 'End');
+      return trimmed;
+    });
+  };
+
   const rng = new SeededRNG(seed);
   const builder = BUILDERS[modelType]!;
   const buildOpts: Record<string, unknown> = {};
-  if (modelType === 'atna') buildOpts.beta = atnaBeta;
+  if (scaling)              buildOpts.scaling = scaling;
+  if (modelType === 'atna') buildOpts.beta    = atnaBeta;
 
   // Initialise per-metric iteration arrays
   const iterations: Record<string, number[]> = {};
@@ -465,8 +493,8 @@ export function reliabilityAnalysis(
     const setA = new Set(indicesA);
     const indicesB = Array.from({ length: n }, (_, i) => i).filter(i => !setA.has(i));
 
-    const seqA: SequenceData = indicesA.map(i => sequenceData[i]!);
-    const seqB: SequenceData = indicesB.map(i => sequenceData[i]!);
+    const seqA: SequenceData = applyStartEnd(indicesA.map(i => sequenceData[i]!));
+    const seqB: SequenceData = applyStartEnd(indicesB.map(i => sequenceData[i]!));
 
     try {
       const modelA = builder(seqA, buildOpts);
