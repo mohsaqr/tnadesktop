@@ -27,6 +27,7 @@ import type { GroupComparisonResult } from '../analysis/anova';
 import { showClusteringModal, renderGroupSetup, renderGroupGrid, renderCombinedCanvas, buildColumnGroups } from './clustering';
 import { renderMosaic, renderClusterMosaic, chiSquareTest } from './mosaic';
 import { renderCompareNetworksTab } from './compare-networks';
+import { renderComparePropertiesTab } from './compare-properties';
 import { estimateCS } from '../analysis/stability';
 import { reliabilityAnalysis, RELIABILITY_METRICS } from '../analysis/reliability';
 import type { ReliabilityResult } from '../analysis/reliability';
@@ -70,6 +71,7 @@ const GROUP_TABS: SubTabDef[] = [
   { id: 'permutation', label: 'Permutation Test' },
   { id: 'compare-sequences', label: 'Compare Sequences' },
   { id: 'compare-networks', label: 'Compare Networks' },
+  { id: 'compare-properties', label: 'Compare Properties' },
 ];
 
 const ONEHOT_TABS: SubTabDef[] = [
@@ -91,6 +93,7 @@ const GROUP_ONEHOT_TABS: SubTabDef[] = [
   { id: 'bootstrap', label: 'Bootstrap Validation' },
   { id: 'permutation', label: 'Permutation Test' },
   { id: 'compare-networks', label: 'Compare Networks' },
+  { id: 'compare-properties', label: 'Compare Properties' },
 ];
 
 // Clustering tabs (no 'setup' — modal-based)
@@ -1749,6 +1752,9 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
         break;
       case 'compare-networks':
         if (activeCache().fullModel) renderCompareNetworksTab(tabWrapper, activeCache().fullModel!);
+        break;
+      case 'compare-properties':
+        if (activeCache().fullModel) renderComparePropertiesTab(tabWrapper, activeCache().fullModel!);
         break;
     }
   }

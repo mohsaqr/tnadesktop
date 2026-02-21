@@ -1,5 +1,29 @@
 # Dynalytics Desktop Learnings
 
+## 2026-02-22 (session 7)
+
+### Reliability Figure: Multi-Tab Pattern
+- Reuse `createViewToggle(container, figFn, tableFn)` for Figure|Table switch; for sub-tabs within figure (Box Plots | Density | Mean±SD), create a second inner tab bar using the same `.view-toggle` / `.toggle-btn` CSS pattern with a unique `tabGroup` suffix.
+- `renderDensityPlot` accepts a `showMeans?: boolean` opt — when true it draws a dashed vertical mean line per group using the group's color; the label uses a white stroke-halo so it reads on any background.
+- `renderMeanSDBar` produces one combined horizontal bar chart for all metrics in a category: bars 0→mean, ±SD error bars with caps, circle at mean. Colors per metric from `RELIABILITY_COLORS[category]`.
+
+### Model Param Propagation in Split-Half Analyses
+- Reliability `reliabilityAnalysis()` must mirror `buildModel()` exactly on each split half: apply `scaling`, apply start/end sentinel states via `applyStartEnd()`, pass `atnaBeta` for ATNA.
+- **Pruning (threshold) is display-only** — never pass it to reliability or bootstrap. It affects which edges are drawn, not the underlying weight matrix.
+- Pattern: extend opts interface, extract `applyStartEnd` inline helper, call it on each sub-sequence array before building.
+
+### `tna:::compare_()` Call Signature (tna 1.2.0)
+- `network` and `measures` have no defaults in tna 1.2.0 → must call as `tna:::compare_(ma, mb, scaling='none', network=FALSE, measures=character(0))`.
+- Missing these args causes "argument X is missing, with no default" error.
+
+### Column-Major Matrix Serialization (R ↔ TypeScript)
+- R's `as.vector(matrix)` outputs column-major (each column concatenated).
+- TypeScript reconstruction: `matrix[k % n][Math.floor(k / n)] = flat[k]` (row = k%n, col = floor(k/n)).
+- Do NOT use row-major indexing (`row = floor(k/n), col = k%n`) — that transposes the matrix and breaks all metrics.
+
+### Edit Tool: Uniqueness Requirement
+- `Edit` fails if `old_string` matches more than once in the file. Fix: include more surrounding context (e.g., the function name + 2-3 lines before the target) to make the match unique.
+
 ## 2026-02-21 (session 6)
 
 ### Reliability Analysis: R Equivalence — Critical Differences Found

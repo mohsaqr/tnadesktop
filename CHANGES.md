@@ -1,5 +1,17 @@
 # Dynalytics Desktop — Change Log
 
+### 2026-02-22 — Compare Properties Tab (22-metric pairwise group comparison)
+- src/views/compare-properties.ts: NEW — `renderComparePropertiesTab(container, fullModel)` computes all 22 reliability metrics once per (i,j) group pair via `compareWeightMatrices()`; Figure = D3 SVG heatmap (rows=metrics, cols=pairs) with per-row RdYlGn colour normalisation (lower=greener for Deviations/Dissimilarities, higher=greener for Correlations/Similarities/Pattern); Table = 22 rows in 5 category groups with 4-decimal pair columns; both panels have download buttons
+- src/views/dashboard.ts: `compare-properties` tab appended to GROUP_TABS and GROUP_ONEHOT_TABS; `case 'compare-properties':` added to tab dispatch switch; import added
+- Tests: 239 passed, 0 failed; `npx tsc --noEmit` zero errors
+
+### 2026-02-22 — Reliability: 3-Tab Figure, Combined Charts, Model Param Propagation
+- src/views/chart-utils.ts: `renderDensityPlot` extended with `showMeans?: boolean` opt — draws dashed vertical mean lines with white-backed labels per group; `renderDensityWithMeanLine` added for single-metric KDE + mean line
+- src/views/dashboard.ts: `renderReliabilityFigure` now shows 3 tabs (Box Plots | Density | Mean±SD); Density tab uses `renderDensityPlot(showMeans:true)` — one combined KDE per category; Mean±SD tab uses `renderMeanSDBar` — one combined bar chart per category; `renderReliabilityTable` updated with grouped category header rows + merged Mean±SD column; ALL_PANELS expanded to all 5 categories (Deviations first); RELIABILITY_COLORS covers all 5 categories; split slider max 0.7→0.9
+- src/analysis/reliability.ts: opts extended with `scaling`, `addStartState`, `startStateLabel`, `addEndState`, `endStateLabel`; `applyStartEnd()` applied to each split half before building; mirrors `buildModel()` exactly; pruning excluded (display-only)
+- tmp/gen_equiv100.R + tmp/run_equiv100.ts: 100-dataset R equivalence harness; all 22 metrics match R tna:::compare_() with max |TS−R| = 0.000e+0
+- Tests: 239 passed, 0 failed; `npx tsc --noEmit` zero errors
+
 ### 2026-02-21 — Reliability Figure: Density Plots + Mean±SD Bar Charts + Wider Iteration Range
 - src/views/chart-utils.ts: Added `renderMeanSDBar()` — horizontal bar chart with bars from 0→mean, ±1 SD error bars with caps, and a dot at the mean; exports `MeanSDDatum`, `MeanSDOpts`
 - src/views/dashboard.ts: `renderReliabilityFigure` expanded from 3 box-plot panels to 9 panels in 3 labelled sections: Box Plots / Density Distributions / Mean ± SD; imports `renderMeanSDBar`; iteration slider range changed from 10–500 to 100–1000 (step 50)
