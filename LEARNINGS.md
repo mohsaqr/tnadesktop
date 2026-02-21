@@ -1,5 +1,28 @@
 # Dynalytics Desktop Learnings
 
+## 2026-02-21 (session 4)
+
+### Bootstrap Forest Plot Design
+- `BootstrapEdge.weight` is the original observed weight from the model; `bootstrapMean` (new field) is the mean of resampled weights. Forest plots should show both: circle = bootstrap mean, diamond = original weight.
+- When `ForestRow.color` is set (combined/grouped multi-group views), must still differentiate significance: non-significant gets dashed CI line + hollow dot, significant gets solid line + filled dot. Without this, all rows look significant.
+- Grouped forest plot (`renderGroupedForestPlot`): subdivide row band by `bw / (nGroups + 1)` to space group CI lines evenly within each edge's row.
+- Edge threshold filter (checkbox + number input): filter applies to forest plot views only, not the data table. Persists across Card/Combined/Grouped sub-view switches.
+
+### Bootstrap Modal Pattern
+- Bootstrap tab should open settings modal immediately on tab render (`setTimeout(runBootstrap, 0)`), matching the clustering tab pattern. No intermediate "Run Bootstrap..." button needed.
+- After results are shown, a small "Re-run..." button in the toggle bar allows re-running with different settings.
+
+### Density Plot (KDE) Implementation
+- Gaussian KDE with Silverman bandwidth rule: `h = 1.06 * sd * n^{-1/5}`
+- Evaluate at 200 points across shared x-domain for smooth curves
+- D3 `d3.line().curve(d3.curveBasis)` for smooth rendering, fill under curve at 0.15 opacity
+- Skip groups with < 2 values (KDE needs variance)
+
+### Word Export via HTML
+- Word natively opens HTML files saved as `.doc` with `xmlns:w="urn:schemas-microsoft-com:office:word"` namespace
+- Zero dependencies — same HTML content as `exportHtml` but wrapped in Office XML
+- Extract shared helpers (`buildReportContent`, `REPORT_CSS`, `captureSections`) to avoid duplicating the report-building logic
+
 ## 2026-02-21 (session 2)
 
 ### Statistical Functions (betaI / ANOVA)

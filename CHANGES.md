@@ -1,10 +1,10 @@
 # Dynalytics Desktop — Change Log
 
-### 2026-02-21 — Bootstrap Forest Plot: Significance Fix, Original Weight, Grouped View
+### 2026-02-21 — Bootstrap Forest Plot: Significance Fix, Original Weight, Grouped View, Edge Threshold
 - src/analysis/bootstrap.ts: Added `bootstrapMean` field to `BootstrapEdge`
-- src/views/chart-utils.ts: `ForestRow` gains `color`, `originalWeight`, `group` fields; non-significant edges now get dashed CI line + hollow dot (even with custom color); original weight shown as red diamond marker; new `renderGroupedForestPlot()` — edges grouped by label with parallel per-group CI lines within same row band
-- src/views/bootstrap.ts: Modal opens immediately (no extra button); forest shows bootstrap mean as circle + original weight as diamond; all edges (cap 1000); "Re-run…" button in toggle bar
-- src/views/dashboard.ts: `renderBootstrapTabMulti` — modal opens immediately; Forest Plot tab has Card/Combined/Grouped toggle: Card = per-group plots, Combined = one color-coded plot, Grouped = side-by-side CIs per edge; all views show bootstrap mean + original weight markers
+- src/views/chart-utils.ts: `ForestRow` gains `color`, `originalWeight`, `group` fields; non-significant edges get dashed CI line + hollow dot (even with custom color); original weight shown as red diamond marker; new `renderGroupedForestPlot()` — edges grouped by label with parallel per-group CI lines within same row band
+- src/views/bootstrap.ts: Modal opens immediately (no extra button); forest shows bootstrap mean (circle) + original weight (diamond); all edges (cap 1000); "Re-run…" button; edge threshold filter (checkbox + input, default 0.05, hides low-weight edges from plot only)
+- src/views/dashboard.ts: `renderBootstrapTabMulti` — modal opens immediately; Forest Plot tab has Card/Combined/Grouped toggle with edge threshold filter; Card = per-group plots, Combined = one color-coded plot, Grouped = side-by-side CIs per edge; threshold applies to all sub-views, persists across switches; table view unaffected
 - Tests: 215 passed, 0 failed
 
 ### 2026-02-21 — Indices Tab Redesign: Density Plots, Combined Tables, CSV/Word Export

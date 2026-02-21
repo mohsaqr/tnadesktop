@@ -1,40 +1,43 @@
-# Session Handoff — 2026-02-21 (session 4, updated)
+# Session Handoff — 2026-02-21 (session 4, final)
 
 ## Completed
-- **Density plots**: Added `renderDensityPlot()` to chart-utils.ts with Gaussian KDE
-- **Indices Distributions tab**: Density/Box Plot toggle, 2-column grid of KDE plots
-- **Combined summary tables**: Figure/Table toggle with Group column
-- **Comparison CSV export**: "Download All (CSV)" button
-- **Word export**: "Current/Full Analysis (Word)" in export dialog
-- **Bootstrap immediate modal**: Modal opens automatically when Bootstrap tab is selected
-- **Bootstrap significance fix**: Non-significant edges now show dashed CI lines + hollow dots even when custom color is set
-- **Bootstrap original weight**: Red diamond marker shows original observed edge weight; blue circle shows bootstrap mean
-- **Bootstrap `bootstrapMean`**: Added to `BootstrapEdge` interface, used as forest plot estimate
-- **Forest Plot Card/Combined/Grouped**: 3 sub-views in multi-group forest plot tab
-  - Card: per-group forest plots with all edges
-  - Combined: one plot, all groups color-coded, group-prefixed labels
-  - Grouped: same edge label once, groups' CI lines side-by-side within row band
-- **`renderGroupedForestPlot`**: New function in chart-utils.ts for parallel per-group CIs
-- **Tab rename**: 'Histograms' → 'Distributions'
+- **Sequence indices expansion**: 5 new metrics (gini, persistence, transitionDiversity, integrativeComplexity, routine) → 9 total
+- **ANOVA group comparison**: New secondary tab with ANOVA/Kruskal-Wallis omnibus + post-hoc pairwise tests, Bonferroni/Holm/FDR adjustment
+- **Statistical functions**: Shared stats-utils.ts (lgamma, gammaP, betaI, fDistCDF, tDistCDF, normalCDF, chiSqCDF)
+- **Density plots**: `renderDensityPlot()` with Gaussian KDE (Silverman bandwidth), per-group overlay curves
+- **Indices Distributions tab**: Density/Box Plot toggle replacing per-group histograms; tab renamed 'Histograms' → 'Distributions'
+- **Combined summary tables**: Figure/Table toggle with Group column (summary + detail views)
+- **Group comparison CSV export**: "Download All (CSV)" button with omnibus + post-hoc sections
+- **Word export**: "Current/Full Analysis (Word)" in export dialog; shared `buildReportContent()` helper
+- **Bootstrap modal**: Opens immediately on tab render (no extra button); "Re-run..." button for subsequent runs
+- **Bootstrap forest plots**: Shows bootstrap mean (circle) + original weight (diamond); all edges shown (cap 1000); non-significant edges properly differentiated (dashed CI + hollow dot) even with custom colors
+- **Forest Plot views**: Card/Combined/Grouped toggle in multi-group; Combined = one color-coded plot; Grouped = side-by-side CIs per edge
+- **Edge threshold filter**: Checkbox + number input (default 0.05) hides low-weight edges from forest plots only; table unaffected
+- **`renderGroupedForestPlot`**: New chart-utils function for parallel per-group CIs within same row band
 
 ## Current State
-- Build passes, 215 tests pass
-- All changes in working tree (not committed)
-- Preview server running on port 4173
+- Build passes, 215 tests pass (12 test files)
+- All changes committed in `614985d` and pushed to `origin/main`
+- Preview server available on port 4173
 
 ## Key Decisions
-- `bootstrapMean` added to BootstrapEdge so forest plot shows bootstrap mean (circle) vs original weight (diamond)
-- Non-significant + custom color: dashed line + hollow dot (not solid)
-- Grouped forest plot: `renderGroupedForestPlot` uses row band subdivision, spacing = bw / (nGroups + 1)
-- Original weight diamond: red (#e15759) for single/card view, group-colored with dark stroke for grouped view
+- `bootstrapMean` added to `BootstrapEdge` to distinguish bootstrap mean from original weight in forest plots
+- Bootstrap uses popup modal (clustering pattern), not inline form panel
+- Non-significant + custom color: dashed line + hollow dot (not solid) — fixes visual ambiguity
+- Grouped forest: row band subdivided by `bw / (nGroups + 1)` for even spacing
+- Word export uses HTML-based .doc with Office XML namespace (zero new dependencies)
+- Density plots use Silverman bandwidth, 200 eval points, d3.curveBasis
+- Edge threshold filter persists across Card/Combined/Grouped switches but resets on re-run
 
 ## Open Issues
 - None known
 
 ## Next Steps
-- Manual testing of all three forest sub-views
-- Consider applying same pattern to permutation tab
+- Consider applying same immediate-modal + flat-tab pattern to permutation tab
+- Consider adding edge threshold filter to single-group bootstrap forest view (currently only multi-group has the filter inline with sub-toggle; single-group has its own inline version)
 
 ## Context
 - tna-desktop at `/Users/mohammedsaqr/Documents/Git/tna-desktop`
 - Build: `npm run build`, Test: `npm test`
+- Preview: `npx vite preview --port 4173`
+- Deployed at `saqr.me/dynalytics/` via GitHub Pages
