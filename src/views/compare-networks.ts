@@ -1,16 +1,15 @@
 /**
  * Compare network properties across groups.
- * Simple metric comparison: density, mean weight, etc.
- * Only visible when a GroupTNA is loaded.
+ * Layout: combined diff networks, heatmaps, and comparison table.
+ * No permutation — that's in the Permutation tab.
  */
 import * as d3 from 'd3';
 import type { GroupTNA, TNA } from 'tnaj';
 import { summary } from 'tnaj';
 import { showTooltip, hideTooltip } from '../main';
-import type { NetworkSettings } from '../main';
 import { state } from '../main';
-import { addPanelDownloadButtons, downloadSvgFromElement, downloadPngFromElement } from './export';
-import { circularLayout, computeEdgePath, arrowPoly, fmtWeight, fmtNum } from './network';
+import { addPanelDownloadButtons } from './export';
+import { resolvePositions, getLastLayoutDimensions, rescalePositions, computeEdgePath, arrowPoly, fmtWeight, fmtNum } from './network';
 import { NODE_COLORS } from './colors';
 import { createViewToggle } from './dashboard';
 
@@ -29,7 +28,6 @@ function computeMetrics(model: TNA, groupName: string): GroupMetrics {
   const s = summary(model) as any;
   const n = model.labels.length;
 
-  // Compute reciprocity: fraction of edges where both i->j and j->i exist
   let mutual = 0;
   let total = 0;
   for (let i = 0; i < n; i++) {
@@ -66,199 +64,190 @@ export function renderCompareNetworksTab(
 
   const metrics = groupNames.map(g => computeMetrics(fullModel.models[g]!, g));
 
-  const metricDefs = [
-    { key: 'density', label: 'Density', fmt: (v: number) => fmtNum(v, 3) },
-    { key: 'meanWeight', label: 'Mean Weight', fmt: (v: number) => fmtNum(v) },
-    { key: 'nEdges', label: 'Number of Edges', fmt: (v: number) => String(v) },
-    { key: 'reciprocity', label: 'Reciprocity', fmt: (v: number) => fmtNum(v, 3) },
-  ];
+  // Generate all pairs
+  const pairs: [string, string][] = [];
+  for (let i = 0; i < groupNames.length; i++) {
+    for (let j = i + 1; j < groupNames.length; j++) {
+      pairs.push([groupNames[i]!, groupNames[j]!]);
+    }
+  }
 
   createViewToggle(container,
     (fig) => {
-      // Bar charts
-      const chartGrid = document.createElement('div');
-      chartGrid.style.display = 'grid';
-      chartGrid.style.gridTemplateColumns = '1fr 1fr';
-      chartGrid.style.gap = '16px';
+      const nPairs = pairs.length;
+      const cols = nPairs <= 2 ? nPairs : nPairs <= 4 ? 2 : Math.ceil(Math.sqrt(nPairs));
+      const rows = Math.ceil(nPairs / cols);
 
-      for (const def of metricDefs) {
-        const panel = document.createElement('div');
-        panel.className = 'panel';
-        panel.innerHTML = `<div class="panel-title">${def.label}</div><div id="viz-cmp-${def.key}" style="width:100%"></div>`;
-        addPanelDownloadButtons(panel, { image: true, filename: `compare-${def.key}` });
-        chartGrid.appendChild(panel);
-      }
-      fig.appendChild(chartGrid);
+      // ── Combined Difference Networks (single SVG canvas) ──
+      const cellW = 500;
+      const baseDims = getLastLayoutDimensions();
+      const cellH = Math.min(baseDims.height || 400, 400);
+      const labelH = 24;
+      const legendH = 28;
+      const totalW = cols * cellW;
+      const totalH = rows * (cellH + labelH) + legendH;
 
-      // Group pair selector
-      const pairPanel = document.createElement('div');
-      pairPanel.className = 'panel';
-      pairPanel.style.padding = '10px 16px';
-      pairPanel.style.marginTop = '16px';
-      pairPanel.innerHTML = `
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <span style="font-size:13px;font-weight:600;color:#333">Compare:</span>
-          <select id="cmp-heat-g1" style="font-size:12px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
-            ${groupNames.map((g, i) => `<option value="${g}" ${i === 0 ? 'selected' : ''}>${g}</option>`).join('')}
-          </select>
-          <span style="color:#888">vs</span>
-          <select id="cmp-heat-g2" style="font-size:12px;padding:4px 8px;border-radius:4px;border:1px solid #ccc">
-            ${groupNames.map((g, i) => `<option value="${g}" ${i === 1 ? 'selected' : ''}>${g}</option>`).join('')}
-          </select>
-        </div>
-      `;
-      fig.appendChild(pairPanel);
+      const diffPanel = document.createElement('div');
+      diffPanel.className = 'panel';
+      diffPanel.innerHTML = `<div class="panel-title">Difference Networks</div>`;
+      addPanelDownloadButtons(diffPanel, { image: true, filename: 'compare-diff-networks' });
 
-      // Heatmap + diff network
-      const diffRow = document.createElement('div');
-      diffRow.style.display = 'grid';
-      diffRow.style.gridTemplateColumns = '1fr 1fr';
-      diffRow.style.gap = '16px';
-      diffRow.style.marginTop = '16px';
+      const svgNS = 'http://www.w3.org/2000/svg';
+      const svgEl = document.createElementNS(svgNS, 'svg');
+      svgEl.setAttribute('viewBox', `0 0 ${totalW} ${totalH}`);
+      svgEl.setAttribute('width', '100%');
+      svgEl.style.minHeight = '300px';
+      svgEl.style.background = '#fff';
+      diffPanel.appendChild(svgEl);
+      fig.appendChild(diffPanel);
 
+      // ── Combined Heatmaps (single panel, CSS grid inside) ──
       const heatPanel = document.createElement('div');
       heatPanel.className = 'panel';
-      heatPanel.innerHTML = `<div class="panel-title">Weight Difference Heatmap</div><div id="viz-cmp-heatmap" style="width:100%"></div>`;
-      addPanelDownloadButtons(heatPanel, { image: true, filename: 'compare-heatmap' });
-      diffRow.appendChild(heatPanel);
+      heatPanel.style.marginTop = '16px';
+      heatPanel.innerHTML = `<div class="panel-title">Weight Difference Heatmaps</div>`;
+      addPanelDownloadButtons(heatPanel, { image: true, filename: 'compare-heatmaps' });
 
-      const netPanel = document.createElement('div');
-      netPanel.className = 'panel';
-      netPanel.innerHTML = `<div class="panel-title">Difference Network</div><div id="viz-cmp-diffnet" style="width:100%"></div>`;
-      addPanelDownloadButtons(netPanel, { image: true, filename: 'compare-diff-network' });
-      diffRow.appendChild(netPanel);
+      const heatGrid = document.createElement('div');
+      if (nPairs > 1) {
+        heatGrid.style.display = 'grid';
+        heatGrid.style.gridTemplateColumns = 'repeat(2, 1fr)';
+        heatGrid.style.gap = '12px';
+      }
 
-      fig.appendChild(diffRow);
+      const heatContainers: { el: HTMLElement; g1: string; g2: string }[] = [];
+      for (const [g1, g2] of pairs) {
+        const wrapper = document.createElement('div');
+        const title = document.createElement('div');
+        title.style.textAlign = 'center';
+        title.style.fontSize = '11px';
+        title.style.fontWeight = '600';
+        title.style.color = '#555';
+        title.style.marginBottom = '4px';
+        title.textContent = `${g1} vs ${g2}`;
+        wrapper.appendChild(title);
+        const heatEl = document.createElement('div');
+        wrapper.appendChild(heatEl);
+        heatGrid.appendChild(wrapper);
+        heatContainers.push({ el: heatEl, g1, g2 });
+      }
+      heatPanel.appendChild(heatGrid);
+      fig.appendChild(heatPanel);
 
+      // Render after layout
       requestAnimationFrame(() => {
-        for (const def of metricDefs) {
-          const el = document.getElementById(`viz-cmp-${def.key}`);
-          if (el) renderGroupBarChart(el, metrics, def.key as keyof GroupMetrics, def.label, def.fmt);
-        }
-        renderDiffHeatmap(
-          document.getElementById('viz-cmp-heatmap')!,
-          fullModel.models[groupNames[0]!]!,
-          fullModel.models[groupNames[1]!]!,
-        );
-        renderDiffNetwork(
-          document.getElementById('viz-cmp-diffnet')!,
-          fullModel.models[groupNames[0]!]!,
-          fullModel.models[groupNames[1]!]!,
-        );
-      });
+        // Diff networks into combined SVG
+        let idx = 0;
+        for (const [g1, g2] of pairs) {
+          const col = idx % cols;
+          const row = Math.floor(idx / cols);
+          const x = col * cellW;
+          const y = row * (cellH + labelH);
 
-      setTimeout(() => {
-        const wireUpdate = () => {
-          const g1 = (document.getElementById('cmp-heat-g1') as HTMLSelectElement).value;
-          const g2 = (document.getElementById('cmp-heat-g2') as HTMLSelectElement).value;
-          if (g1 === g2) return;
-          const heatEl = document.getElementById('viz-cmp-heatmap');
-          const netEl = document.getElementById('viz-cmp-diffnet');
-          if (heatEl) renderDiffHeatmap(heatEl, fullModel.models[g1]!, fullModel.models[g2]!);
-          if (netEl) renderDiffNetwork(netEl, fullModel.models[g1]!, fullModel.models[g2]!);
-        };
-        document.getElementById('cmp-heat-g1')?.addEventListener('change', wireUpdate);
-        document.getElementById('cmp-heat-g2')?.addEventListener('change', wireUpdate);
-      }, 0);
+          const label = document.createElementNS(svgNS, 'text');
+          label.setAttribute('x', String(x + cellW / 2));
+          label.setAttribute('y', String(y + 16));
+          label.setAttribute('text-anchor', 'middle');
+          label.setAttribute('font-size', '13');
+          label.setAttribute('font-weight', '700');
+          label.setAttribute('fill', '#555');
+          label.textContent = `${g1} vs ${g2}`;
+          svgEl.appendChild(label);
+
+          const gEl = document.createElementNS(svgNS, 'g') as SVGGElement;
+          gEl.setAttribute('transform', `translate(${x}, ${y + labelH})`);
+          svgEl.appendChild(gEl);
+
+          renderDiffNetworkIntoGroup(gEl, fullModel.models[g1]!, fullModel.models[g2]!, g1, g2, cellW, cellH);
+          idx++;
+        }
+
+        // Shared legend at bottom
+        const ly = totalH - legendH + 4;
+        const leg = d3.select(svgEl);
+        leg.append('rect').attr('x', 10).attr('y', ly).attr('width', 14).attr('height', 4).attr('fill', DIFF_POS).attr('rx', 2);
+        leg.append('text').attr('x', 28).attr('y', ly + 4).attr('font-size', '10px').attr('fill', '#555').text('A > B');
+        leg.append('rect').attr('x', 80).attr('y', ly).attr('width', 14).attr('height', 4).attr('fill', DIFF_NEG).attr('rx', 2);
+        leg.append('text').attr('x', 98).attr('y', ly + 4).attr('font-size', '10px').attr('fill', '#555').text('A < B');
+
+        // Heatmaps
+        for (const { el, g1, g2 } of heatContainers) {
+          renderDiffHeatmap(el, fullModel.models[g1]!, fullModel.models[g2]!, g1, g2);
+        }
+      });
     },
     (tbl) => {
-      const tablePanel = document.createElement('div');
-      tablePanel.className = 'panel';
-      tablePanel.innerHTML = `<div class="panel-title">Network Properties by Group</div>`;
+      // Network Properties table
+      const propsPanel = document.createElement('div');
+      propsPanel.className = 'panel';
+      propsPanel.innerHTML = `<div class="panel-title">Network Properties</div>`;
 
-      let tableHtml = '<table class="preview-table" style="font-size:12px"><thead><tr>';
-      tableHtml += '<th>Group</th><th>States</th><th>Edges</th><th>Density</th><th>Mean Weight</th><th>Max Weight</th><th>Reciprocity</th><th>Self-loops</th>';
-      tableHtml += '</tr></thead><tbody>';
+      let propsHtml = '<table class="preview-table" style="font-size:12px"><thead><tr>';
+      propsHtml += '<th>Group</th><th>States</th><th>Edges</th><th>Density</th><th>Mean Weight</th><th>Max Weight</th><th>Reciprocity</th><th>Self-loops</th>';
+      propsHtml += '</tr></thead><tbody>';
       for (const m of metrics) {
-        tableHtml += '<tr>';
-        tableHtml += `<td style="font-weight:600">${m.group}</td>`;
-        tableHtml += `<td>${m.nStates}</td>`;
-        tableHtml += `<td>${m.nEdges}</td>`;
-        tableHtml += `<td>${fmtNum(m.density, 3)}</td>`;
-        tableHtml += `<td>${fmtNum(m.meanWeight)}</td>`;
-        tableHtml += `<td>${fmtNum(m.maxWeight)}</td>`;
-        tableHtml += `<td>${fmtNum(m.reciprocity, 3)}</td>`;
-        tableHtml += `<td>${m.hasSelfLoops ? 'Yes' : 'No'}</td>`;
-        tableHtml += '</tr>';
+        propsHtml += '<tr>';
+        propsHtml += `<td style="font-weight:600">${m.group}</td>`;
+        propsHtml += `<td>${m.nStates}</td>`;
+        propsHtml += `<td>${m.nEdges}</td>`;
+        propsHtml += `<td>${fmtNum(m.density, 3)}</td>`;
+        propsHtml += `<td>${fmtNum(m.meanWeight)}</td>`;
+        propsHtml += `<td>${fmtNum(m.maxWeight)}</td>`;
+        propsHtml += `<td>${fmtNum(m.reciprocity, 3)}</td>`;
+        propsHtml += `<td>${m.hasSelfLoops ? 'Yes' : 'No'}</td>`;
+        propsHtml += '</tr>';
       }
-      tableHtml += '</tbody></table>';
-      tablePanel.innerHTML += tableHtml;
-      addPanelDownloadButtons(tablePanel, { csv: true, filename: 'compare-networks-table' });
-      tbl.appendChild(tablePanel);
+      propsHtml += '</tbody></table>';
+      propsPanel.innerHTML += propsHtml;
+      addPanelDownloadButtons(propsPanel, { csv: true, filename: 'compare-properties' });
+      tbl.appendChild(propsPanel);
+
+      // Transition weights table
+      const weightsPanel = document.createElement('div');
+      weightsPanel.className = 'panel';
+      weightsPanel.style.marginTop = '16px';
+      weightsPanel.style.overflow = 'auto';
+      weightsPanel.style.maxHeight = '600px';
+      weightsPanel.innerHTML = `<div class="panel-title">Transition Weights</div>`;
+
+      let wHtml = '<table class="preview-table" style="font-size:11px"><thead><tr>';
+      wHtml += '<th>From</th><th>To</th>';
+      for (const g of groupNames) wHtml += `<th>${g}</th>`;
+      if (groupNames.length === 2) wHtml += '<th>Diff</th>';
+      wHtml += '</tr></thead><tbody>';
+
+      const labels = fullModel.models[groupNames[0]!]!.labels;
+      for (let i = 0; i < labels.length; i++) {
+        for (let j = 0; j < labels.length; j++) {
+          const vals = groupNames.map(g => fullModel.models[g]!.weights.get(i, j));
+          if (vals.every(v => v === 0)) continue;
+          wHtml += `<tr><td>${labels[i]}</td><td>${labels[j]}</td>`;
+          for (const v of vals) wHtml += `<td>${fmtNum(v)}</td>`;
+          if (groupNames.length === 2) {
+            const diff = vals[0]! - vals[1]!;
+            const color = diff > 0 ? '#28a745' : diff < 0 ? '#dc3545' : '#333';
+            wHtml += `<td style="color:${color};font-weight:600">${diff > 0 ? '+' : ''}${fmtNum(diff)}</td>`;
+          }
+          wHtml += '</tr>';
+        }
+      }
+      wHtml += '</tbody></table>';
+      weightsPanel.innerHTML += wHtml;
+      addPanelDownloadButtons(weightsPanel, { csv: true, filename: 'compare-weights' });
+      tbl.appendChild(weightsPanel);
     },
     'cmp-net',
   );
 }
 
-const GROUP_COLORS = ['#4e79a7', '#e15759', '#59a14f', '#edc948', '#b07aa1', '#76b7b2', '#f28e2b', '#ff9da7'];
+// ═══════════════════════════════════════════════════════════
+//  Diff Heatmap
+// ═══════════════════════════════════════════════════════════
 
-function renderGroupBarChart(
-  container: HTMLElement,
-  metrics: GroupMetrics[],
-  key: keyof GroupMetrics,
-  label: string,
-  fmt: (v: number) => string,
+function renderDiffHeatmap(
+  container: HTMLElement, modelA: TNA, modelB: TNA,
+  nameA: string, nameB: string,
 ) {
-  const data = metrics.map((m, i) => ({
-    group: m.group,
-    value: m[key] as number,
-    color: GROUP_COLORS[i % GROUP_COLORS.length]!,
-  }));
-
-  const rect = container.getBoundingClientRect();
-  const width = Math.max(rect.width, 300);
-  const height = 180;
-  const margin = { top: 10, right: 40, bottom: 30, left: 60 };
-  const innerW = width - margin.left - margin.right;
-  const innerH = height - margin.top - margin.bottom;
-
-  d3.select(container).selectAll('*').remove();
-  const svg = d3.select(container)
-    .append('svg')
-    .attr('width', width)
-    .attr('height', height);
-
-  const g = svg.append('g')
-    .attr('transform', `translate(${margin.left},${margin.top})`);
-
-  const y = d3.scaleBand()
-    .domain(data.map(d => d.group))
-    .range([0, innerH])
-    .padding(0.25);
-
-  const maxVal = Math.max(...data.map(d => d.value), 1e-6);
-  const x = d3.scaleLinear()
-    .domain([0, maxVal * 1.15])
-    .range([0, innerW]);
-
-  g.selectAll('rect')
-    .data(data)
-    .enter()
-    .append('rect')
-    .attr('y', d => y(d.group)!)
-    .attr('width', d => x(d.value))
-    .attr('height', y.bandwidth())
-    .attr('fill', d => d.color)
-    .attr('rx', 3);
-
-  g.selectAll('.val-label')
-    .data(data)
-    .enter()
-    .append('text')
-    .attr('y', d => y(d.group)! + y.bandwidth() / 2)
-    .attr('x', d => x(d.value) + 5)
-    .attr('dy', '0.35em')
-    .attr('font-size', '10px')
-    .attr('fill', '#666')
-    .text(d => fmt(d.value));
-
-  g.append('g')
-    .attr('class', 'axis')
-    .call(d3.axisLeft(y).tickSize(0).tickPadding(6))
-    .selectAll('text').attr('font-size', '10px');
-}
-
-function renderDiffHeatmap(container: HTMLElement, modelA: TNA, modelB: TNA) {
   const labels = modelA.labels;
   const n = labels.length;
 
@@ -309,8 +298,8 @@ function renderDiffHeatmap(container: HTMLElement, modelA: TNA, modelB: TNA) {
           d3.select(this).attr('stroke', '#333').attr('stroke-width', 2);
           showTooltip(event,
             `<b>${labels[i]} → ${labels[j]}</b><br>` +
-            `A: ${fmtNum(modelA.weights.get(i, j))}<br>` +
-            `B: ${fmtNum(modelB.weights.get(i, j))}<br>` +
+            `${nameA}: ${fmtNum(modelA.weights.get(i, j))}<br>` +
+            `${nameB}: ${fmtNum(modelB.weights.get(i, j))}<br>` +
             `Diff: ${fmtNum(val)}`);
         })
         .on('mousemove', function (event: MouseEvent) {
@@ -337,7 +326,6 @@ function renderDiffHeatmap(container: HTMLElement, modelA: TNA, modelB: TNA) {
     }
   }
 
-  // Axis labels
   for (let i = 0; i < n; i++) {
     g.append('text')
       .attr('x', i * cellW + cellW / 2)
@@ -359,23 +347,25 @@ function renderDiffHeatmap(container: HTMLElement, modelA: TNA, modelB: TNA) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Difference Network (green/red directed edges)
+//  Difference Network — renders into a <g> element
 // ═══════════════════════════════════════════════════════════
 
 const DIFF_POS = '#28a745';
 const DIFF_NEG = '#dc3545';
 
-function renderDiffNetwork(container: HTMLElement, modelA: TNA, modelB: TNA) {
+function renderDiffNetworkIntoGroup(
+  gEl: SVGGElement, modelA: TNA, modelB: TNA,
+  nameA: string, nameB: string,
+  width: number, height: number,
+) {
+  const g = d3.select(gEl) as d3.Selection<SVGGElement, unknown, null, undefined>;
   const labels = modelA.labels;
   const n = labels.length;
   const threshold = state.networkSettings.edgeThreshold;
+  const nodeRadius = 18;
+  const padding = 35;
 
-  // Compute diff matrix
-  interface DiffEdge {
-    from: number;
-    to: number;
-    diff: number;
-  }
+  interface DiffEdge { from: number; to: number; diff: number; }
   const edges: DiffEdge[] = [];
   let maxAbs = 0;
   for (let i = 0; i < n; i++) {
@@ -390,35 +380,18 @@ function renderDiffNetwork(container: HTMLElement, modelA: TNA, modelB: TNA) {
   }
   if (maxAbs === 0) maxAbs = 1;
 
-  const rect = container.getBoundingClientRect();
-  const graphW = Math.max(rect.width, 350);
-  const graphH = Math.max(graphW * 0.85, 300);
-  const nodeRadius = 20;
-  const padding = nodeRadius + 30;
-
-  // Layout
-  const cx = graphW / 2;
-  const cy = graphH / 2;
-  const radius = Math.min(cx, cy) - padding;
-  const positions = circularLayout(n, cx, cy, radius);
-
-  d3.select(container).selectAll('*').remove();
-  const svg = d3.select(container)
-    .append('svg')
-    .attr('viewBox', `0 0 ${graphW} ${graphH}`)
-    .attr('width', '100%')
-    .attr('height', '100%')
-    .style('min-height', '280px');
+  // Get positions and rescale to this cell
+  const positions = resolvePositions(labels);
+  rescalePositions(positions, width, height, padding);
 
   const rimWidth = nodeRadius * 0.18;
   const rimRadius = nodeRadius + rimWidth * 0.7;
   const outerRadius = rimRadius + rimWidth / 2 + 2;
-  const arrowSize = 7;
+  const arrowSize = 6;
 
-  const widthScale = d3.scaleLinear().domain([0, maxAbs]).range([0.8, 4]);
+  const widthScale = d3.scaleLinear().domain([0, maxAbs]).range([0.8, 3.5]);
   const opacityScale = d3.scaleLinear().domain([0, maxAbs]).range([0.4, 0.9]);
 
-  // Check bidirectional edges for curvature
   const bidir = new Set<string>();
   for (const e of edges) {
     if (edges.find(r => r.from === e.to && r.to === e.from)) {
@@ -426,12 +399,11 @@ function renderDiffNetwork(container: HTMLElement, modelA: TNA, modelB: TNA) {
     }
   }
 
-  const edgeGroup = svg.append('g');
-  const arrowGroup = svg.append('g');
-  const edgeLabelGroup = svg.append('g');
-  const nodeGroup = svg.append('g');
+  const edgeGroup = g.append('g');
+  const arrowGroup = g.append('g');
+  const edgeLabelGroup = g.append('g');
+  const nodeGroup = g.append('g');
 
-  // Edges
   for (const e of edges) {
     const src = positions[e.from]!;
     const tgt = positions[e.to]!;
@@ -459,8 +431,8 @@ function renderDiffNetwork(container: HTMLElement, modelA: TNA, modelB: TNA) {
         d3.select(this).attr('stroke-opacity', 1).attr('stroke-width', widthScale(absDiff) + 1);
         showTooltip(event,
           `<b>${labels[e.from]} → ${labels[e.to]}</b><br>` +
-          `A: ${fmtNum(modelA.weights.get(e.from, e.to))}<br>` +
-          `B: ${fmtNum(modelB.weights.get(e.from, e.to))}<br>` +
+          `${nameA}: ${fmtNum(modelA.weights.get(e.from, e.to))}<br>` +
+          `${nameB}: ${fmtNum(modelB.weights.get(e.from, e.to))}<br>` +
           `Diff: <span style="color:${color};font-weight:600">${e.diff > 0 ? '+' : ''}${fmtNum(e.diff)}</span>`);
       })
       .on('mousemove', function (event: MouseEvent) {
@@ -478,7 +450,6 @@ function renderDiffNetwork(container: HTMLElement, modelA: TNA, modelB: TNA) {
       .attr('fill', color)
       .attr('opacity', Math.min(op + 0.15, 1));
 
-    // Edge label: signed diff
     edgeLabelGroup.append('text')
       .attr('x', labelX)
       .attr('y', labelY)
@@ -495,7 +466,6 @@ function renderDiffNetwork(container: HTMLElement, modelA: TNA, modelB: TNA) {
       .text((e.diff > 0 ? '+' : '') + fmtWeight(e.diff));
   }
 
-  // Nodes
   const nodeEnter = nodeGroup.selectAll('g.node')
     .data(labels.map((id, i) => ({ id, idx: i, x: positions[i]!.x, y: positions[i]!.y })))
     .enter()
@@ -520,11 +490,4 @@ function renderDiffNetwork(container: HTMLElement, modelA: TNA, modelB: TNA) {
     .style('stroke-width', '3px')
     .style('stroke-linejoin', 'round')
     .text(d => d.id);
-
-  // Legend
-  const legendY = graphH - 24;
-  svg.append('rect').attr('x', 10).attr('y', legendY).attr('width', 14).attr('height', 4).attr('fill', DIFF_POS).attr('rx', 2);
-  svg.append('text').attr('x', 28).attr('y', legendY + 4).attr('font-size', '10px').attr('fill', '#555').text('A > B');
-  svg.append('rect').attr('x', 80).attr('y', legendY).attr('width', 14).attr('height', 4).attr('fill', DIFF_NEG).attr('rx', 2);
-  svg.append('text').attr('x', 98).attr('y', legendY + 4).attr('font-size', '10px').attr('fill', '#555').text('A < B');
 }

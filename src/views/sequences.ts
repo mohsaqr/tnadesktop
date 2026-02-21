@@ -21,8 +21,9 @@ export function renderSequences(container: HTMLElement, data: SequenceData, mode
   const rect = container.getBoundingClientRect();
   const width = Math.max(rect.width, 500);
   const margin = { top: 10, right: 120, bottom: 30, left: 70 };
-  const cellH = Math.min(1, Math.max(0.3, 60 / cleaned.length));
-  const innerH = cleaned.length * cellH;
+  const minInnerH = cleaned.length <= 3 ? 60 : 150;
+  const cellH = Math.max(minInnerH / cleaned.length, Math.min(1, Math.max(0.3, 60 / cleaned.length)));
+  const innerH = Math.max(minInnerH, cleaned.length * cellH);
   const height = innerH + margin.top + margin.bottom;
   const innerW = width - margin.left - margin.right;
   const cellW = innerW / maxLen;
@@ -439,8 +440,9 @@ export function renderCombinedSequences(
     });
     const maxLen = Math.max(...cleaned.map(s => s.length));
 
-    const cellH = Math.min(1, Math.max(0.3, 60 / cleaned.length));
-    const innerH = cleaned.length * cellH;
+    const minInnerH = cleaned.length <= 3 ? 60 : 150;
+    const cellH = Math.max(minInnerH / cleaned.length, Math.min(1, Math.max(0.3, 60 / cleaned.length)));
+    const innerH = Math.max(minInnerH, cleaned.length * cellH);
     const panelH = innerH + margin.top + margin.bottom;
     const cellW = innerW / globalMaxLen;
 

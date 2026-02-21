@@ -50,7 +50,6 @@ const SINGLE_TABS: SubTabDef[] = [
 ];
 
 const GROUP_TABS: SubTabDef[] = [
-  { id: 'setup', label: 'Group Setup' },
   { id: 'network', label: 'Transition Networks' },
   { id: 'mosaic', label: 'Mosaic Plot' },
   { id: 'frequencies', label: 'State Frequencies' },
@@ -76,7 +75,6 @@ const ONEHOT_TABS: SubTabDef[] = [
 ];
 
 const GROUP_ONEHOT_TABS: SubTabDef[] = [
-  { id: 'setup', label: 'Group Setup' },
   { id: 'network', label: 'Co-occurrence Networks' },
   { id: 'mosaic', label: 'Mosaic Plot' },
   { id: 'frequencies', label: 'State Frequencies' },
@@ -141,12 +139,30 @@ let cachedBootResults: Map<string, BootstrapResult> = new Map();
 // ─── Visited tabs tracker (for export report) ───
 const visitedTabs = new Set<string>();
 
-// ─── Group-analysis caches (populated by clustering or column-group activation) ───
-let activeGroupModels: Map<string, TNA> = new Map();
-let activeGroupCents: Map<string, CentralityResult> = new Map();
-let activeGroupFullModel: GroupTNA | null = null;
-let activeGroupLabels: string[] | null = null;
-let activeGroupSource: 'column' | 'clustering' | null = null;
+// ─── Separate caches for column-group and clustering group analysis ───
+interface GroupCache {
+  models: Map<string, TNA>;
+  cents: Map<string, CentralityResult>;
+  fullModel: GroupTNA | null;
+  labels: string[] | null;
+}
+
+function emptyGroupCache(): GroupCache {
+  return { models: new Map(), cents: new Map(), fullModel: null, labels: null };
+}
+
+const columnGroupCache: GroupCache = emptyGroupCache();
+const clusterGroupCache: GroupCache = emptyGroupCache();
+
+/** Resolve the active cache based on the current mode. */
+function activeCache(): GroupCache {
+  return state.activeMode === 'clustering' ? clusterGroupCache : columnGroupCache;
+}
+
+/** Resolve a cache by source. */
+function cacheForSource(source: 'column' | 'clustering'): GroupCache {
+  return source === 'clustering' ? clusterGroupCache : columnGroupCache;
+}
 
 /** Set group analysis data (called from clustering tab or column-group activation). */
 export function setGroupAnalysisData(
@@ -156,40 +172,45 @@ export function setGroupAnalysisData(
   labels: string[],
   source: 'column' | 'clustering' = 'clustering',
 ) {
-  activeGroupModels = models;
-  activeGroupCents = cents;
-  activeGroupFullModel = groupModel;
-  activeGroupLabels = labels;
-  activeGroupSource = source;
+  const cache = cacheForSource(source);
+  cache.models = models;
+  cache.cents = cents;
+  cache.fullModel = groupModel;
+  cache.labels = labels;
 }
 
 /** Clear group analysis data. */
 export function clearGroupAnalysisData() {
-  activeGroupModels.clear();
-  activeGroupCents.clear();
-  activeGroupFullModel = null;
-  activeGroupLabels = null;
-  activeGroupSource = null;
+  columnGroupCache.models.clear();
+  columnGroupCache.cents.clear();
+  columnGroupCache.fullModel = null;
+  columnGroupCache.labels = null;
+  clusterGroupCache.models.clear();
+  clusterGroupCache.cents.clear();
+  clusterGroupCache.fullModel = null;
+  clusterGroupCache.labels = null;
 }
 
-/** Whether group analysis is currently active. */
+/** Whether group analysis is currently active (mode-aware). */
 export function isGroupAnalysisActive(): boolean {
-  return activeGroupModels.size > 0;
+  return activeCache().models.size > 0;
 }
 
 /** Get the source of the active group analysis. */
 export function getGroupAnalysisSource(): 'column' | 'clustering' | null {
-  return activeGroupSource;
+  const c = activeCache();
+  if (c.models.size === 0) return null;
+  return c === clusterGroupCache ? 'clustering' : 'column';
 }
 
 /** Get the active group models map. */
 export function getActiveGroupModels(): Map<string, TNA> {
-  return activeGroupModels;
+  return activeCache().models;
 }
 
 /** Get the active group centralities map. */
 export function getActiveGroupCents(): Map<string, CentralityResult> {
-  return activeGroupCents;
+  return activeCache().cents;
 }
 
 /** Get the subtab list for the current mode. */
@@ -259,7 +280,7 @@ function switchMode(newMode: Mode) {
         buildColumnGroups(state.networkSettings);
         state.activeSubTab = 'network';
       } else {
-        state.activeSubTab = groupsActive ? 'network' : 'setup';
+        state.activeSubTab = 'network';
       }
     }
     if (dashboard) dashboard.classList.remove('data-mode');
@@ -1390,7 +1411,7 @@ function updateAll() {
     const groupWrap = document.getElementById('group-selector-wrap');
     if (groupWrap) groupWrap.style.display = 'none';
 
-    // Clear per-group caches (will be repopulated from activeGroupModels in updateTabContent)
+    // Clear per-group caches (will be repopulated from active cache in updateTabContent)
     cachedModels.clear();
     cachedCents.clear();
     cachedComms.clear();
@@ -1404,14 +1425,15 @@ function updateAll() {
     visitedTabs.clear();
 
     // If group analysis is active, rebuild group models with current settings
-    if (isGroupAnalysisActive() && activeGroupLabels) {
-      // One-hot clustering builds its own GroupTNA (labels don't map to sequenceData),
-      // so reuse the stored model and only re-apply pruning/centralities.
-      const isOnehotClustering = activeGroupSource === 'clustering'
+    // Rebuild both caches if they have data
+    for (const cache of [columnGroupCache, clusterGroupCache]) {
+      if (cache.models.size === 0 || !cache.labels) continue;
+      const isClustering = cache === clusterGroupCache;
+      const isOnehotClustering = isClustering
         && (state.format === 'onehot' || state.format === 'group_onehot');
-      const groupModel = isOnehotClustering && activeGroupFullModel
-        ? activeGroupFullModel
-        : buildGroupModel(activeGroupLabels);
+      const groupModel = isOnehotClustering && cache.fullModel
+        ? cache.fullModel
+        : buildGroupModel(cache.labels);
       const models = new Map<string, TNA>();
       const cents = new Map<string, CentralityResult>();
       for (const name of Object.keys(groupModel.models)) {
@@ -1420,9 +1442,9 @@ function updateAll() {
         models.set(name, m);
         cents.set(name, computeCentralities(m));
       }
-      activeGroupModels = models;
-      activeGroupCents = cents;
-      if (!isOnehotClustering) activeGroupFullModel = groupModel;
+      cache.models = models;
+      cache.cents = cents;
+      if (!isOnehotClustering) cache.fullModel = groupModel;
     }
 
     // Update summary — always single model, with a line if groups are active
@@ -1430,7 +1452,7 @@ function updateAll() {
     if (summaryEl) {
       const s = computeSummary(model);
       const groupSummary = isGroupAnalysisActive()
-        ? row('Groups', `${activeGroupModels.size} active`)
+        ? row('Groups', `${activeCache().models.size} active`)
         : '';
       summaryEl.innerHTML = [
         row('Type', model.type),
@@ -1578,8 +1600,9 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
   if (mode !== 'single' && mode !== 'onehot' && mode !== 'sna') {
     const groupActive = isGroupAnalysisActive();
     if (groupActive && sub !== 'setup') {
-      cachedModels = new Map(activeGroupModels);
-      cachedCents = new Map(activeGroupCents);
+      const ac = activeCache();
+      cachedModels = new Map(ac.models);
+      cachedCents = new Map(ac.cents);
     }
   }
 
@@ -1686,13 +1709,13 @@ export function updateTabContent(model?: any, cent?: any, comm?: any) {
         renderMultiGroupTab(tabWrapper, (card, m, suffix) => renderPatternsTab(card, m, suffix));
         break;
       case 'permutation':
-        if (activeGroupFullModel) renderPermutationTab(tabWrapper, activeGroupFullModel);
+        if (activeCache().fullModel) renderPermutationTab(tabWrapper, activeCache().fullModel!);
         break;
       case 'compare-sequences':
-        if (activeGroupFullModel) renderCompareSequencesTab(tabWrapper, activeGroupFullModel);
+        if (activeCache().fullModel) renderCompareSequencesTab(tabWrapper, activeCache().fullModel!);
         break;
       case 'compare-networks':
-        if (activeGroupFullModel) renderCompareNetworksTab(tabWrapper, activeGroupFullModel);
+        if (activeCache().fullModel) renderCompareNetworksTab(tabWrapper, activeCache().fullModel!);
         break;
     }
   }
@@ -2114,7 +2137,9 @@ function renderGroupNetworkTab(content: HTMLElement) {
   setTimeout(() => {
     document.getElementById('clear-group-analysis')?.addEventListener('click', () => {
       clearGroupAnalysisData();
-      state.activeSubTab = 'setup';
+      // Switch back to single mode since group data is cleared
+      state.activeMode = 'single';
+      state.activeSubTab = 'network';
       updateSubTabStates();
       renderSubTabBar();
       updateTabContent();
@@ -3022,14 +3047,14 @@ function renderCentChartsViewMulti(content: HTMLElement) {
       // Card / Bar / Line toggle
       const toggleBar = document.createElement('div');
       toggleBar.style.marginBottom = '8px';
-      toggleBar.innerHTML = `<div class="view-toggle"><button class="toggle-btn" id="cent-toggle-card">Card View</button><button class="toggle-btn active" id="cent-toggle-bar">Bar</button><button class="toggle-btn" id="cent-toggle-line">Line</button></div>`;
+      toggleBar.innerHTML = `<div class="view-toggle"><button class="toggle-btn active" id="cent-toggle-line">Line</button><button class="toggle-btn" id="cent-toggle-bar">Bar</button><button class="toggle-btn" id="cent-toggle-card">Card View</button></div>`;
       fig.appendChild(toggleBar);
 
       const viewContainer = document.createElement('div');
       viewContainer.id = 'cent-view-container';
       fig.appendChild(viewContainer);
 
-      let currentView: 'card' | 'bar' | 'line' = 'bar';
+      let currentView: 'card' | 'bar' | 'line' = 'line';
 
       function renderCardView() {
         viewContainer.innerHTML = '';
@@ -3069,16 +3094,30 @@ function renderCentChartsViewMulti(content: HTMLElement) {
       function renderBarView() {
         viewContainer.innerHTML = '';
         const measures = enabledMeasures();
-        for (let m = 0; m < measures.length; m++) {
-          const panel = document.createElement('div');
-          panel.className = 'panel';
-          panel.style.marginBottom = '16px';
-          panel.innerHTML = `<div class="panel-title">${measures[m]} — All Groups</div><div id="viz-cent-combined-${m}" style="width:100%;height:300px"></div>`;
-          addPanelDownloadButtons(panel, { image: true, filename: `centrality-combined-${measures[m]}` });
-          viewContainer.appendChild(panel);
+        const nMeasures = measures.length;
+        const cols = nMeasures <= 2 ? nMeasures : nMeasures <= 4 ? 2 : 3;
+        const gridPanel = document.createElement('div');
+        gridPanel.className = 'panel';
+        gridPanel.style.padding = '12px';
+        let gridHtml = `<div style="display:grid;grid-template-columns:repeat(${cols},1fr);gap:16px">`;
+        for (let m = 0; m < nMeasures; m++) {
+          gridHtml += `<div><div style="font-size:12px;font-weight:600;text-align:center;margin-bottom:4px">${measures[m]}</div><div id="viz-cent-combined-${m}" style="width:100%;height:300px"></div></div>`;
         }
+        gridHtml += '</div>';
+        gridPanel.innerHTML = gridHtml;
+        // Legend
+        const groupNames = [...cachedModels.keys()];
+        let legendHtml = '<div style="display:flex;align-items:center;gap:16px;justify-content:center;margin-top:12px">';
+        for (let gi = 0; gi < groupNames.length; gi++) {
+          const color = GROUP_CARD_COLORS[gi % GROUP_CARD_COLORS.length]!;
+          legendHtml += `<div style="display:flex;align-items:center;gap:4px"><div style="width:12px;height:12px;background:${color};border-radius:2px"></div><span style="font-size:11px;color:#555">${groupNames[gi]}</span></div>`;
+        }
+        legendHtml += '</div>';
+        gridPanel.innerHTML += legendHtml;
+        addPanelDownloadButtons(gridPanel, { image: true, filename: 'centrality-bar-all' });
+        viewContainer.appendChild(gridPanel);
         requestAnimationFrame(() => {
-          for (let m = 0; m < measures.length; m++) {
+          for (let m = 0; m < nMeasures; m++) {
             const el = document.getElementById(`viz-cent-combined-${m}`);
             if (el) renderGroupedBarChartForMeasure(el, measures[m]!);
           }
@@ -3219,7 +3258,7 @@ function renderCentChartsViewMulti(content: HTMLElement) {
         else renderLineView();
       }
 
-      renderBarView();
+      renderLineView();
 
       setTimeout(() => {
         const cardBtn = document.getElementById('cent-toggle-card');
@@ -3388,14 +3427,14 @@ function renderFreqStateViewMulti(content: HTMLElement) {
       // Card / Bar / Line toggle
       const toggleBar = document.createElement('div');
       toggleBar.style.marginBottom = '8px';
-      toggleBar.innerHTML = `<div class="view-toggle"><button class="toggle-btn" id="freq-toggle-card">Card View</button><button class="toggle-btn active" id="freq-toggle-bar">Bar</button><button class="toggle-btn" id="freq-toggle-line">Line</button></div>`;
+      toggleBar.innerHTML = `<div class="view-toggle"><button class="toggle-btn active" id="freq-toggle-line">Line</button><button class="toggle-btn" id="freq-toggle-bar">Bar</button><button class="toggle-btn" id="freq-toggle-card">Card View</button></div>`;
       fig.appendChild(toggleBar);
 
       const viewContainer = document.createElement('div');
       viewContainer.id = 'freq-view-container';
       fig.appendChild(viewContainer);
 
-      let currentView: 'card' | 'bar' | 'line' = 'bar';
+      let currentView: 'card' | 'bar' | 'line' = 'line';
 
       function renderCardView() {
         viewContainer.innerHTML = '';
@@ -3469,7 +3508,7 @@ function renderFreqStateViewMulti(content: HTMLElement) {
         else renderLineView();
       }
 
-      renderBarView();
+      renderLineView();
 
       setTimeout(() => {
         const cardBtn = document.getElementById('freq-toggle-card');

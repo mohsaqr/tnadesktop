@@ -176,16 +176,17 @@ describe('rescalePositions', () => {
     }
   });
 
-  it('min position maps to padding, max to width-padding', () => {
+  it('uniform scaling preserves aspect ratio (Y constrains)', () => {
     const positions = [
       { x: 0, y: 0 },
       { x: 10, y: 20 },
     ];
     rescalePositions(positions, 100, 100, 10);
-    expect(positions[0]!.x).toBeCloseTo(10, 8); // padding
-    expect(positions[0]!.y).toBeCloseTo(10, 8); // padding
-    expect(positions[1]!.x).toBeCloseTo(90, 8); // width - padding
-    expect(positions[1]!.y).toBeCloseTo(90, 8); // height - padding
+    // rangeX=10, rangeY=20, usable=80x80, scale=min(8,4)=4, centered
+    expect(positions[0]!.x).toBeCloseTo(30, 8);
+    expect(positions[0]!.y).toBeCloseTo(10, 8);
+    expect(positions[1]!.x).toBeCloseTo(70, 8);
+    expect(positions[1]!.y).toBeCloseTo(90, 8);
   });
 
   it('n=0 does nothing', () => {
@@ -194,11 +195,11 @@ describe('rescalePositions', () => {
     expect(positions).toEqual([]);
   });
 
-  it('single point gets placed at padding (range=0 uses fallback=1)', () => {
+  it('single point gets placed at center', () => {
     const positions = [{ x: 5, y: 5 }];
     rescalePositions(positions, 100, 100, 10);
-    // Range is 0 → fallback to 1, so x = padding + (0/1)*usable = padding
-    expect(positions[0]!.x).toBeCloseTo(10, 8);
-    expect(positions[0]!.y).toBeCloseTo(10, 8);
+    // Range is 0 → fallback=1, scale=80, midpoint=5 → centered at (50,50)
+    expect(positions[0]!.x).toBeCloseTo(50, 8);
+    expect(positions[0]!.y).toBeCloseTo(50, 8);
   });
 });

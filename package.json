@@ -1,6 +1,6 @@
 {
   "name": "dynalytics-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Dynalytics Desktop – Analytics of Dynamics",
   "private": true,
   "type": "module",

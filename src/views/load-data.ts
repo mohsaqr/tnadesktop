@@ -1,13 +1,14 @@
 /**
  * Data Import Wizard — modal-based 3-step wizard for loading and configuring data.
  * Step 1: Data Source (upload, sample, generate)
- * Step 2: Configure (format tabs + column mapping)
- * Step 3: Preview & Analyze (data table + analyze button)
+ * Step 2: Configure (format tabs + column mapping + data preview)
+ * Step 3: Model & Analyze (data summary + model settings + analyze)
  */
 import { state, render, showLoading, hideLoading, importOnehot, defaultNetworkSettings } from '../main';
 import { clearLayoutCache } from './network';
 import { parseFile, wideToSequences, longToSequences, guessColumns, guessEdgeListColumns, edgeListToMatrix } from '../data';
-import { clearGroupAnalysisData } from './dashboard';
+import { clearGroupAnalysisData, updateSubTabStates } from './dashboard';
+import { buildColumnGroups } from './clustering';
 import { erdosRenyi, barabasiAlbert, wattsStrogatz, stochasticBlockModel, matrixToEdgeRows } from '../analysis/random-networks';
 import type { GeneratorResult } from '../analysis/random-networks';
 import { simulateLongData, simulateOnehotData } from '../analysis/simulate';
@@ -65,6 +66,27 @@ let wizardOverlay: HTMLElement | null = null;
 let wizardStep = 1;
 let wizardGoTo: ((step: number) => void) | null = null;
 
+// Wizard-local pre-built data (stored at Step 2→3 transition, committed in commitAndAnalyze)
+let wizardSequenceData: any = null;
+let wizardGroupLabels: string[] | null = null;
+let wizardUniqueStates: string[] = [];
+let wizardSequenceCount = 0;
+let wizardModelTypeLocked = false;
+let wizardIsEdgeList = false;
+let wizardEdgeListNodeCount = 0;
+let wizardGroupAnalysis = false;
+
+function clearWizardData() {
+  wizardSequenceData = null;
+  wizardGroupLabels = null;
+  wizardUniqueStates = [];
+  wizardSequenceCount = 0;
+  wizardModelTypeLocked = false;
+  wizardIsEdgeList = false;
+  wizardEdgeListNodeCount = 0;
+  wizardGroupAnalysis = false;
+}
+
 /** Close the data wizard modal if open. */
 export function closeDataWizard() {
   if (wizardOverlay) {
@@ -72,6 +94,7 @@ export function closeDataWizard() {
     wizardOverlay = null;
   }
   wizardGoTo = null;
+  clearWizardData();
 }
 
 /** Open the data wizard modal. Starts at Step 2 if data is already loaded. */
@@ -109,6 +132,7 @@ export function showDataWizard() {
       state.rawData = [];
       state.headers = [];
       state.filename = '';
+      clearWizardData();
     }
     wizardStep = step;
     renderCurrentStep();
@@ -118,7 +142,8 @@ export function showDataWizard() {
   function updateStepsIndicator() {
     const steps = [
       { num: 1, label: 'Data' },
-      { num: 2, label: 'Configure & Analyze' },
+      { num: 2, label: 'Configure' },
+      { num: 3, label: 'Model & Analyze' },
     ];
     stepsBar.innerHTML = steps.map((s, i) => {
       const cls = wizardStep === s.num ? 'active' : (wizardStep > s.num ? 'done' : '');
@@ -140,6 +165,7 @@ export function showDataWizard() {
     switch (wizardStep) {
       case 1: renderStep1(body, footer); break;
       case 2: renderStep2(body, footer); break;
+      case 3: renderStep3(body, footer); break;
     }
   }
 
@@ -240,15 +266,182 @@ export function showDataWizard() {
     // Preview table
     renderPreviewTable(stepBody);
 
-    // Footer: Back + Analyze
+    // Footer: Back + Next
     stepFooter.innerHTML = `
       <button class="btn-secondary" id="wiz-back-2">&larr; Back</button>
-      <button class="btn-primary" id="wiz-analyze">Analyze</button>
+      <button class="btn-primary" id="wiz-next-2">Next &rarr;</button>
     `;
     stepFooter.querySelector('#wiz-back-2')!.addEventListener('click', () => goTo(1));
-    stepFooter.querySelector('#wiz-analyze')!.addEventListener('click', () => {
-      runAnalyze();
+    stepFooter.querySelector('#wiz-next-2')!.addEventListener('click', () => {
+      tryBuildSequences();
     });
+  }
+
+  // ─── Step 3: Model & Analyze ───
+  function renderStep3(stepBody: HTMLElement, stepFooter: HTMLElement) {
+    // Summary cards row
+    let summaryHtml = '<div class="wizard-summary-grid">';
+
+    if (wizardIsEdgeList) {
+      summaryHtml += `
+        <div class="wizard-summary-item">
+          <div class="wizard-summary-value">${wizardEdgeListNodeCount}</div>
+          <div class="wizard-summary-label">Nodes</div>
+        </div>
+      `;
+    } else {
+      summaryHtml += `
+        <div class="wizard-summary-item">
+          <div class="wizard-summary-value">${wizardSequenceCount}</div>
+          <div class="wizard-summary-label">Sequences</div>
+        </div>
+        <div class="wizard-summary-item">
+          <div class="wizard-summary-value">${wizardUniqueStates.length}</div>
+          <div class="wizard-summary-label">Unique States</div>
+        </div>
+      `;
+    }
+
+    if (wizardGroupLabels) {
+      const uniqueGroups = new Set(wizardGroupLabels);
+      summaryHtml += `
+        <div class="wizard-summary-item">
+          <div class="wizard-summary-value">${uniqueGroups.size}</div>
+          <div class="wizard-summary-label">Groups</div>
+        </div>
+      `;
+    }
+
+    summaryHtml += '</div>';
+
+    // Two-column area: model settings (left) + group panel (right, if groups exist)
+    const hasGroups = wizardGroupLabels && wizardGroupLabels.length > 0;
+    const useColumns = hasGroups && !wizardIsEdgeList;
+
+    // --- Model settings column ---
+    let modelHtml = '';
+    if (!wizardIsEdgeList) {
+      modelHtml = `<div class="wizard-model-config${useColumns ? '' : ' wizard-model-config-full'}">`;
+      modelHtml += '<div class="wizard-config-section-title">Model Settings</div>';
+
+      const mtDisabled = wizardModelTypeLocked ? 'disabled' : '';
+      let mtOptions: string;
+      if (wizardModelTypeLocked) {
+        mtOptions = '<option value="ctna" selected>CTNA (Co-occurrence)</option>';
+      } else {
+        mtOptions = `
+          <option value="tna" ${state.modelType === 'tna' ? 'selected' : ''}>TNA (Relative)</option>
+          <option value="ftna" ${state.modelType === 'ftna' ? 'selected' : ''}>FTNA (Frequency)</option>
+          <option value="ctna" ${state.modelType === 'ctna' ? 'selected' : ''}>CTNA (Co-occurrence)</option>
+          <option value="atna" ${state.modelType === 'atna' ? 'selected' : ''}>ATNA (Attention)</option>
+        `;
+      }
+      modelHtml += `
+        <div class="wizard-config-row">
+          <label>Model Type</label>
+          <select id="wiz-model-type" ${mtDisabled}>${mtOptions}</select>
+        </div>
+      `;
+
+      modelHtml += `
+        <div class="wizard-config-row">
+          <label>Scaling</label>
+          <select id="wiz-scaling">
+            <option value="" ${state.scaling === '' ? 'selected' : ''}>None</option>
+            <option value="minmax" ${state.scaling === 'minmax' ? 'selected' : ''}>MinMax</option>
+            <option value="max" ${state.scaling === 'max' ? 'selected' : ''}>Max</option>
+            <option value="rank" ${state.scaling === 'rank' ? 'selected' : ''}>Rank</option>
+          </select>
+        </div>
+      `;
+
+      const showBeta = state.modelType === 'atna' && !wizardModelTypeLocked;
+      modelHtml += `
+        <div class="wizard-config-row" id="wiz-beta-row" style="display:${showBeta ? 'flex' : 'none'}">
+          <label>ATNA Beta</label>
+          <div class="slider-row" style="flex:1">
+            <input type="range" id="wiz-atna-beta" min="0.01" max="2" step="0.01" value="${state.atnaBeta}">
+            <span class="slider-value" id="wiz-beta-val">${state.atnaBeta.toFixed(2)}</span>
+          </div>
+        </div>
+      `;
+
+      modelHtml += '</div>';
+    } else {
+      modelHtml = '<div class="wizard-model-config wizard-model-config-full">';
+      modelHtml += '<div class="wizard-config-section-title">Network Settings</div>';
+      modelHtml += `
+        <div class="wizard-config-row">
+          <label>Type</label>
+          <span style="font-size:13px;color:var(--text)">${state.snaDirected ? 'Directed' : 'Undirected'} Network</span>
+        </div>
+      `;
+      modelHtml += '</div>';
+    }
+
+    // --- Group panel column ---
+    let groupHtml = '';
+    if (useColumns) {
+      const groupCounts = new Map<string, number>();
+      for (const label of wizardGroupLabels!) {
+        groupCounts.set(label, (groupCounts.get(label) || 0) + 1);
+      }
+      const sortedGroups = [...groupCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+      groupHtml = '<div class="wizard-group-panel">';
+      groupHtml += `<div class="wizard-config-section-title">Groups Detected &mdash; ${sortedGroups.length}</div>`;
+      groupHtml += '<div class="wizard-group-summary">';
+      for (const [name, count] of sortedGroups) {
+        groupHtml += `<div class="wizard-group-row">
+          <span class="wizard-group-name">${escHtml(name)}</span>
+          <span class="wizard-group-count">${count} seq</span>
+        </div>`;
+      }
+      groupHtml += '</div>';
+      groupHtml += `<button class="wizard-group-toggle-btn${wizardGroupAnalysis ? ' active' : ''}" id="wiz-group-toggle">${wizardGroupAnalysis ? 'Group Analysis Enabled ✓' : 'Enable Group Analysis'}</button>`;
+      groupHtml += '</div>';
+    }
+
+    // Wrap in columns container if groups present
+    let configHtml: string;
+    if (useColumns) {
+      configHtml = `<div class="wizard-config-columns">${modelHtml}${groupHtml}</div>`;
+    } else {
+      configHtml = modelHtml;
+    }
+
+    stepBody.innerHTML = summaryHtml + configHtml;
+
+    // Wire events
+    setTimeout(() => {
+      document.getElementById('wiz-model-type')?.addEventListener('change', (e) => {
+        state.modelType = (e.target as HTMLSelectElement).value as typeof state.modelType;
+        const betaRow = document.getElementById('wiz-beta-row');
+        if (betaRow) betaRow.style.display = state.modelType === 'atna' ? 'flex' : 'none';
+      });
+      document.getElementById('wiz-scaling')?.addEventListener('change', (e) => {
+        state.scaling = (e.target as HTMLSelectElement).value as typeof state.scaling;
+      });
+      document.getElementById('wiz-atna-beta')?.addEventListener('input', (e) => {
+        state.atnaBeta = parseFloat((e.target as HTMLInputElement).value);
+        const valEl = document.getElementById('wiz-beta-val');
+        if (valEl) valEl.textContent = state.atnaBeta.toFixed(2);
+      });
+      document.getElementById('wiz-group-toggle')?.addEventListener('click', () => {
+        wizardGroupAnalysis = !wizardGroupAnalysis;
+        const btn = document.getElementById('wiz-group-toggle')!;
+        btn.classList.toggle('active', wizardGroupAnalysis);
+        btn.textContent = wizardGroupAnalysis ? 'Group Analysis Enabled ✓' : 'Enable Group Analysis';
+      });
+    }, 0);
+
+    // Footer: Back + Analyze
+    stepFooter.innerHTML = `
+      <button class="btn-secondary" id="wiz-back-3">&larr; Back</button>
+      <button class="btn-primary wizard-analyze-btn" id="wiz-commit">Analyze</button>
+    `;
+    stepFooter.querySelector('#wiz-back-3')!.addEventListener('click', () => goTo(2));
+    stepFooter.querySelector('#wiz-commit')!.addEventListener('click', () => commitAndAnalyze());
   }
 
   // ─── Dismiss on overlay click (only if already analyzed data exists) ───
@@ -684,6 +877,181 @@ function analyzeOnehot() {
     throw new Error('cancelled');
   } else {
     state.groupLabels = null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Wizard Step 2→3: build sequences into wizard-local state
+// ═══════════════════════════════════════════════════════════
+
+function tryBuildSequences() {
+  try {
+    wizardIsEdgeList = false;
+    wizardModelTypeLocked = false;
+
+    if (state.format === 'edgelist') {
+      const { matrix, labels } = edgeListToMatrix(
+        state.rawData, state.snaFromCol, state.snaToCol, state.snaWeightCol, state.snaDirected,
+      );
+      void matrix;
+      if (labels.length === 0) {
+        alert('No valid nodes found in edge list. Check your From/To column selections.');
+        return;
+      }
+      wizardSequenceData = [[]]; // sentinel
+      wizardGroupLabels = null;
+      wizardUniqueStates = labels;
+      wizardSequenceCount = 0;
+      wizardModelTypeLocked = true;
+      wizardIsEdgeList = true;
+      wizardEdgeListNodeCount = labels.length;
+    } else if (state.format === 'wide') {
+      wizardSequenceData = wideToSequences(state.rawData);
+      wizardGroupLabels = null;
+      const uniqueSet = new Set<string>();
+      for (const seq of wizardSequenceData) {
+        for (const val of seq) {
+          if (val != null) uniqueSet.add(val);
+        }
+      }
+      wizardUniqueStates = [...uniqueSet].sort();
+      wizardSequenceCount = wizardSequenceData.length;
+    } else if (state.format === 'onehot' || state.format === 'group_onehot') {
+      // Read selected columns from DOM
+      const checks = document.querySelectorAll('.onehot-col-check') as NodeListOf<HTMLInputElement>;
+      const selectedCols: string[] = [];
+      checks.forEach(c => { if (c.checked) selectedCols.push(c.dataset.col!); });
+      if (selectedCols.length < 2) {
+        alert('Select at least 2 binary columns for one-hot analysis.');
+        return;
+      }
+      state.onehotCols = selectedCols;
+
+      const records: Record<string, number>[] = state.rawData.map(row => {
+        const rec: Record<string, number> = {};
+        for (let c = 0; c < state.headers.length; c++) {
+          rec[state.headers[c]!] = parseInt(row[c] ?? '0', 10) || 0;
+        }
+        return rec;
+      });
+
+      const opts: { actor?: string; session?: string; windowSize?: number; windowType?: 'tumbling' | 'sliding' } = {};
+      if (state.onehotActorCol >= 0) {
+        opts.actor = state.headers[state.onehotActorCol]!;
+        for (let i = 0; i < state.rawData.length; i++) {
+          const val = (state.rawData[i]![state.onehotActorCol] ?? '').trim();
+          (records[i] as any)[state.headers[state.onehotActorCol]!] = val as any;
+        }
+      }
+      if (state.onehotSessionCol >= 0) {
+        opts.session = state.headers[state.onehotSessionCol]!;
+        for (let i = 0; i < state.rawData.length; i++) {
+          const val = (state.rawData[i]![state.onehotSessionCol] ?? '').trim();
+          (records[i] as any)[state.headers[state.onehotSessionCol]!] = val as any;
+        }
+      }
+      if (state.onehotWindowSize > 1) opts.windowSize = state.onehotWindowSize;
+      opts.windowType = state.onehotWindowType;
+
+      wizardSequenceData = importOnehot(records, selectedCols, opts);
+      state.modelType = 'ctna';
+      wizardModelTypeLocked = true;
+      wizardUniqueStates = selectedCols;
+      wizardSequenceCount = wizardSequenceData.sequences
+        ? wizardSequenceData.sequences.length
+        : wizardSequenceData.length;
+
+      // Group labels for group_onehot
+      if (state.format === 'group_onehot' && state.onehotGroupCol >= 0 && state.onehotActorCol >= 0) {
+        const groupColIdx = state.onehotGroupCol;
+        const actorColIdx = state.onehotActorCol;
+        const labels: string[] = [];
+        const seenActors = new Set<string>();
+        for (const row of state.rawData) {
+          const actorVal = (row[actorColIdx] ?? '').trim();
+          if (!seenActors.has(actorVal)) {
+            seenActors.add(actorVal);
+            const groupVal = (row[groupColIdx] ?? '').trim();
+            labels.push(groupVal);
+          }
+        }
+        wizardGroupLabels = labels.slice(0, wizardSequenceCount);
+      } else if (state.format === 'group_onehot') {
+        alert('Please select both an Actor column and a Group column for Group One-Hot analysis.');
+        return;
+      } else {
+        wizardGroupLabels = null;
+      }
+    } else {
+      // long format
+      const result = longToSequences(state.rawData, state.longIdCol, state.longTimeCol, state.longStateCol, state.longGroupCol);
+      wizardSequenceData = result.sequences;
+      wizardGroupLabels = result.groups;
+      const uniqueSet = new Set<string>();
+      for (const seq of result.sequences) {
+        for (const val of seq) {
+          if (val != null) uniqueSet.add(val);
+        }
+      }
+      wizardUniqueStates = [...uniqueSet].sort();
+      wizardSequenceCount = result.sequences.length;
+    }
+
+    // Validate
+    if (!wizardIsEdgeList && (!wizardSequenceData || wizardSequenceCount === 0)) {
+      alert('No valid sequences found. Check your data format.');
+      return;
+    }
+
+    if (wizardGoTo) wizardGoTo(3);
+  } catch (err) {
+    alert('Error building sequences: ' + (err as Error).message);
+  }
+}
+
+function commitAndAnalyze() {
+  clearGroupAnalysisData();
+  state.networkSettings = defaultNetworkSettings();
+  clearLayoutCache();
+
+  if (wizardIsEdgeList) {
+    state.sequenceData = [[]]; // sentinel
+    state.groupLabels = null;
+    state.activeGroup = null;
+    state.activeMode = 'sna';
+    state.activeSubTab = 'network';
+    state.networkSettings.edgeWidthMax = 2;
+    state.networkSettings.edgeWidthMin = 0.2;
+    state.networkSettings.showEdgeLabels = false;
+  } else {
+    state.sequenceData = wizardSequenceData;
+    state.groupLabels = wizardGroupLabels;
+    state.activeGroup = null;
+
+    if (state.format === 'onehot') {
+      state.modelType = 'ctna';
+      state.activeMode = 'onehot';
+      state.activeSubTab = 'network';
+    } else if (state.format === 'group_onehot') {
+      state.modelType = 'ctna';
+      state.activeMode = 'group_onehot';
+      state.activeSubTab = 'setup';
+    } else {
+      state.activeMode = 'single';
+      state.activeSubTab = 'network';
+    }
+  }
+
+  // Capture before closeDataWizard() resets wizard state
+  const enableGroupAnalysis = wizardGroupAnalysis;
+
+  closeDataWizard();
+  render();
+
+  // Pre-build group models only if user opted in via the wizard toggle
+  if (enableGroupAnalysis && state.groupLabels && state.groupLabels.length > 0 && state.activeMode !== 'sna') {
+    buildColumnGroups(state.networkSettings);
+    updateSubTabStates();
   }
 }
 

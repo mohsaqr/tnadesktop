@@ -1,5 +1,15 @@
 # Dynalytics Desktop Learnings
 
+## 2026-02-20
+
+### Rename: TNA Desktop → Dynalytics Desktop
+- Branding-only rename — no library types/imports touched (`TNA`, `ftna`, `ctna`, `tnaj` all preserved)
+- Storage keys changed (fresh start, no migration): `tna-desktop-*` → `dynalytics-desktop-*`
+- Deploy base path: `/tnadesktop/` → `/dynalytics/`
+- Export filenames: `tna-*.{png,svg,csv,html,pdf}` → `dynalytics-*`
+- Auto-generated Tauri schema at `src-tauri/gen/schemas/capabilities.json` must be updated manually; Cargo build artifacts in `target/` regenerate automatically
+- The `src-tauri/target/` build cache still references old `tna-desktop` crate name; a `cargo clean` or full Tauri rebuild will refresh it
+
 ## 2026-02-17
 
 ### Project Structure

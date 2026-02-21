@@ -67,9 +67,15 @@ export function rescalePositions(
   const rangeY = maxY - minY || 1;
   const usableW = width - 2 * padding;
   const usableH = height - 2 * padding;
+  // Uniform scaling: use the limiting dimension to preserve aspect ratio
+  const scale = Math.min(usableW / rangeX, usableH / rangeY);
+  const midX = (minX + maxX) / 2;
+  const midY = (minY + maxY) / 2;
+  const cx = width / 2;
+  const cy = height / 2;
   for (const p of positions) {
-    p.x = padding + ((p.x - minX) / rangeX) * usableW;
-    p.y = padding + ((p.y - minY) / rangeY) * usableH;
+    p.x = cx + (p.x - midX) * scale;
+    p.y = cy + (p.y - midY) * scale;
   }
 }
 
@@ -951,7 +957,11 @@ function layoutCacheKey(
   return `${layoutName}|${seed}|${model.labels.join(',')}|${wSample.join(',')}`;
 }
 
-/** Normalize positions to 0-1 range for caching. */
+/**
+ * Normalize positions for caching using UNIFORM scaling.
+ * Both X and Y are scaled by the same factor (maxRange) so that
+ * circles stay circular and layout shapes are preserved.
+ */
 function normalizePositions(positions: { x: number; y: number }[]): { x: number; y: number }[] {
   if (positions.length === 0) return [];
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -963,21 +973,31 @@ function normalizePositions(positions: { x: number; y: number }[]): { x: number;
   }
   const rangeX = maxX - minX || 1;
   const rangeY = maxY - minY || 1;
+  const maxRange = Math.max(rangeX, rangeY);
+  const midX = (minX + maxX) / 2;
+  const midY = (minY + maxY) / 2;
   return positions.map(p => ({
-    x: (p.x - minX) / rangeX,
-    y: (p.y - minY) / rangeY,
+    x: (p.x - midX) / maxRange + 0.5,
+    y: (p.y - midY) / maxRange + 0.5,
   }));
 }
 
-/** Denormalize cached 0-1 positions to fit the current canvas dimensions. */
+/**
+ * Denormalize cached positions using UNIFORM scaling.
+ * Fits within the smaller usable dimension and centers in the larger,
+ * preserving the original layout's aspect ratio.
+ */
 function denormalizePositions(
   norm: { x: number; y: number }[], width: number, height: number, padding: number,
 ): { x: number; y: number }[] {
   const usableW = width - 2 * padding;
   const usableH = height - 2 * padding;
+  const scale = Math.min(usableW, usableH);
+  const offsetX = padding + (usableW - scale) / 2;
+  const offsetY = padding + (usableH - scale) / 2;
   return norm.map(p => ({
-    x: padding + p.x * usableW,
-    y: padding + p.y * usableH,
+    x: offsetX + p.x * scale,
+    y: offsetY + p.y * scale,
   }));
 }
 
@@ -985,6 +1005,63 @@ function denormalizePositions(
 export function clearLayoutCache() {
   cachedLayoutKey = '';
   cachedNormPositions = [];
+  globalLabelPositions.clear();
+  globalPixelPositions.clear();
+  lastLayoutWidth = 0;
+  lastLayoutHeight = 0;
+  lastLayoutPadding = 0;
+}
+
+/**
+ * Global label→normalized-position map.
+ * Populated the first time drawNetwork computes a layout (typically the single model).
+ * Reused by group networks (same full label set) to keep identical node positions.
+ * NOT used by clique subgraphs (fewer labels → compute fresh layout).
+ */
+const globalLabelPositions: Map<string, { x: number; y: number }> = new Map();
+
+/**
+ * Pixel-exact positions from the primary model's last drawNetwork render
+ * (after spacing adjustment).  Used by diff/perm networks to get identical
+ * node placement without normalization distortion.
+ */
+const globalPixelPositions: Map<string, { x: number; y: number }> = new Map();
+
+/** Dimensions of the viewBox used when globalPixelPositions were computed. */
+let lastLayoutWidth = 0;
+let lastLayoutHeight = 0;
+let lastLayoutPadding = 0;
+
+/** Get the global normalized position for a label, if available. */
+export function getGlobalLabelPositions(): Map<string, { x: number; y: number }> {
+  return globalLabelPositions;
+}
+
+/**
+ * Return the exact graphWidth, graphHeight, and padding used by the last
+ * primary drawNetwork call.  Diff/perm renderers use these for their SVG
+ * viewBox so that pixel positions from resolvePositions map correctly.
+ */
+export function getLastLayoutDimensions(): { width: number; height: number; padding: number } {
+  return { width: lastLayoutWidth, height: lastLayoutHeight, padding: lastLayoutPadding };
+}
+
+/**
+ * Return pixel-exact positions matching the primary network's layout.
+ * Callers must use getLastLayoutDimensions() for their SVG viewBox so
+ * the coordinates map correctly.  Falls back to circular layout in the
+ * stored viewBox dimensions.
+ */
+export function resolvePositions(labels: string[]): { x: number; y: number }[] {
+  const n = labels.length;
+  if (globalPixelPositions.size > 0 && labels.every(l => globalPixelPositions.has(l))) {
+    return labels.map(l => ({ ...globalPixelPositions.get(l)! }));
+  }
+  // Fallback: circular layout in the stored (or default) viewBox
+  const graphW = lastLayoutWidth || 800;
+  const graphH = lastLayoutHeight || 600;
+  const padding = lastLayoutPadding || 50;
+  return circularLayout(n, graphW / 2, graphH / 2, Math.min(graphW, graphH) / 2 - padding);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1043,10 +1120,17 @@ function drawNetwork(
   const effectiveLayout = (settings.layout === 'circular' && n > 20) ? 'fcose' : settings.layout;
   const key = layoutCacheKey(model, effectiveLayout, layoutSeed);
   let positions: { x: number; y: number }[];
+  let usedGlobalPositions = false;
 
   if (key === cachedLayoutKey && cachedNormPositions.length === n) {
     // Reuse cached positions — just rescale to current dimensions/padding
     positions = denormalizePositions(cachedNormPositions, graphWidth, graphHeight, padding);
+  } else if (globalLabelPositions.size > 0 && model.labels.length === globalLabelPositions.size && model.labels.every(l => globalLabelPositions.has(l))) {
+    // Reuse global label positions for full models (group networks with same labels).
+    // Subgraphs (cliques) have fewer labels and must compute their own layout.
+    const norm = model.labels.map(l => globalLabelPositions.get(l)!);
+    positions = denormalizePositions(norm, graphWidth, graphHeight, padding);
+    usedGlobalPositions = true;
   } else {
     // Compute fresh layout
     const cyLayouts: CytoscapeLayoutName[] = ['concentric', 'fcose', 'dagre', 'cola', 'euler', 'avsdf'];
@@ -1088,6 +1172,15 @@ function drawNetwork(
     // Cache the normalized positions for future visual-only updates
     cachedNormPositions = normalizePositions(positions);
     cachedLayoutKey = key;
+    // Populate global label→position map so all views share the same layout
+    for (let i = 0; i < n; i++) {
+      globalLabelPositions.set(model.labels[i]!, cachedNormPositions[i]!);
+    }
+  }
+  if (usedGlobalPositions) {
+    // Also update the per-model cache so visual-only changes don't recompute
+    cachedNormPositions = model.labels.map(l => globalLabelPositions.get(l)!);
+    cachedLayoutKey = key;
   }
 
   // Apply spacing: scale positions from centroid
@@ -1100,6 +1193,18 @@ function drawNetwork(
       p.x = cx + (p.x - cx) * spacing;
       p.y = cy + (p.y - cy) * spacing;
     }
+  }
+
+  // Store pixel positions + dimensions for external renderers (diff/perm networks).
+  // Only from the primary model (not group sub-models which reuse global positions).
+  if (!usedGlobalPositions) {
+    globalPixelPositions.clear();
+    for (let i = 0; i < n; i++) {
+      globalPixelPositions.set(model.labels[i]!, { x: positions[i]!.x, y: positions[i]!.y });
+    }
+    lastLayoutWidth = graphWidth;
+    lastLayoutHeight = graphHeight;
+    lastLayoutPadding = padding;
   }
 
   const nodes: NodeDatum[] = model.labels.map((id, i) => {
