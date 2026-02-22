@@ -4,10 +4,11 @@
  */
 import type { TNA, GroupTNA, CentralityResult, CommunityResult, CentralityMeasure, CommunityMethod, SequenceData } from 'tnaj';
 import { tna, ftna, ctna, atna, centralities, prune, summary, AVAILABLE_MEASURES, AVAILABLE_METHODS, groupTna, groupFtna, groupCtna, groupAtna, isGroupTNA, clusterSequences, clusterData, importOnehot, buildModel as tnajBuildModel } from 'tnaj';
-import { edgeListToMatrix } from './data';
+import { edgeListToMatrix, applyStateMapping } from './data';
 import { detectCommunities } from './analysis/communities';
 import { computePageRank } from './analysis/pagerank';
 import { renderDashboard } from './views/dashboard';
+import { showWelcomeScreen } from './views/load-data';
 
 // ═══════════════════════════════════════════════════════════
 //  Network Settings
@@ -151,11 +152,14 @@ export interface AppState {
   rawData: string[][];
   headers: string[];
   sequenceData: SequenceData | null;
+  sequenceActorIds: string[] | null;  // one per sequence (long-format only), null otherwise
+  stateMapping: Record<string, string | null>;  // rename/merge/remove states before analysis
   format: 'wide' | 'long' | 'onehot' | 'group_onehot' | 'edgelist';
   longIdCol: number;
   longTimeCol: number;
   longStateCol: number;
   longGroupCol: number;          // -1 = no grouping
+  longSessionGap: number;        // -1 = no session splitting; >= 0 = gap threshold (same units as time col)
   onehotCols: string[];          // selected binary column names for one-hot import
   onehotActorCol: number;        // actor column index for one-hot (-1 = none)
   onehotSessionCol: number;      // session column index for one-hot (-1 = none)
@@ -196,11 +200,14 @@ export const state: AppState = {
   rawData: [],
   headers: [],
   sequenceData: null,
+  sequenceActorIds: null,
+  stateMapping: {},
   format: 'wide',
   longIdCol: 0,
   longTimeCol: 1,
   longStateCol: 2,
   longGroupCol: -1,
+  longSessionGap: -1,
   onehotCols: [],
   onehotActorCol: -1,
   onehotSessionCol: -1,
@@ -278,10 +285,11 @@ function applyStartEnd(sequences: SequenceData): SequenceData {
 export function buildModel(): TNA {
   if (state.activeMode === 'sna') return buildSnaModel();
   if (!state.sequenceData) throw new Error('No data loaded');
+  const seqs = applyStateMapping(state.sequenceData, state.stateMapping);
   const opts: Record<string, unknown> = {};
   if (state.scaling) opts.scaling = state.scaling;
   if (state.modelType === 'atna') opts.beta = state.atnaBeta;
-  let model = builders[state.modelType](applyStartEnd(state.sequenceData), opts as any);
+  let model = builders[state.modelType](applyStartEnd(seqs), opts as any);
   if (state.threshold > 0) {
     model = prune(model, state.threshold) as TNA;
   }
@@ -291,10 +299,11 @@ export function buildModel(): TNA {
 /** Build a GroupTNA on demand (for opt-in group analysis). */
 export function buildGroupModel(labels: string[]): GroupTNA {
   if (!state.sequenceData) throw new Error('No data loaded');
+  const seqs = applyStateMapping(state.sequenceData, state.stateMapping);
   const opts: Record<string, unknown> = {};
   if (state.scaling) opts.scaling = state.scaling;
   if (state.modelType === 'atna') opts.beta = state.atnaBeta;
-  return groupBuilders[state.modelType](applyStartEnd(state.sequenceData), labels, opts as any);
+  return groupBuilders[state.modelType](applyStartEnd(seqs), labels, opts as any);
 }
 
 /** Extract the active single-group TNA from a model (applies pruning for group models). */
@@ -401,6 +410,7 @@ function loadState() {
     state.longTimeCol = saved.longTimeCol ?? 1;
     state.longStateCol = saved.longStateCol ?? 2;
     state.longGroupCol = saved.longGroupCol ?? -1;
+    state.longSessionGap = (saved as any).longSessionGap ?? -1;
     state.snaFromCol = (saved as any).snaFromCol ?? 0;
     state.snaToCol = (saved as any).snaToCol ?? 1;
     state.snaWeightCol = (saved as any).snaWeightCol ?? -1;
@@ -422,6 +432,7 @@ function loadState() {
     state.disabledIndices = (saved as any).disabledIndices ?? [];
     state.centralityLoops = saved.centralityLoops ?? false;
     state.activeSecondaryTab = (saved as any).activeSecondaryTab ?? '';
+    state.stateMapping = (saved as any).stateMapping ?? {};
     // Reset network settings to fresh defaults when version bumps
     if (settingsStale) {
       state.networkSettings = defaultNetworkSettings();
@@ -458,6 +469,8 @@ function loadState() {
 export function clearAnalysis() {
   state.rawData = [];
   state.sequenceData = null;
+  state.sequenceActorIds = null;
+  state.stateMapping = {};
   state.headers = [];
   state.groupLabels = null;
   state.filename = '';
@@ -519,3 +532,6 @@ export function hideLoading() {
 // ─── Init ───
 loadState();
 render();
+// Always open the welcome/upload screen on every app start.
+// If data was previously loaded it can be dismissed via overlay click.
+showWelcomeScreen();

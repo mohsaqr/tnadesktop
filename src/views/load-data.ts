@@ -7,7 +7,7 @@
 import { state, render, showLoading, hideLoading, importOnehot, defaultNetworkSettings } from '../main';
 import { clearLayoutCache } from './network';
 import { parseFile, wideToSequences, longToSequences, guessColumns, guessEdgeListColumns, edgeListToMatrix } from '../data';
-import { clearGroupAnalysisData, updateSubTabStates } from './dashboard';
+import { clearGroupAnalysisData, updateSubTabStates, isGroupAnalysisActive, showStateEditorModal } from './dashboard';
 import { buildColumnGroups } from './clustering';
 import { erdosRenyi, barabasiAlbert, wattsStrogatz, stochasticBlockModel, matrixToEdgeRows } from '../analysis/random-networks';
 import type { GeneratorResult } from '../analysis/random-networks';
@@ -69,22 +69,26 @@ let wizardGoTo: ((step: number) => void) | null = null;
 // Wizard-local pre-built data (stored at Step 2→3 transition, committed in commitAndAnalyze)
 let wizardSequenceData: any = null;
 let wizardGroupLabels: string[] | null = null;
+let wizardActorIds: string[] | null = null;
 let wizardUniqueStates: string[] = [];
 let wizardSequenceCount = 0;
 let wizardModelTypeLocked = false;
 let wizardIsEdgeList = false;
 let wizardEdgeListNodeCount = 0;
 let wizardGroupAnalysis = false;
+let wizardIsReestimation = false; // true when opened via showEstimationWizard (not fresh load)
 
 function clearWizardData() {
   wizardSequenceData = null;
   wizardGroupLabels = null;
+  wizardActorIds = null;
   wizardUniqueStates = [];
   wizardSequenceCount = 0;
   wizardModelTypeLocked = false;
   wizardIsEdgeList = false;
   wizardEdgeListNodeCount = 0;
   wizardGroupAnalysis = false;
+  wizardIsReestimation = false;
 }
 
 /** Close the data wizard modal if open. */
@@ -97,12 +101,71 @@ export function closeDataWizard() {
   clearWizardData();
 }
 
+/**
+ * Open the wizard at Step 3 (Estimation Settings) with current loaded data.
+ * Pre-populates wizard state from AppState so the model controls reflect
+ * what is already loaded, and "Analyze" re-commits with the new settings.
+ */
+export function showEstimationWizard() {
+  if (!state.sequenceData && state.rawData.length === 0) return; // no data
+  closeDataWizard();
+  wizardIsReestimation = true;
+
+  // Pre-populate wizard-local variables from current state
+  wizardSequenceData = state.sequenceData;
+  wizardGroupLabels = state.groupLabels;
+  wizardActorIds = state.sequenceActorIds;
+  wizardIsEdgeList = state.format === 'edgelist';
+  wizardModelTypeLocked = state.format === 'onehot' || state.format === 'group_onehot';
+
+  if (state.sequenceData) {
+    const stateSet = new Set<string>();
+    for (const seq of state.sequenceData) {
+      for (const s of seq) { if (s !== null) stateSet.add(s); }
+    }
+    wizardUniqueStates = [...stateSet].sort();
+    wizardSequenceCount = state.sequenceData.length;
+  }
+
+  if (wizardIsEdgeList) {
+    const nodeSet = new Set<string>();
+    const fc = state.snaFromCol, tc = state.snaToCol;
+    for (const row of state.rawData) {
+      if (row[fc]) nodeSet.add(row[fc]!);
+      if (row[tc]) nodeSet.add(row[tc]!);
+    }
+    wizardEdgeListNodeCount = nodeSet.size;
+  }
+
+  wizardGroupAnalysis = isGroupAnalysisActive();
+
+  // Open wizard at step 3
+  wizardStep = 3;
+  showDataWizardInternal();
+}
+
 /** Open the data wizard modal. Starts at Step 2 if data is already loaded. */
 export function showDataWizard() {
   closeDataWizard();
 
   const hasData = state.rawData.length > 0;
   wizardStep = hasData ? 2 : 1;
+  showDataWizardInternal();
+}
+
+/**
+ * Always open the wizard at Step 1 (the welcome/upload screen).
+ * Called on every app startup so the user always lands on the upload screen,
+ * regardless of what was previously loaded in this session.
+ */
+export function showWelcomeScreen() {
+  closeDataWizard();
+  clearWizardData();
+  wizardStep = 1;
+  showDataWizardInternal();
+}
+
+function showDataWizardInternal() {
 
   // ─── Modal structure ───
   wizardOverlay = document.createElement('div');
@@ -266,14 +329,21 @@ export function showDataWizard() {
     // Preview table
     renderPreviewTable(stepBody);
 
-    // Footer: Back + Next
+    // Footer: Back | [Edit States — data prep, non-edge-list only] | Next →
+    const showEditStates = state.format !== 'edgelist';
     stepFooter.innerHTML = `
       <button class="btn-secondary" id="wiz-back-2">&larr; Back</button>
-      <button class="btn-primary" id="wiz-next-2">Next &rarr;</button>
+      <div style="display:flex;gap:10px">
+        ${showEditStates ? '<button class="btn-secondary" id="wiz-edit-states-2">&#9998;&ensp;Edit States</button>' : ''}
+        <button class="btn-primary" id="wiz-next-2">Next &rarr;</button>
+      </div>
     `;
     stepFooter.querySelector('#wiz-back-2')!.addEventListener('click', () => goTo(1));
     stepFooter.querySelector('#wiz-next-2')!.addEventListener('click', () => {
-      tryBuildSequences();
+      tryBuildSequences('step3');
+    });
+    stepFooter.querySelector('#wiz-edit-states-2')?.addEventListener('click', () => {
+      tryBuildSequences('editStates');
     });
   }
 
@@ -476,12 +546,16 @@ export function showDataWizard() {
       });
     }, 0);
 
-    // Footer: Back + Analyze
+    // Footer: Start New (or Back) + Analyze
+    // When re-estimating: left = "↺ Start New" (→ step 1, clears data)
+    // When fresh load:    left = "← Back" (→ step 2, where Edit States is available)
+    const backLabel = wizardIsReestimation ? '&#8635; Start New' : '&larr; Back';
+    const backTarget = wizardIsReestimation ? 1 : 2;
     stepFooter.innerHTML = `
-      <button class="btn-secondary" id="wiz-back-3">&larr; Back</button>
-      <button class="btn-primary wizard-analyze-btn" id="wiz-commit">Analyze</button>
+      <button class="btn-secondary" id="wiz-back-3">${backLabel}</button>
+      <button class="btn-primary wizard-analyze-btn" id="wiz-commit">&#9654;&ensp;Analyze</button>
     `;
-    stepFooter.querySelector('#wiz-back-3')!.addEventListener('click', () => goTo(2));
+    stepFooter.querySelector('#wiz-back-3')!.addEventListener('click', () => goTo(backTarget));
     stepFooter.querySelector('#wiz-commit')!.addEventListener('click', () => commitAndAnalyze());
   }
 
@@ -570,6 +644,8 @@ function renderFormatOptions(container: HTMLElement) {
     return opts;
   };
 
+  const gapEnabled = state.longSessionGap >= 0;
+  const gapVal = state.longSessionGap >= 0 ? state.longSessionGap : 900;
   longOpts.innerHTML = `
     <div class="format-opt-pair">
       <label>Actor/ID:</label>
@@ -587,6 +663,14 @@ function renderFormatOptions(container: HTMLElement) {
       <label>Group:</label>
       <select id="load-long-group">${makeGroupOpts(state.longGroupCol)}</select>
     </div>
+    <div class="format-opt-pair">
+      <label>Session gap:</label>
+      <div style="display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="load-long-split" ${gapEnabled ? 'checked' : ''}>
+        <input type="number" id="load-long-gap" value="${gapVal}" min="1" style="width:70px;font-size:12px" ${gapEnabled ? '' : 'disabled'}>
+        <span style="font-size:11px;color:#888">s (same units as time col)</span>
+      </div>
+    </div>
   `;
   container.appendChild(longOpts);
 
@@ -602,6 +686,18 @@ function renderFormatOptions(container: HTMLElement) {
     });
     document.getElementById('load-long-group')?.addEventListener('change', (e) => {
       state.longGroupCol = parseInt((e.target as HTMLSelectElement).value);
+    });
+    const splitCb = document.getElementById('load-long-split') as HTMLInputElement | null;
+    const gapInput = document.getElementById('load-long-gap') as HTMLInputElement | null;
+    splitCb?.addEventListener('change', () => {
+      const enabled = splitCb.checked;
+      if (gapInput) gapInput.disabled = !enabled;
+      state.longSessionGap = enabled ? (parseInt(gapInput?.value ?? '900') || 900) : -1;
+    });
+    gapInput?.addEventListener('change', () => {
+      if (splitCb?.checked) {
+        state.longSessionGap = parseInt(gapInput.value) || 900;
+      }
     });
   }, 0);
 
@@ -818,6 +914,7 @@ function runAnalyze() {
     } else if (state.format === 'wide') {
       state.sequenceData = wideToSequences(state.rawData);
       state.groupLabels = null;
+      state.sequenceActorIds = null;
       state.longGroupCol = -1;
     } else if (state.format === 'onehot' || state.format === 'group_onehot') {
       analyzeOnehot();
@@ -826,9 +923,10 @@ function runAnalyze() {
       const timeCol = state.longTimeCol;
       const stateCol = state.longStateCol;
       const groupCol = state.longGroupCol;
-      const result = longToSequences(state.rawData, idCol, timeCol, stateCol, groupCol);
+      const result = longToSequences(state.rawData, idCol, timeCol, stateCol, groupCol, state.longSessionGap);
       state.sequenceData = result.sequences;
       state.groupLabels = result.groups;
+      state.sequenceActorIds = result.actorIds;
     }
 
     if (!state.sequenceData || state.sequenceData.length === 0) {
@@ -925,7 +1023,7 @@ function analyzeOnehot() {
 //  Wizard Step 2→3: build sequences into wizard-local state
 // ═══════════════════════════════════════════════════════════
 
-function tryBuildSequences() {
+function tryBuildSequences(destination: 'step3' | 'editStates' = 'step3') {
   try {
     wizardIsEdgeList = false;
     wizardModelTypeLocked = false;
@@ -1025,9 +1123,10 @@ function tryBuildSequences() {
       }
     } else {
       // long format
-      const result = longToSequences(state.rawData, state.longIdCol, state.longTimeCol, state.longStateCol, state.longGroupCol);
+      const result = longToSequences(state.rawData, state.longIdCol, state.longTimeCol, state.longStateCol, state.longGroupCol, state.longSessionGap);
       wizardSequenceData = result.sequences;
       wizardGroupLabels = result.groups;
+      wizardActorIds = result.actorIds;
       const uniqueSet = new Set<string>();
       for (const seq of result.sequences) {
         for (const val of seq) {
@@ -1044,7 +1143,19 @@ function tryBuildSequences() {
       return;
     }
 
-    if (wizardGoTo) wizardGoTo(3);
+    if (destination === 'editStates') {
+      // Commit sequences to AppState so State Editor can read them,
+      // then close wizard and open State Editor directly.
+      // SE "Next →" will call showEstimationWizard() to reach model settings.
+      state.sequenceData = wizardSequenceData;
+      state.groupLabels = wizardGroupLabels;
+      state.sequenceActorIds = (state.format === 'long') ? wizardActorIds : null;
+      state.stateMapping = {};
+      closeDataWizard();
+      showStateEditorModal();
+    } else {
+      if (wizardGoTo) wizardGoTo(3);
+    }
   } catch (err) {
     alert('Error building sequences: ' + (err as Error).message);
   }
@@ -1067,6 +1178,7 @@ function commitAndAnalyze() {
   } else {
     state.sequenceData = wizardSequenceData;
     state.groupLabels = wizardGroupLabels;
+    state.sequenceActorIds = (state.format === 'long') ? wizardActorIds : null;
     state.activeGroup = null;
 
     if (state.format === 'onehot') {
@@ -1114,6 +1226,10 @@ function loadSampleData() {
     state.longIdCol = guessed.idCol;
     state.longTimeCol = guessed.timeCol;
     state.longStateCol = guessed.stateCol;
+    // Pre-select Achiever as the group column so group analysis works out of the box
+    state.longGroupCol = headers.findIndex(h => h.toLowerCase() === 'achiever');
+    // Split sessions by 900-second gap, matching R's prepare_data(time_threshold=900)
+    state.longSessionGap = 900;
     hideLoading();
     if (wizardGoTo) wizardGoTo(2);
   } catch (err) {
@@ -1413,6 +1529,7 @@ function showGenerateDataModal(format: 'long' | 'onehot') {
         const seqResult = longToSequences(simResult.rows, idCol, timeCol, stateCol, groupCol);
         state.sequenceData = seqResult.sequences;
         state.groupLabels = seqResult.groups;
+        state.sequenceActorIds = seqResult.actorIds;
       } else {
         state.format = 'onehot';
         const stateCols = simResult.headers.filter(h => !['Actor', 'Group', 'Time'].includes(h));

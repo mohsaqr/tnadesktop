@@ -1,5 +1,60 @@
 # Dynalytics Desktop — Change Log
 
+### 2026-02-22 — Data card + SE "Next" button (session 12e)
+- src/views/dashboard.ts: `renderDataView()` now renders ONE large floating summary card (`.data-summary-card`) instead of 3 grid cards; card shows: dark-header with filename + "Loaded" badge, 4-stat row (Sequences/States/Groups/Rows), state-tags section with pill badges, active-mapping indicator (purple note if mappings applied), footer with primary "Edit Data" button (→ State Editor) and secondary "Raw Data / Sequences" view links; removed "Estimation Settings" action; State Editor footer button renamed "Apply & Re-estimate" → "Next →" (it's a wizard step, not a terminal action)
+- src/styles.css: Replaced multi-card grid CSS with single `.data-summary-card` design — dark gradient header, colorful stat values, state tag pills, purple "Edit Data" gradient button; removed unused `.data-hub-grid`, `.data-hub-card`, `.data-hub-action-btn` rules
+- Tests: 247 pass; zero TypeScript errors
+
+### 2026-02-22 — Apply fix + wizard re-estimation flow (session 12d)
+- src/views/dashboard.ts: SE modal "Apply & Re-estimate" now calls `showEstimationWizard()` instead of `updateTabContent()` — fixing the silent no-op when in data mode; wizard opens at step 3 so user can keep/change model settings and click Analyze
+- src/views/load-data.ts: Added `wizardIsReestimation` flag (set to `true` in `showEstimationWizard()`, reset in `clearWizardData()`); wizard step 3 footer now shows "↺ Start New" (→ step 1, clears data) instead of "← Back" when re-estimating; "Edit States" button now correctly commits sequence data to AppState first (for first-time loads) then closes wizard and opens State Editor, instead of prematurely calling commitAndAnalyze()
+- Tests: 247 pass; zero TypeScript errors
+
+### 2026-02-22 — Modal transparency fix + Data Hub redesign (session 12c)
+- src/styles.css: Added `.modal-box` base class with `background:#fff`, `border-radius`, `box-shadow` — fixes State Editor modal transparency (was fully see-through since `.modal-box` had no background); added `.modal-header`, `.modal-footer`, `.modal-close-btn` shared modal classes; added `.data-hub`, `.data-hub-grid`, `.data-hub-card`, `.data-hub-open-btn`, `.data-hub-action-btn`, `.data-modal-box`, `.data-modal-body` for the new Data Explorer hub; removed now-unused `.se-modal-footer` rule
+- src/views/dashboard.ts: `renderDataView()` completely redesigned — replaced tab-bar+inline-panel layout with a beautiful "Data Explorer" card hub (3 clickable cards: Raw Data, Sequences, Configuration) plus "Edit States" and "Estimation Settings" action buttons; new `showDataModal(type)` opens each data view in a large `.data-modal-box` modal (modal header with icon + title, scrollable body, footer close button); SE modal header now uses icon-box style matching new design; SE modal footer class changed to shared `.modal-footer`; SE modal close button changed to `.modal-close-btn`
+- Tests: 247 pass; `npx tsc --noEmit` zero errors
+
+### 2026-02-22 — State Editor modal + Estimation Wizard + Clear fix (session 12b)
+- src/views/dashboard.ts: State Editor is now a floating modal (`showStateEditorModal()`, exported); removed embedded tab; each state row has a colored accent bar, action select, and conditional rename/merge input; Reset All / Cancel / Apply & Re-estimate footer; removed `showEstimationSettingsModal()` and `goToStateEditor()` (both replaced); Clear button condition fixed to `state.rawData.length === 0 && !state.sequenceData`
+- src/views/load-data.ts: `showEstimationWizard()` pre-populates wizard vars from AppState and opens wizard at Step 3; `showDataWizard` refactored into `showDataWizardInternal()`; "Edit States First" button opens State Editor modal via `showStateEditorModal()` after commit; import updated to `showStateEditorModal` + `isGroupAnalysisActive`
+- src/styles.css: Full State Editor modal CSS (`.se-modal-box`, `.se-modal-row`, `.se-modal-accent`, `.se-modal-name`, `.se-modal-value`, `.se-modal-footer`, `.se-modal-legend`, `.se-legend-item`)
+- Tests: 247 pass; `npx tsc --noEmit` zero errors
+
+### 2026-02-22 — State Editor, Estimation Settings modal, sidebar cleanup (session 12)
+- src/data.ts: `applyStateMapping(sequences, mapping)` — new exported pure function; renames/merges/removes states in SequenceData; null mapping value drops events; existing null padding preserved
+- src/main.ts: `stateMapping: Record<string, string|null>` added to AppState (default {}); applied in `buildModel()` and `buildGroupModel()` before start/end sentinels; cleared in `clearAnalysis()`; restored in `loadState()`. Import of `applyStateMapping` added.
+- src/views/dashboard.ts: (a) Removed 4 sidebar control-group blocks (Model Type / Scaling / ATNA Beta / Prune Threshold) and all their event listeners; (b) File menu now has Edit States… and Estimation Settings… items (disabled when no data); (c) `showEstimationSettingsModal()` — modal with all 4 estimation controls, Apply & Re-estimate button; (d) `renderDataView` gains 4th "State Editor" tab; `switchMode('data')` dataTabs list updated; (e) `renderStateEditorPanel()` — full state editor with rename/merge/remove chip UI, Apply & Re-estimate, Reset All, Estimation Settings... shortcut; `buildMergeSelect()` and `updateChipStyle()` helpers; (f) `goToStateEditor()` exported for use by wizard
+- src/views/load-data.ts: Import `goToStateEditor` from dashboard; "Edit States First" button in wizard step 3 footer — commits data then navigates to State Editor tab
+- src/styles.css: State Editor CSS rules — `.se-table`, `.se-pill`, `.se-pill-keep/rename/merge/remove`, `.se-rename-input`, `.se-action-select`
+- src/__tests__/data.test.ts: 5 new `applyStateMapping` tests (rename, merge, remove, null padding preservation, empty mapping identity)
+- Tests: **247 pass** (was 242); `npx tsc --noEmit` zero errors
+
+### 2026-02-22 — File menu + Data tab redesign
+- src/views/dashboard.ts: `buildFileDropdown()` — new leftmost nav dropdown with Open…/Clear/Exit; `buildTopNav()` now prepends File dropdown, Data button enabled only when data loaded, Clear button removed from right side; `switchMode('data')` now detects no-data → shows wizard, with data → shows 4-tab data view; `wireNavEvents()` wires File menu actions and Data button to `switchMode('data')`; `updateNavActive()` updated to enable/disable Data button; old clear-btn wiring removed; `renderDataView(container)` replaced with full 4-tab implementation (Raw Data / Sequences / Metadata / Matrix); `updateTabContent()` passes container to `renderDataView` and manages `data-view-container` class; `renderRawDataPanel`, `renderSequencesPanel`, `renderMetadataPanel`, `renderMatrixPanel` — new helper functions for each sub-tab
+- src/styles.css: `nav-menu-sep`, `data-view-tabs`, `data-view-tab`, `data-view-panel`, `data-view-container`, `data-table` CSS rules added; `.dashboard.data-mode .main-content` set to flex column for proper height layout
+- Tests: 242 pass; `npx tsc --noEmit` zero errors
+
+### 2026-02-22 — Long-format session splitting by time gap
+- src/data.ts: `longToSequences()` gains optional `gapThreshold` param (default -1 = disabled); splits each actor's events into multiple sessions wherever consecutive time gap > threshold; gap is in same units as time column (raw seconds for numeric columns, milliseconds for ISO date columns); matches R `prepare_data(time_threshold=900)` behaviour exactly
+- src/main.ts: `AppState` gains `longSessionGap: number` (default -1); persisted in localStorage
+- src/views/load-data.ts: new "Session gap" checkbox + input row in long-format options (disabled by default; `loadSampleData()` enables with 900s matching R); gap passed to `longToSequences()`
+- src/__tests__/data.test.ts: 3 new tests for session splitting (gap splits, group labels, disabled)
+- Tests: 242 pass; `npx tsc --noEmit` zero errors
+
+### 2026-02-22 — Compare Sequences: exact R equivalence + formula fix
+- src/views/compare-sequences.ts: corrected residual formula to `(O-E)/sqrt(cell_var)` (was `/cell_var`, then `/sqrt(E)`); residuals now computed globally on ALL patterns before slicing top-10; sort by max|residual| descending matches R's heatmap order; stale docstring removed; colors/scale unchanged (#D33F6A/white/#4A6FE3, clamped [-4,4])
+- tmp/gen_cmpseq_equiv.R + tmp/cmpseq_equiv.json: R equivalence harness using `group_regulation_long` + `group_tna(prep, group=achiever)`; 20 cells verified, Max |TS−R| = 0.000e+0
+- Tests: 239 pass; `npx tsc --noEmit` zero errors
+
+### 2026-02-22 — Ship group_regulation_long as sample dataset
+- src/sample-data.csv: replaced synthetic 5507-row subset with full tna `group_regulation_long` dataset (27,533 rows, exported verbatim from R with `write.csv`)
+- src/views/load-data.ts: `loadSampleData()` now pre-sets `longGroupCol` to the `Achiever` column (via `findIndex`) so group analysis works out of the box when loading sample data
+
+### 2026-02-22 — Compare Sequences: Pearson residuals heatmap
+- src/views/compare-sequences.ts: replaced grouped bar chart figure with D3 Pearson residuals heatmap (top 20 patterns by max |residual|, sorted descending); added `computePearsonResiduals()` helper; added Min/Max length (`sub`) controls (default 2–4); added `Residual (group)` columns to the table; vertical RdBu legend on right side; `addPanelDownloadButtons` with `filename: 'compare-sequences-heatmap'`
+- Tests: 239 pass; `npx tsc --noEmit` zero errors
+
 ### 2026-02-22 — Compare Properties Tab (22-metric pairwise group comparison)
 - src/views/compare-properties.ts: NEW — `renderComparePropertiesTab(container, fullModel)` computes all 22 reliability metrics once per (i,j) group pair via `compareWeightMatrices()`; Figure = D3 SVG heatmap (rows=metrics, cols=pairs) with per-row RdYlGn colour normalisation (lower=greener for Deviations/Dissimilarities, higher=greener for Correlations/Similarities/Pattern); Table = 22 rows in 5 category groups with 4-decimal pair columns; both panels have download buttons
 - src/views/dashboard.ts: `compare-properties` tab appended to GROUP_TABS and GROUP_ONEHOT_TABS; `case 'compare-properties':` added to tab dispatch switch; import added

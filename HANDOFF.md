@@ -1,63 +1,49 @@
-# Session Handoff — 2026-02-22 (session 8)
+# Session Handoff — 2026-02-22 (session 12c)
 
-## Completed (session 8)
+## Completed (session 12c)
 
-### Compare Properties Tab
-- NEW `src/views/compare-properties.ts`: `renderComparePropertiesTab(container, fullModel)`
-- Calls `compareWeightMatrices()` once per (i<j) group pair — no bootstrapping
-- Figure: D3 SVG heatmap, rows=22 metrics (RELIABILITY_METRICS order), cols=pairs; per-row RdYlGn color normalisation (lower=greener for Deviations/Dissimilarities; higher=greener for Correlations/Similarities/Pattern); category separator lines + left-side category labels; color legend; NaN cells shown as `—` in neutral gray
-- Table: 22 rows in 5 category groups (same header pattern as `renderReliabilityTable`); pair columns with 4-decimal values; CSV download
-- `GROUP_TABS` and `GROUP_ONEHOT_TABS` in `dashboard.ts` now include `{ id: 'compare-properties', label: 'Compare Properties' }`
-- Tab dispatch switch case added after `case 'compare-networks':`
-
-## Completed (session 7)
-
-### Reliability Analysis Tab — Full Polish
-- **3-tab figure view**: Box Plots | Density | Mean ± SD (each category in its own panel)
-- **Density tab**: one combined KDE chart per category with overlaid groups + dashed vertical mean lines + white-backed value labels (`showMeans: true` flag on `renderDensityPlot`)
-- **Mean ± SD tab**: one combined horizontal bar chart per category via `renderMeanSDBar` (all metrics stacked, matching the combined-network style)
-- **Table**: grouped category header rows + merged Mean ± SD column (`"0.0299 ± 0.0032"` format)
-- **All 5 categories shown** in both figure and table: Deviations (first), Correlations, Dissimilarities, Similarities, Pattern
-- **Slider ranges**: iterations 100–1000 step 50; split 0.3–0.9
-
-### Model Param Propagation
-- `reliabilityAnalysis()` now accepts and applies `scaling`, `addStartState`, `startStateLabel`, `addEndState`, `endStateLabel`, `atnaBeta`
-- Mirrors `buildModel()` in `main.ts` exactly — `applyStartEnd()` is applied to each split half before building the TNA
-- Pruning (threshold) does NOT affect reliability — it is display-only as intended
-- `renderReliabilityTab` passes all relevant state fields to `reliabilityAnalysis`
-
-### Numerical Equivalence Harness (100 datasets)
-- `tmp/gen_equiv100.R` — generates 100 synthetic datasets via `Saqrlab::simulate_sequences()`, splits each 50/50, runs `tna:::compare_(ma, mb, scaling='none', network=FALSE, measures=character(0))`, saves weight matrices + metric values to `tmp/equiv100.json`
-- `tmp/run_equiv100.ts` — reads JSON, reconstructs column-major matrices, runs `compareWeightMatrices()`, reports max |TS−R| per metric
-- **Result: all 22 metrics match R with max |TS−R| = 0.000e+0 across 100 datasets (bit-for-bit identical)**
+### Modal transparency fix + Data Hub redesign
+- **Root cause fixed**: `.modal-box` had no `background` CSS rule → State Editor appeared fully transparent
+- **Solution**: Added `.modal-box { background: #fff; border-radius: ...; box-shadow: ... }` as a shared base
+- **New shared modal classes**: `.modal-header`, `.modal-footer`, `.modal-close-btn` — used by SE modal and data modals
+- **Data view redesign**: `renderDataView()` now renders a beautiful "Data Explorer" hub:
+  - 3 large clickable cards: Raw Data, Sequences, Configuration (each with colored icon, title, subtitle)
+  - "Edit States" + "Estimation Settings" action buttons below the cards
+  - Clicking a card opens a large full-width modal (`showDataModal()`)
+- **State Editor modal**: Updated to use new icon-box header design, shared `.modal-footer` and `.modal-close-btn`
+- **Startup**: `showWelcomeScreen()` is called after `render()` in main.ts (already implemented, remains working)
 
 ## Current State
-- Build: zero TS errors (`npx tsc --noEmit`)
-- Tests: **239 pass** across 13 test files (`npm test`)
-- Latest commits: `c81e4dd` (session 7 polish) — session 8 changes not yet committed
-- Deployed at `saqr.me/dynalytics/` via GitHub Pages (session 7 version)
+
+### What works
+- App always starts with welcome wizard (Step 1) on every startup/refresh
+- State Editor modal: no longer transparent; has solid white background with shadow
+- Data view: beautiful card hub with 3 data modals (Raw Data, Sequences, Configuration)
+- File menu: Open…, Edit States… (→ State Editor modal), Estimation Settings… (→ wizard step 3), Clear, Exit
+- Estimation settings via wizard step 3
+- `applyStateMapping()` correctly applied in `buildModel()` + `buildGroupModel()`
+- 247 tests pass, zero TypeScript errors
+
+### Files modified this session
+- `src/styles.css`: Added `.modal-box`, `.modal-header`, `.modal-footer`, `.modal-close-btn`, `.data-hub*`, `.data-modal-box`, `.data-modal-body`
+- `src/views/dashboard.ts`: `renderDataView()` redesigned; `showDataModal()` added; SE modal header/footer/close-btn updated
 
 ## Key Decisions
-- **`showMeans` flag on `renderDensityPlot`**: draws dashed vertical mean lines with white stroke halo + colored label. Keeps existing KDE function reusable without forking.
-- **`renderMeanSDBar` for combined mean±SD**: horizontal bars from 0→mean, ±SD error bars with caps, dot at mean. One chart per category panel.
-- **Deviations first** everywhere (RELIABILITY_METRICS order, ALL_PANELS order, table output).
-- **Pruning excluded from reliability**: threshold is a network-display parameter, not a model parameter. Only `scaling`, `startState`, `endState` affect the model weights.
-- **`tna:::compare_()` signature**: requires explicit `network=FALSE, measures=character(0)` in tna 1.2.0 — these have no defaults.
-- **Column-major flat → row-major 2D**: R's `as.vector(matrix)` = column-major; TypeScript reconstruction: `matrix[k % n][floor(k/n)] = flat[k]`.
+- **Card hub over tabs**: Replaced the flat tab+inline-panel data view with clickable cards that open large modals — matches the user's "nice containers or large modal forms" request
+- **Shared `.modal-box` base**: All structured modals (SE, data modals) now share the same background/shadow/radius rule instead of each defining it inline
+- **`.modal-close-btn`**: New class for X buttons in modal headers — replaces the old `.modal-close` (which was styled as a centered "Close" text link)
+- **Startup wizard**: `showWelcomeScreen()` remains at bottom of main.ts init section — runs synchronously after `render()`
 
 ## Open Issues
-- None known.
+- None identified
 
 ## Next Steps
-- Consider adding reliability tab to Group view (one result panel per group, or cross-group comparison)
-- Consider export buttons for reliability figure/table panels (currently no download buttons on reliability tab)
-- Consider adding confidence intervals or significance indicators (e.g., p-value that correlation > 0.8) to reliability summary
-- Compare Properties tab is complete — potential future enhancement: tooltip on heatmap cells showing exact value + which pairs are being compared
+- User review of the new Data Hub and State Editor visual appearance
+- Possible future: make welcome wizard Step 1 look even more polished
+- Possible future: add a "recently loaded files" section to the Data Hub
 
 ## Context
-- Build: `npm run build`
-- Test: `npm test`
-- Type-check: `npx tsc --noEmit`
-- Dev server: `npx vite --port 1420` (or check if already running on 1420)
-- Preview: `npx vite preview --port 4173`
-- Equivalence check: `Rscript tmp/gen_equiv100.R` then `npx tsx tmp/run_equiv100.ts`
+- Project: Dynalytics Desktop (Vite + TypeScript + tnaj)
+- Working dir: `/Users/mohammedsaqr/Library/CloudStorage/GoogleDrive-saqr@saqr.me/My Drive/Git/Dynalytics_Desktop`
+- Test cmd: `npm test`
+- Type check: `npx tsc --noEmit`

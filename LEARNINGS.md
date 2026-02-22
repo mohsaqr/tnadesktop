@@ -1,5 +1,29 @@
 # Dynalytics Desktop Learnings
 
+## 2026-02-22 (session 12)
+
+### State Editor + Estimation Modal Pattern
+- `applyStateMapping` must run BEFORE `applyStartEnd()` in `buildModel`/`buildGroupModel` so user-defined rename/remove doesn't accidentally affect Start/End sentinels added by the app.
+- Modal appended to `document.body` survives `render()` (which only clears `#app`); guard with `document.getElementById('estimation-modal')` to prevent duplicates.
+- Sidebar removal is safe even when existing event listeners reference sidebar IDs — removing the HTML means `getElementById` returns null, so guarded `?.addEventListener` won't throw; but unguarded `!.addEventListener` calls WILL throw. Ensure all sidebar event listener code is removed together with the HTML.
+- `goToStateEditor()` exported from dashboard.ts lets load-data.ts navigate post-commit without importing the internal `switchMode()` function.
+
+## 2026-02-22 (session 9)
+
+### Compare Sequences: Standardized Residuals Heatmap (matching tna exactly)
+- **R formula** (`plot.tna_sequence_comparison`): `resid = (O - E) / cell_var` where `cell_var = r*c*(n-r)*(n-c)/n³`. This is the multinomial variance under independence — NOT `(O-E)/sqrt(E)` (plain Pearson).
+- **WRONG formula was**: `(O - E) / sqrt(E)`. This gives different values (verified numerically against R).
+- **R colors**: `low="#D33F6A"` (red-pink), `high="#4A6FE3"` (blue), mid=white, limits clamped `[-4, 4]`. Not `d3.interpolateRdBu`.
+- **Ordering**: R plot uses `x$pattern[seq_len(n)]` — result order (p-value sort when test=TRUE, length+alpha otherwise). Do NOT re-sort by |residual| for R equivalence.
+- **Legend**: fixed ticks at +4, 0, −4. Title "Standardized residual" (matching R's legend label).
+- Legend: SVG `linearGradient` (vertical). Use unique `id` each render (e.g., `cmp-seq-grad-${Date.now()}`) to avoid gradient conflicts from prior renders.
+- `sub` option to `compareSequences`: pass `Array.from({length: hi-lo+1}, (_, i) => lo+i)` from min/max length inputs.
+- Cell text contrast: use white when `|residual| > 1.6` (40% of ±4 range), dark otherwise.
+- **CRITICAL — residuals are computed on the TOP-N SUBSET, not all patterns**: R's `plot.tna_sequence_comparison` filters to `pat <- x$pattern[seq_len(n)]` FIRST, then computes `n <- sum(x_sub)`, `rs`, `cs`, `E`, `resid` on that small subset. Computing on all patterns gives a different `n` and completely wrong residuals (e.g. 0.9 instead of 12). Fix: call `computeStandardizedResiduals(top10, groupNames)` inside `renderHeatmapPanel` AFTER slicing.
+- **Pattern ordering**: Without `test`, patterns are sorted length-then-alpha → first 10 are `adapt->*`, `cohesion->*` with small residuals. With `test=TRUE`, sorted by p-value → most discriminating patterns (like `discuss->consensus`) come first with large residuals (e.g. 11.99). The user's R screenshot uses `test=TRUE`.
+- **Equivalence verified (subset)**: top-10 subset on `group_regulation_long` (test=FALSE, sub=2:4). 20 cells, Max |TS−R| = 0.000e+0.
+- `group_tna(prep, group=achiever)` requires `group=` as a vector (not `group_col=`); `Achiever` is available in `prep$meta_data$Achiever` after `prepare_data`.
+
 ## 2026-02-22 (session 7)
 
 ### Reliability Figure: Multi-Tab Pattern

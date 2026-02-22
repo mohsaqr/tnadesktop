@@ -327,14 +327,32 @@ export function wideToSequences(rows: string[][]): SequenceData {
  * Convert long-format rows into SequenceData given column indices.
  * timeCol = -1 means "none" (use row order within each ID group).
  * groupCol = -1 means no grouping; >= 0 extracts one group label per sequence.
+ * gapThreshold >= 0: split each actor's events into sessions when consecutive
+ *   time gap exceeds this value (same units as the time column — seconds for
+ *   numeric columns, milliseconds for parsed date/time columns). -1 = no split.
+ *   Matches R tna::prepare_data(time_threshold=900) when set to 900 on numeric
+ *   seconds data.
  * Supports numeric, ISO 8601, and many common date/time formats.
  * Throws with descriptive error messages on parse failures.
  */
 export function longToSequences(
-  rows: string[][], idCol: number, timeCol: number, stateCol: number, groupCol: number = -1,
-): { sequences: SequenceData; groups: string[] | null } {
+  rows: string[][], idCol: number, timeCol: number, stateCol: number,
+  groupCol: number = -1, gapThreshold: number = -1,
+): { sequences: SequenceData; groups: string[] | null; actorIds: string[] } {
   if (rows.length === 0) {
     throw new Error('No data rows found.');
+  }
+
+  // Detect whether the time column is raw-numeric (seconds) or parsed timestamps (ms).
+  // Raw-numeric: all non-empty time values parse as plain Number.
+  // Timestamps: any value fails Number → parseTimeColumn will use d.getTime() (ms).
+  // When gapThreshold >= 0 we need this to scale the threshold correctly.
+  let timeIsRawNumeric = false;
+  if (timeCol >= 0 && gapThreshold >= 0) {
+    timeIsRawNumeric = rows.every(row => {
+      const raw = (row[timeCol] ?? '').trim();
+      return raw === '' || !isNaN(Number(raw));
+    });
   }
 
   // Parse time column (unless "none")
@@ -394,12 +412,43 @@ export function longToSequences(
 
   const sequences: SequenceData = [];
   const groupLabels: string[] | null = groupCol >= 0 ? [] : null;
-  for (const entries of idGroups.values()) {
+  const actorIds: string[] = [];
+
+  // Effective gap: threshold in the same units as timeValues.
+  // Raw-numeric time columns → compare directly (assumed seconds).
+  // Parsed timestamp columns → d.getTime() gives ms, so multiply by 1000.
+  const effectiveGap = gapThreshold >= 0
+    ? (timeIsRawNumeric ? gapThreshold : gapThreshold * 1000)
+    : -1;
+
+  // Sort actors lexicographically (string order) to match R's prepare_data() output order
+  const sortedActorIds = [...idGroups.keys()].sort((a, b) => a.localeCompare(b));
+
+  for (const actorId of sortedActorIds) {
+    const entries = idGroups.get(actorId)!;
     entries.sort((a, b) => a.time - b.time);
-    sequences.push(entries.map(e => e.state));
-    if (groupLabels !== null) groupLabels.push(entries[0]!.group);
+
+    if (effectiveGap >= 0 && entries.length > 1) {
+      // Split into sessions wherever the time gap exceeds the threshold
+      let sessionStart = 0;
+      for (let k = 1; k <= entries.length; k++) {
+        const isLast = k === entries.length;
+        const gapExceeded = !isLast && (entries[k]!.time - entries[k - 1]!.time) > effectiveGap;
+        if (isLast || gapExceeded) {
+          const session = entries.slice(sessionStart, k);
+          sequences.push(session.map(e => e.state));
+          actorIds.push(actorId);
+          if (groupLabels !== null) groupLabels.push(session[0]!.group);
+          sessionStart = k;
+        }
+      }
+    } else {
+      sequences.push(entries.map(e => e.state));
+      actorIds.push(actorId);
+      if (groupLabels !== null) groupLabels.push(entries[0]!.group);
+    }
   }
-  return { sequences, groups: groupLabels };
+  return { sequences, groups: groupLabels, actorIds };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -479,4 +528,34 @@ export function edgeListToMatrix(
   }
 
   return { matrix, labels };
+}
+
+// ═══════════════════════════════════════════════════════════
+//  State mapping
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Apply a state mapping to a sequence dataset.
+ *
+ * - Keys absent from `mapping` → state kept as-is.
+ * - String value → rename/merge that state to the new name.
+ * - null value   → remove events with that state (sequence shrinks).
+ * - Existing null entries (padding) are always preserved.
+ */
+export function applyStateMapping(
+  sequences: SequenceData,
+  mapping: Record<string, string | null>,
+): SequenceData {
+  if (Object.keys(mapping).length === 0) return sequences;
+  return sequences.map(seq => {
+    const out: (string | null)[] = [];
+    for (const s of seq) {
+      if (s === null) { out.push(null); continue; }   // preserve existing nulls
+      if (!(s in mapping)) { out.push(s); continue; } // not mapped → keep
+      const mapped = mapping[s];
+      if (mapped !== null) out.push(mapped);           // rename/merge → push new name
+      // null mapping → drop event (don't push)
+    }
+    return out;
+  });
 }

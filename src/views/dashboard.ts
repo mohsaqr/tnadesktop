@@ -37,7 +37,7 @@ import { NODE_COLORS } from './colors';
 import { renderDonut, renderRadar, renderBoxPlots, renderForestPlot, renderGroupedForestPlot, renderDensityPlot, renderDensityWithMeanLine, renderMeanSDBar } from './chart-utils';
 
 const ALL_MEASURES: string[] = [...AVAILABLE_MEASURES, 'PageRank'];
-import { showDataWizard, closeDataWizard } from './load-data';
+import { showDataWizard, closeDataWizard, showEstimationWizard } from './load-data';
 import * as d3 from 'd3';
 
 type Mode = 'data' | 'single' | 'clustering' | 'group' | 'onehot' | 'group_onehot' | 'sna';
@@ -135,6 +135,9 @@ const SECONDARY_TABS: Record<string, { id: string; label: string }[]> = {
 let cachedFullModel: TNA | null = null;
 let cachedModel: TNA | null = null;                  // active group's TNA (always single)
 let cachedCent: CentralityResult | null = null;
+
+// Previous analysis mode — restored when user exits the data card
+let prevDataMode: { mode: string; subTab: string; secTab: string } | null = null;
 let cachedComm: CommunityResult | undefined = undefined;
 
 // ─── Per-group caches (populated in group mode) ───
@@ -263,44 +266,80 @@ export function renderSubTabBar() {
 }
 
 /** Switch the top-level mode and reset subtab accordingly. */
-function switchMode(newMode: Mode) {
-  state.activeMode = newMode;
-  state.activeSecondaryTab = '';  // Reset secondary tab on mode change
+function exitDataView() {
   const dashboard = document.getElementById('dashboard');
-  if (newMode === 'data') {
-    updateNavActive();
-    showDataWizard();
-  } else {
-    closeDataWizard();
-    if (newMode === 'single' || newMode === 'onehot' || newMode === 'sna') {
-      state.activeSubTab = 'network';
-    } else if (newMode === 'clustering') {
-      const groupsActive = isGroupAnalysisActive();
-      if (groupsActive) {
-        state.activeSubTab = 'network';
-      } else {
-        // No groups yet — open modal, default to network (modal will navigate on success)
-        state.activeSubTab = 'network';
-        setTimeout(() => showClusteringModal(), 50);
-      }
-    } else {
-      // group, group_onehot
-      const groupsActive = isGroupAnalysisActive();
-      // Auto-activate group analysis if group labels exist but groups not yet built
-      if (!groupsActive && (newMode === 'group' || newMode === 'group_onehot') && state.groupLabels && state.groupLabels.length > 0) {
-        buildColumnGroups(state.networkSettings);
-        state.activeSubTab = 'network';
-      } else {
-        state.activeSubTab = 'network';
-      }
-    }
+  if (prevDataMode && prevDataMode.mode !== 'data') {
+    state.activeMode = prevDataMode.mode as Mode;
+    state.activeSubTab = prevDataMode.subTab;
+    state.activeSecondaryTab = prevDataMode.secTab;
+    prevDataMode = null;
     if (dashboard) dashboard.classList.remove('data-mode');
     updateNavActive();
     updateSubTabStates();
     updateTabContent();
+    saveState();
   }
+  // If no previous analysis mode (e.g. first ever load) — stay; there's nothing to go back to
+}
+
+function switchMode(newMode: Mode) {
+  const dashboard = document.getElementById('dashboard');
+  if (newMode === 'data') {
+    // Startup: if no data loaded, open wizard instead
+    if (!state.sequenceData && state.rawData.length === 0) {
+      showDataWizard();
+      return;
+    }
+    // Save previous mode so the exit button can restore it
+    if (state.activeMode !== 'data') {
+      prevDataMode = {
+        mode: state.activeMode,
+        subTab: state.activeSubTab,
+        secTab: state.activeSecondaryTab,
+      };
+    }
+    state.activeMode = 'data';
+    // Preserve or default the data sub-tab
+    const dataTabs = ['raw', 'sequences', 'metadata'];
+    if (!dataTabs.includes(state.activeSecondaryTab)) state.activeSecondaryTab = 'raw';
+    if (dashboard) dashboard.classList.add('data-mode');
+    updateNavActive();
+    updateTabContent();
+    saveState();
+    return;
+  }
+  state.activeMode = newMode;
+  state.activeSecondaryTab = '';  // Reset secondary tab on mode change
+  closeDataWizard();
+  if (newMode === 'single' || newMode === 'onehot' || newMode === 'sna') {
+    state.activeSubTab = 'network';
+  } else if (newMode === 'clustering') {
+    const groupsActive = isGroupAnalysisActive();
+    if (groupsActive) {
+      state.activeSubTab = 'network';
+    } else {
+      // No groups yet — open modal, default to network (modal will navigate on success)
+      state.activeSubTab = 'network';
+      setTimeout(() => showClusteringModal(), 50);
+    }
+  } else {
+    // group, group_onehot
+    const groupsActive = isGroupAnalysisActive();
+    // Auto-activate group analysis if group labels exist but groups not yet built
+    if (!groupsActive && (newMode === 'group' || newMode === 'group_onehot') && state.groupLabels && state.groupLabels.length > 0) {
+      buildColumnGroups(state.networkSettings);
+      state.activeSubTab = 'network';
+    } else {
+      state.activeSubTab = 'network';
+    }
+  }
+  if (dashboard) dashboard.classList.remove('data-mode');
+  updateNavActive();
+  updateSubTabStates();
+  updateTabContent();
   saveState();
 }
+
 
 const GROUP_CARD_COLORS = ['#4e79a7', '#e15759', '#59a14f', '#edc948', '#b07aa1', '#76b7b2', '#f28e2b', '#ff9da7'];
 
@@ -460,54 +499,13 @@ export function renderDashboard(container: HTMLElement) {
   sidebar.id = 'sidebar';
 
   const s = state.networkSettings;
-  const isOnehotMode = state.activeMode === 'onehot' || state.activeMode === 'group_onehot';
   const isSnaMode = state.activeMode === 'sna';
-  const disableModelType = isOnehotMode || isSnaMode;
-  const modelTypeTitle = isSnaMode ? 'Model type is determined by directed/undirected setting' : (isOnehotMode ? 'Locked to CTNA for one-hot data' : '');
 
   sidebar.innerHTML = `
     <button class="sidebar-toggle" id="sidebar-toggle" title="Collapse sidebar">&#9664;</button>
     <div class="sidebar-content" id="sidebar-content">
     <div class="section-title">Summary</div>
     <div class="summary-card" id="model-summary"></div>
-
-    <div class="section-title">Controls</div>
-
-    <div class="control-group" id="model-type-wrap" ${isSnaMode ? 'style="display:none"' : ''}>
-      <label>Model Type</label>
-      <select id="model-type" ${disableModelType ? `disabled title="${modelTypeTitle}"` : ''}>
-        <option value="tna" ${state.modelType === 'tna' ? 'selected' : ''}>TNA (Relative)</option>
-        <option value="ftna" ${state.modelType === 'ftna' ? 'selected' : ''}>FTNA (Frequency)</option>
-        <option value="ctna" ${state.modelType === 'ctna' ? 'selected' : ''}>CTNA (Co-occurrence)</option>
-        <option value="atna" ${state.modelType === 'atna' ? 'selected' : ''}>ATNA (Attention)</option>
-      </select>
-    </div>
-
-    <div class="control-group">
-      <label>Scaling</label>
-      <select id="scaling-select">
-        <option value="" ${state.scaling === '' ? 'selected' : ''}>None</option>
-        <option value="minmax" ${state.scaling === 'minmax' ? 'selected' : ''}>MinMax</option>
-        <option value="max" ${state.scaling === 'max' ? 'selected' : ''}>Max</option>
-        <option value="rank" ${state.scaling === 'rank' ? 'selected' : ''}>Rank</option>
-      </select>
-    </div>
-
-    <div class="control-group" id="atna-beta-wrap" style="display:${state.modelType === 'atna' && !isSnaMode ? 'block' : 'none'}">
-      <label>ATNA Beta (decay)</label>
-      <div class="slider-row">
-        <input type="range" id="atna-beta" min="0.01" max="2.0" step="0.01" value="${state.atnaBeta}">
-        <span class="slider-value" id="atna-beta-value">${state.atnaBeta.toFixed(2)}</span>
-      </div>
-    </div>
-
-    <div class="control-group">
-      <label>Prune Threshold</label>
-      <div class="slider-row">
-        <input type="range" id="prune-threshold" min="0" max="0.30" step="0.01" value="${state.threshold}">
-        <span class="slider-value" id="prune-value">${state.threshold.toFixed(2)}</span>
-      </div>
-    </div>
 
     <!-- Group selector (visible only in group mode) -->
     <div class="control-group" id="group-selector-wrap" style="display:none">
@@ -848,46 +846,6 @@ export function renderDashboard(container: HTMLElement) {
     });
   });
 
-  // ─── Model / prune / community events ───
-  document.getElementById('model-type')!.addEventListener('change', (e) => {
-    state.modelType = (e.target as HTMLSelectElement).value as typeof state.modelType;
-    const betaWrap = document.getElementById('atna-beta-wrap');
-    if (betaWrap) betaWrap.style.display = state.modelType === 'atna' ? 'block' : 'none';
-
-    // Reset scaling and threshold on model type change (clean slate)
-    state.scaling = '' as any;
-    state.threshold = 0;
-    const scalingSel = document.getElementById('scaling-select') as HTMLSelectElement | null;
-    if (scalingSel) scalingSel.value = '';
-    const pruneSlider = document.getElementById('prune-threshold') as HTMLInputElement | null;
-    if (pruneSlider) { pruneSlider.value = '0'; }
-    const pruneLabel = document.getElementById('prune-value');
-    if (pruneLabel) pruneLabel.textContent = '0.00';
-
-    // Navigate to Network subtab on model type change
-    state.activeSubTab = 'network';
-    renderSubTabBar();
-
-    updateAll();
-  });
-
-  document.getElementById('scaling-select')!.addEventListener('change', (e) => {
-    state.scaling = (e.target as HTMLSelectElement).value as typeof state.scaling;
-    updateAll();
-  });
-
-  document.getElementById('atna-beta')!.addEventListener('input', (e) => {
-    state.atnaBeta = parseFloat((e.target as HTMLInputElement).value);
-    document.getElementById('atna-beta-value')!.textContent = state.atnaBeta.toFixed(2);
-    updateAll();
-  });
-
-  document.getElementById('prune-threshold')!.addEventListener('input', (e) => {
-    state.threshold = parseFloat((e.target as HTMLInputElement).value);
-    document.getElementById('prune-value')!.textContent = state.threshold.toFixed(2);
-    updateAll();
-  });
-
   // Group selector
   document.getElementById('group-select')?.addEventListener('change', (e) => {
     state.activeGroup = (e.target as HTMLSelectElement).value;
@@ -1018,7 +976,7 @@ export function renderDashboard(container: HTMLElement) {
   if (state.activeMode === 'data' || !hasRestoredData) {
     state.activeMode = 'data';
     dashboard.classList.add('data-mode');
-    renderDataView();
+    updateTabContent();
   } else {
     // Auto-activate group analysis if restoring to a group mode
     if ((state.activeMode === 'group' || state.activeMode === 'group_onehot') && state.groupLabels && state.groupLabels.length > 0 && !isGroupAnalysisActive()) {
@@ -1113,11 +1071,16 @@ function buildTopNav(nav: HTMLElement) {
   items.className = 'top-nav-items';
   items.id = 'nav-items';
 
-  // Data button (no dropdown)
+  // File dropdown (leftmost — always visible)
+  items.appendChild(buildFileDropdown(hasData));
+
+  // Data button (enabled only when data is loaded)
   const dataBtn = document.createElement('button');
   dataBtn.className = 'top-nav-btn' + (state.activeMode === 'data' ? ' active' : '');
   dataBtn.textContent = 'Data';
   dataBtn.dataset.navmode = 'data';
+  dataBtn.disabled = !hasData && state.rawData.length === 0;
+  dataBtn.title = dataBtn.disabled ? 'Load data first' : '';
   items.appendChild(dataBtn);
 
   // Separator between data and analysis
@@ -1160,13 +1123,6 @@ function buildTopNav(nav: HTMLElement) {
     fn.textContent = state.filename;
     right.appendChild(fn);
   }
-  const clearBtn = document.createElement('button');
-  clearBtn.className = 'top-nav-action';
-  clearBtn.id = 'clear-btn';
-  clearBtn.textContent = 'Clear';
-  clearBtn.title = 'Clear all loaded data and analysis';
-  if (!hasData && state.rawData.length === 0) clearBtn.disabled = true;
-  right.appendChild(clearBtn);
   const exportBtn = document.createElement('button');
   exportBtn.className = 'top-nav-action';
   exportBtn.id = 'export-btn';
@@ -1174,6 +1130,61 @@ function buildTopNav(nav: HTMLElement) {
   if (!hasData) exportBtn.disabled = true;
   right.appendChild(exportBtn);
   nav.appendChild(right);
+}
+
+function buildFileDropdown(hasData: boolean): HTMLElement {
+  const dropdown = document.createElement('div');
+  dropdown.className = 'top-nav-dropdown';
+  dropdown.dataset.navmode = 'file';
+
+  const trigger = document.createElement('button');
+  trigger.className = 'top-nav-btn';
+  trigger.innerHTML = 'File <span class="nav-caret">&#9662;</span>';
+  dropdown.appendChild(trigger);
+
+  const menu = document.createElement('div');
+  menu.className = 'top-nav-menu';
+
+  const openItem = document.createElement('button');
+  openItem.className = 'nav-menu-item';
+  openItem.textContent = 'Open\u2026';
+  openItem.dataset.action = 'open';
+  menu.appendChild(openItem);
+
+  const editStatesItem = document.createElement('button');
+  editStatesItem.className = 'nav-menu-item';
+  editStatesItem.textContent = 'Edit States\u2026';
+  editStatesItem.dataset.action = 'edit-states';
+  editStatesItem.disabled = !hasData;
+  menu.appendChild(editStatesItem);
+
+  const estimationItem = document.createElement('button');
+  estimationItem.className = 'nav-menu-item';
+  estimationItem.textContent = 'Estimation Settings\u2026';
+  estimationItem.dataset.action = 'estimation-settings';
+  estimationItem.disabled = !hasData;
+  menu.appendChild(estimationItem);
+
+  const clearItem = document.createElement('button');
+  clearItem.className = 'nav-menu-item';
+  clearItem.textContent = 'Clear';
+  clearItem.dataset.action = 'clear';
+  clearItem.id = 'file-clear-btn';
+  clearItem.disabled = state.rawData.length === 0 && !state.sequenceData;
+  menu.appendChild(clearItem);
+
+  const sep = document.createElement('div');
+  sep.className = 'nav-menu-sep';
+  menu.appendChild(sep);
+
+  const exitItem = document.createElement('button');
+  exitItem.className = 'nav-menu-item';
+  exitItem.textContent = 'Exit';
+  exitItem.dataset.action = 'exit';
+  menu.appendChild(exitItem);
+
+  dropdown.appendChild(menu);
+  return dropdown;
 }
 
 function buildNavDropdown(mode: string, label: string, tabs: SubTabDef[], disabled: boolean): HTMLElement {
@@ -1212,18 +1223,63 @@ function wireNavEvents() {
   const nav = document.getElementById('top-nav');
   if (!nav) return;
 
-  // Data button — opens wizard as overlay (doesn't switch mode)
-  const dataBtn = nav.querySelector('[data-navmode="data"]') as HTMLButtonElement;
+  // Data button — switches to data view (or wizard if no data)
+  const dataBtn = nav.querySelector('[data-navmode="data"]:not(.top-nav-dropdown)') as HTMLButtonElement;
   if (dataBtn) {
     dataBtn.addEventListener('click', () => {
-      showDataWizard();
+      switchMode('data');
     });
   }
 
-  // Dropdown triggers and menu items
+  // File dropdown wiring
+  const fileDropdown = nav.querySelector('[data-navmode="file"]');
+  if (fileDropdown) {
+    const fileTrigger = fileDropdown.querySelector('.top-nav-btn') as HTMLButtonElement;
+    fileTrigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const wasOpen = fileDropdown.classList.contains('open');
+      closeAllDropdowns();
+      if (!wasOpen) fileDropdown.classList.add('open');
+    });
+    fileDropdown.querySelectorAll('[data-action]').forEach(item => {
+      item.addEventListener('click', () => {
+        closeAllDropdowns();
+        const action = (item as HTMLElement).dataset.action;
+        if (action === 'open') {
+          showDataWizard();
+        } else if (action === 'edit-states') {
+          if ((item as HTMLButtonElement).disabled) return;
+          showStateEditorModal();
+        } else if (action === 'estimation-settings') {
+          if ((item as HTMLButtonElement).disabled) return;
+          showEstimationWizard();
+        } else if (action === 'clear') {
+          if ((item as HTMLButtonElement).disabled) return;
+          clearGroupAnalysisData();
+          cachedFullModel = null;
+          cachedModel = null;
+          cachedCent = null;
+          cachedComm = undefined;
+          cachedModels.clear();
+          cachedCents.clear();
+          cachedComms.clear();
+          cachedBootModel = null;
+          cachedBootModels.clear();
+          cachedBootResults.clear();
+          visitedTabs.clear();
+          clearAnalysis();
+        } else if (action === 'exit') {
+          window.close();
+        }
+      });
+    });
+  }
+
+  // Dropdown triggers and menu items (skip File dropdown — handled separately above)
   nav.querySelectorAll('.top-nav-dropdown').forEach(dd => {
     const trigger = dd.querySelector('.top-nav-btn') as HTMLButtonElement;
     const ddMode = dd.getAttribute('data-navmode');
+    if (ddMode === 'file') return;
 
     trigger.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1300,23 +1356,6 @@ function wireNavEvents() {
   // Close dropdowns on outside click
   document.addEventListener('click', closeAllDropdowns);
 
-  // Clear analysis
-  document.getElementById('clear-btn')?.addEventListener('click', () => {
-    clearGroupAnalysisData();
-    cachedFullModel = null;
-    cachedModel = null;
-    cachedCent = null;
-    cachedComm = undefined;
-    cachedModels.clear();
-    cachedCents.clear();
-    cachedComms.clear();
-    cachedBootModel = null;
-    cachedBootModels.clear();
-    cachedBootResults.clear();
-    visitedTabs.clear();
-    clearAnalysis();
-  });
-
   // Export
   document.getElementById('export-btn')?.addEventListener('click', () => {
     if (!state.sequenceData) return;
@@ -1335,8 +1374,13 @@ function updateNavActive() {
   if (!nav) return;
 
   // Data button
-  const dataBtn = nav.querySelector('[data-navmode="data"]:not(.top-nav-dropdown)') as HTMLElement;
-  if (dataBtn) dataBtn.classList.toggle('active', state.activeMode === 'data');
+  const dataBtn = nav.querySelector('[data-navmode="data"]:not(.top-nav-dropdown)') as HTMLButtonElement;
+  if (dataBtn) {
+    dataBtn.classList.toggle('active', state.activeMode === 'data');
+    const hasAnyData = !!state.sequenceData || state.rawData.length > 0;
+    dataBtn.disabled = !hasAnyData;
+    dataBtn.title = dataBtn.disabled ? 'Load data first' : '';
+  }
 
   // Dropdown triggers and items
   nav.querySelectorAll('.top-nav-dropdown').forEach(dd => {
@@ -1400,14 +1444,572 @@ function updateNavActive() {
         : '';
     }
   });
-  const clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
-  if (clearBtn) clearBtn.disabled = !hasData && state.rawData.length === 0;
+  const fileClearBtn = document.getElementById('file-clear-btn') as HTMLButtonElement;
+  if (fileClearBtn) fileClearBtn.disabled = !hasData && state.rawData.length === 0;
   const exportBtn = document.getElementById('export-btn') as HTMLButtonElement;
   if (exportBtn) exportBtn.disabled = !hasData;
 }
 
-function renderDataView() {
-  showDataWizard();
+function showDataModal(type: 'raw' | 'sequences' | 'metadata') {
+  document.getElementById('data-view-modal')?.remove();
+
+  const seqCount  = state.sequenceData?.length ?? 0;
+  const stateCount = state.sequenceData
+    ? [...new Set(state.sequenceData.flatMap(s => s.filter(x => x !== null) as string[]))].length
+    : 0;
+
+  const config = {
+    raw:       { icon: '📋', title: 'Raw Data',      sub: `${state.rawData.length.toLocaleString()} rows × ${state.headers.length} columns`, color: '#3b82f6' },
+    sequences: { icon: '🔗', title: 'Sequences',     sub: `${seqCount.toLocaleString()} sequences · ${stateCount} unique states`, color: '#10b981' },
+    metadata:  { icon: '⚙️', title: 'Configuration', sub: state.filename || 'No file loaded', color: '#f59e0b' },
+  }[type];
+
+  const overlay = document.createElement('div');
+  overlay.id = 'data-view-modal';
+  overlay.className = 'modal-overlay';
+
+  const modal = document.createElement('div');
+  modal.className = 'modal-box data-modal-box';
+
+  // Header
+  const hdr = document.createElement('div');
+  hdr.className = 'modal-header';
+  hdr.innerHTML = `
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="width:44px;height:44px;border-radius:10px;background:${config.color}18;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">${config.icon}</div>
+      <div>
+        <div style="font-weight:700;font-size:16px;color:#111">${config.title}</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px">${config.sub}</div>
+      </div>
+    </div>
+    <button class="modal-close-btn" id="dm-close">✕</button>`;
+  modal.appendChild(hdr);
+
+  // Body
+  const body = document.createElement('div');
+  body.className = 'data-modal-body';
+  if (type === 'raw') renderRawDataPanel(body);
+  else if (type === 'sequences') renderSequencesPanel(body);
+  else renderMetadataPanel(body);
+  modal.appendChild(body);
+
+  // Footer
+  const ftr = document.createElement('div');
+  ftr.className = 'modal-footer';
+  ftr.innerHTML = `<button class="btn-secondary" id="dm-close-btn">Close</button>`;
+  modal.appendChild(ftr);
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.querySelector('#dm-close')!.addEventListener('click', close);
+  overlay.querySelector('#dm-close-btn')!.addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+}
+
+function renderDataView(container: HTMLElement) {
+  const seqs       = state.sequenceData ?? [];
+  const seqCount   = seqs.length;
+  const allStates  = [...new Set(seqs.flatMap(s => s.filter(x => x !== null) as string[]))].sort();
+  const stateCount = allStates.length;
+  const uniqueGroups = state.groupLabels ? [...new Set(state.groupLabels)] : [];
+  const groupCount = uniqueGroups.length;
+
+  // Outer centering wrapper
+  const wrap = document.createElement('div');
+  wrap.className = 'data-hub';
+
+  // The single big floating card
+  const card = document.createElement('div');
+  card.className = 'data-summary-card';
+
+  // ── File header ──
+  const fileHdr = document.createElement('div');
+  fileHdr.className = 'dscard-file-header';
+  fileHdr.innerHTML = `
+    <div class="dscard-file-icon">&#128196;</div>
+    <div class="dscard-file-info">
+      <div class="dscard-filename">${state.filename || 'Loaded data'}</div>
+      <div class="dscard-loaded-badge">&#9679; Loaded</div>
+    </div>
+    ${prevDataMode ? '<button class="dscard-close-btn" id="dsc-exit" title="Return to analysis">&#10005;</button>' : ''}`;
+  card.appendChild(fileHdr);
+
+  const divider = document.createElement('div');
+  divider.className = 'dscard-divider';
+  card.appendChild(divider);
+
+  // ── Stats row ──
+  const stats: { value: string; label: string; color: string }[] = [
+    { value: seqCount.toLocaleString(),   label: 'Sequences',   color: '#3b82f6' },
+    { value: String(stateCount),           label: 'States',      color: '#7c3aed' },
+    { value: groupCount > 0 ? String(groupCount) : '—', label: 'Groups', color: '#059669' },
+    { value: state.rawData.length.toLocaleString(), label: 'Rows', color: '#d97706' },
+  ];
+  const statsRow = document.createElement('div');
+  statsRow.className = 'dscard-stats';
+  for (const s of stats) {
+    statsRow.innerHTML += `
+      <div class="dscard-stat">
+        <div class="dscard-stat-value" style="color:${s.color}">${s.value}</div>
+        <div class="dscard-stat-label">${s.label}</div>
+      </div>`;
+  }
+  card.appendChild(statsRow);
+
+  // ── States section ──
+  if (allStates.length > 0) {
+    const statesSec = document.createElement('div');
+    statesSec.className = 'dscard-section';
+    const MAX_SHOWN = 16;
+    const shown = allStates.slice(0, MAX_SHOWN);
+    const extra = allStates.length - MAX_SHOWN;
+    statesSec.innerHTML = `
+      <div class="dscard-section-label">States</div>
+      <div class="dscard-state-tags">
+        ${shown.map(s => `<span class="dscard-state-tag">${s}</span>`).join('')}
+        ${extra > 0 ? `<span class="dscard-state-more">+${extra} more</span>` : ''}
+      </div>`;
+    card.appendChild(statesSec);
+
+    // Applied mapping note
+    const mappingKeys = Object.keys(state.stateMapping);
+    if (mappingKeys.length > 0) {
+      const mappingNote = document.createElement('div');
+      mappingNote.className = 'dscard-mapping-note';
+      mappingNote.innerHTML = `&#9998; ${mappingKeys.length} state mapping${mappingKeys.length > 1 ? 's' : ''} applied`;
+      card.appendChild(mappingNote);
+    }
+  }
+
+  // ── Bottom divider + actions ──
+  const divider2 = document.createElement('div');
+  divider2.className = 'dscard-divider';
+  card.appendChild(divider2);
+
+  const footer = document.createElement('div');
+  footer.className = 'dscard-footer';
+  footer.innerHTML = `
+    <button class="btn-primary dscard-edit-btn" id="dsc-edit-data">&#9998;&ensp;Edit Data</button>
+    <div class="dscard-view-links">
+      <button class="btn-secondary dscard-view-btn" id="dsc-view-raw">Raw Data</button>
+      <button class="btn-secondary dscard-view-btn" id="dsc-view-seqs">Sequences</button>
+    </div>`;
+  card.appendChild(footer);
+
+  wrap.appendChild(card);
+  container.appendChild(wrap);
+
+  // Wire buttons
+  card.querySelector('#dsc-exit')?.addEventListener('click', () => exitDataView());
+  footer.querySelector('#dsc-edit-data')!.addEventListener('click', () => {
+    if (state.sequenceData) showStateEditorModal();
+  });
+  footer.querySelector('#dsc-view-raw')!.addEventListener('click', () => showDataModal('raw'));
+  footer.querySelector('#dsc-view-seqs')!.addEventListener('click', () => showDataModal('sequences'));
+}
+
+// ─── Raw Data panel ───
+function renderRawDataPanel(panel: HTMLElement) {
+  const rows = state.rawData;
+  const headers = state.headers;
+  const cap = 500;
+  const capped = rows.length > cap;
+  const displayRows = capped ? rows.slice(0, cap) : rows;
+
+  const title = document.createElement('div');
+  title.className = 'panel-title';
+  title.innerHTML = `<span>Raw Data — ${state.filename || 'unknown'} (${rows.length} rows × ${headers.length} cols)</span>`;
+
+  // Download CSV button
+  const dlBtn = document.createElement('button');
+  dlBtn.className = 'panel-dl-btn';
+  dlBtn.textContent = 'CSV';
+  dlBtn.style.marginLeft = 'auto';
+  dlBtn.addEventListener('click', () => {
+    const lines = [headers.join(',')];
+    for (const r of rows) lines.push(r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
+    downloadText(lines.join('\n'), (state.filename || 'data') + '.csv', 'text/csv');
+  });
+  const btnWrap = document.createElement('div');
+  btnWrap.className = 'panel-download-btns';
+  btnWrap.appendChild(dlBtn);
+  title.appendChild(btnWrap);
+  panel.appendChild(title);
+
+  if (capped) {
+    const notice = document.createElement('div');
+    notice.style.cssText = 'font-size:12px;color:#888;margin-bottom:8px;padding:0 0 4px;';
+    notice.textContent = `Displaying ${cap} of ${rows.length} rows`;
+    panel.appendChild(notice);
+  }
+
+  const tableWrap = document.createElement('div');
+  tableWrap.style.cssText = 'overflow:auto;flex:1;';
+  const table = document.createElement('table');
+  table.className = 'data-table';
+  const thead = document.createElement('thead');
+  const hrow = document.createElement('tr');
+  for (const h of headers) {
+    const th = document.createElement('th');
+    th.textContent = h;
+    hrow.appendChild(th);
+  }
+  thead.appendChild(hrow);
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  for (const row of displayRows) {
+    const tr = document.createElement('tr');
+    for (const cell of row) {
+      const td = document.createElement('td');
+      td.textContent = cell;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  tableWrap.appendChild(table);
+  panel.appendChild(tableWrap);
+}
+
+// ─── Sequences panel ───
+function renderSequencesPanel(panel: HTMLElement) {
+  const seqs = state.sequenceData;
+  if (!seqs) {
+    panel.innerHTML = '<div style="padding:24px;color:#888;">No sequence data loaded.</div>';
+    return;
+  }
+  const groups = state.groupLabels;
+  const actors = state.sequenceActorIds;
+  const cap = 200;
+  const capped = seqs.length > cap;
+  const displaySeqs = capped ? seqs.slice(0, cap) : seqs;
+  const displayGroups = capped && groups ? groups.slice(0, cap) : groups;
+  const displayActors = capped && actors ? actors.slice(0, cap) : actors;
+
+  const title = document.createElement('div');
+  title.className = 'panel-title';
+  title.innerHTML = `<span>Processed Sequences (${seqs.length} sequences)</span>`;
+
+  const dlBtn = document.createElement('button');
+  dlBtn.className = 'panel-dl-btn';
+  dlBtn.textContent = 'CSV';
+  dlBtn.style.marginLeft = 'auto';
+  dlBtn.addEventListener('click', () => {
+    const cols = [
+      '#',
+      ...(actors ? ['Actor'] : []),
+      ...(groups ? ['Group'] : []),
+      'Length',
+      'Sequence',
+    ];
+    const lines = [cols.join(',')];
+    seqs.forEach((seq, i) => {
+      const clean = seq.filter(s => s !== null) as string[];
+      const row = [
+        String(i + 1),
+        ...(actors ? [`"${actors[i] ?? ''}"`] : []),
+        ...(groups ? [`"${groups[i] ?? ''}"`] : []),
+        String(clean.length),
+        `"${clean.join(' → ')}"`,
+      ];
+      lines.push(row.join(','));
+    });
+    downloadText(lines.join('\n'), 'sequences.csv', 'text/csv');
+  });
+  const btnWrap = document.createElement('div');
+  btnWrap.className = 'panel-download-btns';
+  btnWrap.appendChild(dlBtn);
+  title.appendChild(btnWrap);
+  panel.appendChild(title);
+
+  if (capped) {
+    const notice = document.createElement('div');
+    notice.style.cssText = 'font-size:12px;color:#888;margin-bottom:8px;';
+    notice.textContent = `Displaying ${cap} of ${seqs.length} sequences`;
+    panel.appendChild(notice);
+  }
+
+  const tableWrap = document.createElement('div');
+  tableWrap.style.cssText = 'overflow:auto;flex:1;';
+  const table = document.createElement('table');
+  table.className = 'data-table';
+  const thead = document.createElement('thead');
+  const hrow = document.createElement('tr');
+  const colHeaders = [
+    '#',
+    ...(actors ? ['Actor'] : []),
+    ...(groups ? ['Group'] : []),
+    'Length',
+    'Sequence',
+  ];
+  for (const h of colHeaders) {
+    const th = document.createElement('th');
+    th.textContent = h;
+    hrow.appendChild(th);
+  }
+  thead.appendChild(hrow);
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  displaySeqs.forEach((seq, i) => {
+    const clean = seq.filter(s => s !== null) as string[];
+    const seqStr = clean.join(' → ');
+    const tr = document.createElement('tr');
+    const cells: string[] = [
+      String(i + 1),
+      ...(displayActors ? [displayActors[i] ?? ''] : []),
+      ...(displayGroups ? [displayGroups[i] ?? ''] : []),
+      String(clean.length),
+      seqStr.length > 100 ? seqStr.slice(0, 99) + '\u2026' : seqStr,
+    ];
+    for (const c of cells) {
+      const td = document.createElement('td');
+      td.textContent = c;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  tableWrap.appendChild(table);
+  panel.appendChild(tableWrap);
+}
+
+// ─── Metadata panel ───
+function renderMetadataPanel(panel: HTMLElement) {
+  const seqs = state.sequenceData;
+
+  const title = document.createElement('div');
+  title.className = 'panel-title';
+  title.innerHTML = '<span>Model Configuration</span>';
+  panel.appendChild(title);
+
+  const rows: [string, string][] = [
+    ['File', state.filename || '—'],
+    ['Format', state.format],
+    ['Model type', state.modelType.toUpperCase()],
+    ['Scaling', state.scaling || 'none'],
+    ['Threshold', state.threshold.toFixed(2)],
+    ['Session gap', state.longSessionGap >= 0 ? `${state.longSessionGap} s` : 'disabled'],
+    ['Start state', state.addStartState ? state.startStateLabel : 'none'],
+    ['End state', state.addEndState ? state.endStateLabel : 'none'],
+  ];
+
+  if (seqs) {
+    const lengths = seqs.map(s => s.filter(x => x !== null).length);
+    const uniqueStates = new Set(seqs.flatMap(s => s.filter(x => x !== null) as string[])).size;
+    const uniqueGroups = state.groupLabels ? [...new Set(state.groupLabels)] : null;
+    const mean = lengths.reduce((a, b) => a + b, 0) / lengths.length;
+    rows.push(
+      ['Sequences', String(seqs.length)],
+      ['Unique states', String(uniqueStates)],
+      ['Groups', uniqueGroups ? uniqueGroups.join(', ') : 'none'],
+      ['Min seq length', String(Math.min(...lengths))],
+      ['Max seq length', String(Math.max(...lengths))],
+      ['Mean seq length', mean.toFixed(1)],
+    );
+  }
+
+  const table = document.createElement('table');
+  table.className = 'data-table';
+  const tbody = document.createElement('tbody');
+  for (const [k, v] of rows) {
+    const tr = document.createElement('tr');
+    const th = document.createElement('th');
+    th.textContent = k;
+    th.style.cssText = 'width:180px;font-weight:600;color:#555;text-align:left;';
+    const td = document.createElement('td');
+    td.textContent = v;
+    tr.appendChild(th);
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  panel.appendChild(table);
+}
+
+// ─── State Editor modal ───
+const SE_ACTION_META: Record<string, { icon: string; color: string; label: string }> = {
+  keep:   { icon: '✓', color: '#6b7280', label: 'Keep' },
+  rename: { icon: '✏️', color: '#1d4ed8', label: 'Rename' },
+  merge:  { icon: '⇒', color: '#92400e', label: 'Merge into' },
+  remove: { icon: '✕', color: '#991b1b', label: 'Remove' },
+};
+
+function buildSeRow(s: string, currentAction: string, currentValue: string, uniqueStates: string[]): HTMLElement {
+  const meta = SE_ACTION_META[currentAction]!;
+  const row = document.createElement('div');
+  row.className = 'se-modal-row';
+  row.dataset.state = s;
+
+  // Left accent bar
+  const accent = document.createElement('div');
+  accent.className = 'se-modal-accent';
+  accent.style.background = meta.color;
+  row.appendChild(accent);
+
+  // State name
+  const nameEl = document.createElement('div');
+  nameEl.className = 'se-modal-name';
+  nameEl.textContent = s;
+  row.appendChild(nameEl);
+
+  // Action select
+  const sel = document.createElement('select');
+  sel.className = 'se-action-select';
+  sel.dataset.original = s;
+  ['keep', 'rename', 'merge', 'remove'].forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = SE_ACTION_META[v]!.label;
+    if (v === currentAction) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  row.appendChild(sel);
+
+  // Value cell
+  const valueCell = document.createElement('div');
+  valueCell.className = 'se-modal-value';
+  refreshValueCell(valueCell, currentAction, currentValue, s, uniqueStates);
+  row.appendChild(valueCell);
+
+  sel.addEventListener('change', () => {
+    const action = sel.value;
+    accent.style.background = SE_ACTION_META[action]!.color;
+    nameEl.style.textDecoration = action === 'remove' ? 'line-through' : '';
+    nameEl.style.color = action === 'remove' ? '#991b1b' : '';
+    refreshValueCell(valueCell, action, s, s, uniqueStates);
+  });
+
+  return row;
+}
+
+function refreshValueCell(cell: HTMLElement, action: string, currentValue: string, orig: string, uniqueStates: string[]) {
+  cell.innerHTML = '';
+  if (action === 'rename') {
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'se-rename-input';
+    inp.value = currentValue !== orig ? currentValue : '';
+    inp.placeholder = 'New name\u2026';
+    inp.dataset.original = orig;
+    cell.appendChild(inp);
+  } else if (action === 'merge') {
+    const sel = document.createElement('select');
+    sel.className = 'se-merge-select';
+    uniqueStates.filter(x => x !== orig).forEach(x => {
+      const opt = document.createElement('option');
+      opt.value = x; opt.textContent = x;
+      if (x === currentValue) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    cell.appendChild(sel);
+  }
+}
+
+export function showStateEditorModal() {
+  if (document.getElementById('state-editor-modal')) return;
+  if (!state.sequenceData) return;
+
+  const stateSet = new Set<string>();
+  for (const seq of state.sequenceData) {
+    for (const s of seq) { if (s !== null) stateSet.add(s); }
+  }
+  const uniqueStates = [...stateSet].sort();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'state-editor-modal';
+  overlay.className = 'modal-overlay';
+
+  const modal = document.createElement('div');
+  modal.className = 'modal-box se-modal-box';
+  overlay.appendChild(modal);
+
+  // ── Header ──
+  const hdr = document.createElement('div');
+  hdr.className = 'modal-header';
+  hdr.innerHTML = `
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="width:44px;height:44px;border-radius:10px;background:#7c3aed18;color:#7c3aed;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">&#9998;</div>
+      <div>
+        <div style="font-weight:700;font-size:16px;color:#111">State Editor</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px">${uniqueStates.length} states &mdash; rename, merge, or remove before re-estimation</div>
+      </div>
+    </div>
+    <button class="modal-close-btn" id="se-modal-close">&#10005;</button>`;
+  modal.appendChild(hdr);
+
+  // ── Legend ──
+  const legend = document.createElement('div');
+  legend.className = 'se-modal-legend';
+  legend.innerHTML = Object.entries(SE_ACTION_META).map(([, m]) =>
+    `<span class="se-legend-item" style="color:${m.color}"><b>${m.icon}</b> ${m.label}</span>`
+  ).join('');
+  modal.appendChild(legend);
+
+  // ── Rows ──
+  const body = document.createElement('div');
+  body.className = 'se-modal-body';
+
+  for (const s of uniqueStates) {
+    const mappedValue = state.stateMapping[s];
+    let currentAction: string;
+    if (!(s in state.stateMapping)) currentAction = 'keep';
+    else if (mappedValue === null) currentAction = 'remove';
+    else if (uniqueStates.includes(mappedValue) && mappedValue !== s) currentAction = 'merge';
+    else currentAction = 'rename';
+    const currentValue = (s in state.stateMapping && mappedValue !== null) ? (mappedValue as string) : s;
+    body.appendChild(buildSeRow(s, currentAction, currentValue, uniqueStates));
+  }
+  modal.appendChild(body);
+
+  // ── Footer ──
+  const ftr = document.createElement('div');
+  ftr.className = 'modal-footer';
+  ftr.style.justifyContent = 'space-between';
+  ftr.innerHTML = `
+    <button class="btn-secondary" id="se-reset-btn">&#8635; Reset All</button>
+    <div style="display:flex;gap:8px">
+      <button class="btn-secondary" id="se-cancel-btn">Cancel</button>
+      <button class="btn-primary" id="se-apply-btn">Next &rarr;</button>
+    </div>`;
+  modal.appendChild(ftr);
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.querySelector('#se-modal-close')!.addEventListener('click', close);
+  overlay.querySelector('#se-cancel-btn')!.addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  overlay.querySelector('#se-reset-btn')!.addEventListener('click', () => {
+    state.stateMapping = {};
+    saveState();
+    close();
+    showStateEditorModal();
+  });
+
+  overlay.querySelector('#se-apply-btn')!.addEventListener('click', () => {
+    const newMapping: Record<string, string | null> = {};
+    body.querySelectorAll('.se-modal-row').forEach(rowEl => {
+      const orig = (rowEl as HTMLElement).dataset.state!;
+      const action = (rowEl.querySelector('.se-action-select') as HTMLSelectElement).value;
+      if (action === 'rename') {
+        const val = (rowEl.querySelector('.se-rename-input') as HTMLInputElement | null)?.value.trim() ?? '';
+        if (val && val !== orig) newMapping[orig] = val;
+      } else if (action === 'merge') {
+        const val = (rowEl.querySelector('.se-merge-select') as HTMLSelectElement | null)?.value ?? '';
+        if (val && val !== orig) newMapping[orig] = val;
+      } else if (action === 'remove') {
+        newMapping[orig] = null;
+      }
+    });
+    state.stateMapping = newMapping;
+    saveState();
+    close();
+    // Open estimation wizard at step 3 so the user can re-estimate
+    // (or adjust model settings, or start fresh)
+    showEstimationWizard();
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1575,7 +2177,13 @@ export async function captureAllTabs(
 export function updateTabContent(model?: any, cent?: any, comm?: any) {
   const content = document.getElementById('tab-content');
   if (!content) return;
-  if (state.activeMode === 'data') { renderDataView(); return; }
+  if (state.activeMode === 'data') {
+    content.innerHTML = '';
+    content.classList.add('data-view-container');
+    renderDataView(content);
+    return;
+  }
+  content.classList.remove('data-view-container');
 
   if (!model) {
     if (cachedModel) {

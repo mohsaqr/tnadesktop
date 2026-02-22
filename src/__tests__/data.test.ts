@@ -7,6 +7,7 @@ import {
   longToSequences,
   guessEdgeListColumns,
   edgeListToMatrix,
+  applyStateMapping,
 } from '../data';
 
 // ═══════════════════════════════════════════════════════════
@@ -269,6 +270,46 @@ describe('longToSequences', () => {
   it('throws on empty rows', () => {
     expect(() => longToSequences([], 0, 1, 2)).toThrow('No data rows');
   });
+
+  it('splits sessions by gap threshold (numeric time)', () => {
+    // Actor u1 has a gap of 1000 between events 2 and 3 — should split into 2 sessions
+    const rows = [
+      ['u1', '100', 'A'],
+      ['u1', '200', 'B'],
+      ['u1', '1200', 'C'],  // gap = 1000 > threshold 900
+      ['u1', '1300', 'D'],
+      ['u2', '50', 'X'],
+      ['u2', '100', 'Y'],
+    ];
+    const { sequences, groups } = longToSequences(rows, 0, 1, 2, -1, 900);
+    // u1 produces 2 sessions; u2 produces 1 (no gap > 900)
+    expect(sequences).toHaveLength(3);
+    expect(sequences[0]).toEqual(['A', 'B']);
+    expect(sequences[1]).toEqual(['C', 'D']);
+    expect(sequences[2]).toEqual(['X', 'Y']);
+    expect(groups).toBeNull(); // no group col
+  });
+
+  it('session split preserves group labels', () => {
+    const rows = [
+      ['u1', '100', 'A', 'High'],
+      ['u1', '1100', 'B', 'High'],  // gap = 1000 > 900
+      ['u2', '50',  'X', 'Low'],
+    ];
+    const { sequences, groups } = longToSequences(rows, 0, 1, 2, 3, 900);
+    expect(sequences).toHaveLength(3);
+    expect(groups).toEqual(['High', 'High', 'Low']);
+  });
+
+  it('no split when gapThreshold is -1 (disabled)', () => {
+    const rows = [
+      ['u1', '100', 'A'],
+      ['u1', '10000', 'B'],  // large gap but splitting disabled
+    ];
+    const { sequences } = longToSequences(rows, 0, 1, 2, -1, -1);
+    expect(sequences).toHaveLength(1);
+    expect(sequences[0]).toEqual(['A', 'B']);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -372,5 +413,42 @@ describe('edgeListToMatrix', () => {
     const { matrix, labels } = edgeListToMatrix(rows, 0, 1, 2, false);
     const iA = labels.indexOf('A');
     expect(matrix[iA]![iA]).toBe(5); // only once, not doubled
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+//  applyStateMapping
+// ═══════════════════════════════════════════════════════════
+describe('applyStateMapping', () => {
+  it('renames states: A→B', () => {
+    const seqs = [['A', 'C', 'A', null], ['A', 'B']];
+    const result = applyStateMapping(seqs, { A: 'B' });
+    expect(result[0]).toEqual(['B', 'C', 'B', null]);
+    expect(result[1]).toEqual(['B', 'B']);
+  });
+
+  it('merges states: glad and happy both become happy', () => {
+    const seqs = [['glad', 'neutral', 'happy', 'glad']];
+    const result = applyStateMapping(seqs, { glad: 'happy', happy: 'happy' });
+    expect(result[0]).toEqual(['happy', 'neutral', 'happy', 'happy']);
+  });
+
+  it('removes states: X events are dropped, sequence shrinks', () => {
+    const seqs = [['A', 'X', 'B', 'X', 'C'], ['X', 'A']];
+    const result = applyStateMapping(seqs, { X: null });
+    expect(result[0]).toEqual(['A', 'B', 'C']);
+    expect(result[1]).toEqual(['A']);
+  });
+
+  it('preserves existing null padding when removing states', () => {
+    const seqs = [['A', null, 'X', null]];
+    const result = applyStateMapping(seqs, { X: null });
+    expect(result[0]).toEqual(['A', null, null]);
+  });
+
+  it('returns sequences unchanged when mapping is empty', () => {
+    const seqs = [['A', 'B', 'C']];
+    const result = applyStateMapping(seqs, {});
+    expect(result).toBe(seqs); // same reference
   });
 });
