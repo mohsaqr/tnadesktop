@@ -337,7 +337,7 @@ export function wideToSequences(rows: string[][]): SequenceData {
  */
 export function longToSequences(
   rows: string[][], idCol: number, timeCol: number, stateCol: number,
-  groupCol: number = -1, gapThreshold: number = -1,
+  groupCol: number = -1, gapThreshold: number = -1, orderCol: number = -1,
 ): { sequences: SequenceData; groups: string[] | null; actorIds: string[] } {
   if (rows.length === 0) {
     throw new Error('No data rows found.');
@@ -375,16 +375,17 @@ export function longToSequences(
   }
 
   // Group rows by ID, sort by time (or preserve row order), extract states
-  const idGroups = new Map<string, { time: number; state: string; group: string }[]>();
+  const idGroups = new Map<string, { time: number; order: number; state: string; group: string }[]>();
   let skippedEmpty = 0;
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!;
-    const id = (row[idCol] ?? '').trim();
+    const id = idCol >= 0 ? (row[idCol] ?? '').trim() : 'default';
     const st = (row[stateCol] ?? '').trim();
     const grp = groupCol >= 0 ? (row[groupCol] ?? '').trim() : '';
+    const ord = orderCol >= 0 ? (parseFloat(row[orderCol] ?? '') || 0) : 0;
 
-    if (!id) { skippedEmpty++; continue; }
+    if (idCol >= 0 && !id) { skippedEmpty++; continue; }
     if (!st) { skippedEmpty++; continue; }
 
     let time: number;
@@ -397,7 +398,7 @@ export function longToSequences(
     }
 
     if (!idGroups.has(id)) idGroups.set(id, []);
-    idGroups.get(id)!.push({ time, state: st, group: grp });
+    idGroups.get(id)!.push({ time, order: ord, state: st, group: grp });
   }
 
   if (idGroups.size === 0) {
@@ -426,7 +427,7 @@ export function longToSequences(
 
   for (const actorId of sortedActorIds) {
     const entries = idGroups.get(actorId)!;
-    entries.sort((a, b) => a.time - b.time);
+    entries.sort((a, b) => a.time !== b.time ? a.time - b.time : a.order - b.order);
 
     if (effectiveGap >= 0 && entries.length > 1) {
       // Split into sessions wherever the time gap exceeds the threshold

@@ -628,16 +628,8 @@ function renderFormatOptions(container: HTMLElement) {
   longOpts.id = 'load-long-opts';
   longOpts.style.display = state.format === 'long' ? 'grid' : 'none';
 
-  const makeColOpts = (selected: number, includeNone = false) => {
-    let opts = includeNone ? `<option value="-1" ${selected === -1 ? 'selected' : ''}>None (row order)</option>` : '';
-    opts += state.headers.map((h, i) =>
-      `<option value="${i}" ${i === selected ? 'selected' : ''}>${escHtml(h)}</option>`
-    ).join('');
-    return opts;
-  };
-
-  const makeGroupOpts = (selected: number) => {
-    let opts = `<option value="-1" ${selected === -1 ? 'selected' : ''}>None (single TNA)</option>`;
+  const makeColOpts = (selected: number, noneLabel = '') => {
+    let opts = noneLabel ? `<option value="-1" ${selected === -1 ? 'selected' : ''}>${escHtml(noneLabel)}</option>` : '';
     opts += state.headers.map((h, i) =>
       `<option value="${i}" ${i === selected ? 'selected' : ''}>${escHtml(h)}</option>`
     ).join('');
@@ -646,43 +638,71 @@ function renderFormatOptions(container: HTMLElement) {
 
   const gapEnabled = state.longSessionGap >= 0;
   const gapVal = state.longSessionGap >= 0 ? state.longSessionGap : 900;
+
+  // Inline warning visibility: show when field is None
+  const actorWarn = state.longIdCol === -1;
+  const timeWarn  = state.longTimeCol === -1;
+
   longOpts.innerHTML = `
-    <div class="format-opt-pair">
-      <label>Actor/ID:</label>
-      <select id="load-long-id">${makeColOpts(state.longIdCol)}</select>
+    <div class="format-opt-pair long-field-header">
+      <span class="long-field-title">Column Mapping</span>
+      <button class="long-help-btn" id="load-long-help" title="Help: what do these fields mean?">?</button>
     </div>
     <div class="format-opt-pair">
-      <label>Time:</label>
-      <select id="load-long-time">${makeColOpts(state.longTimeCol, true)}</select>
-    </div>
-    <div class="format-opt-pair">
-      <label>Action:</label>
+      <label>Action <span class="long-required-badge">required</span></label>
       <select id="load-long-state">${makeColOpts(state.longStateCol)}</select>
     </div>
     <div class="format-opt-pair">
-      <label>Group:</label>
-      <select id="load-long-group">${makeGroupOpts(state.longGroupCol)}</select>
+      <label>Actor / ID <span class="long-optional-badge">optional</span></label>
+      <select id="load-long-id">${makeColOpts(state.longIdCol, 'None — single sequence')}</select>
+    </div>
+    <div class="long-field-warn" id="load-long-id-warn" style="display:${actorWarn ? 'flex' : 'none'}">
+      <span class="warn-icon">⚠</span>
+      Without an actor column, the entire dataset becomes one sequence — permutation testing, bootstrapping, and group analysis are unavailable.
     </div>
     <div class="format-opt-pair">
-      <label>Session gap:</label>
+      <label>Time <span class="long-optional-badge">optional</span></label>
+      <select id="load-long-time">${makeColOpts(state.longTimeCol, 'None — use row order')}</select>
+    </div>
+    <div class="long-field-warn" id="load-long-time-warn" style="display:${timeWarn ? 'flex' : 'none'}">
+      <span class="warn-icon">⚠</span>
+      Without a time column, events are read in row order. Make sure your data is already sorted correctly.
+    </div>
+    <div class="format-opt-pair">
+      <label>Order <span class="long-optional-badge">optional</span></label>
+      <select id="load-long-order">${makeColOpts(state.longOrderCol, 'None — no tiebreaker')}</select>
+    </div>
+    <div class="format-opt-pair">
+      <label>Group <span class="long-optional-badge">optional</span></label>
+      <select id="load-long-group">${makeColOpts(state.longGroupCol, 'None — single TNA')}</select>
+    </div>
+    <div class="format-opt-pair">
+      <label>Session gap <span class="long-optional-badge">optional</span></label>
       <div style="display:flex;align-items:center;gap:6px">
         <input type="checkbox" id="load-long-split" ${gapEnabled ? 'checked' : ''}>
         <input type="number" id="load-long-gap" value="${gapVal}" min="1" style="width:70px;font-size:12px" ${gapEnabled ? '' : 'disabled'}>
-        <span style="font-size:11px;color:#888">s (same units as time col)</span>
+        <span style="font-size:11px;color:#888">s</span>
       </div>
     </div>
   `;
   container.appendChild(longOpts);
 
   setTimeout(() => {
+    document.getElementById('load-long-state')?.addEventListener('change', (e) => {
+      state.longStateCol = parseInt((e.target as HTMLSelectElement).value);
+    });
     document.getElementById('load-long-id')?.addEventListener('change', (e) => {
       state.longIdCol = parseInt((e.target as HTMLSelectElement).value);
+      const warn = document.getElementById('load-long-id-warn');
+      if (warn) warn.style.display = state.longIdCol === -1 ? 'flex' : 'none';
     });
     document.getElementById('load-long-time')?.addEventListener('change', (e) => {
       state.longTimeCol = parseInt((e.target as HTMLSelectElement).value);
+      const warn = document.getElementById('load-long-time-warn');
+      if (warn) warn.style.display = state.longTimeCol === -1 ? 'flex' : 'none';
     });
-    document.getElementById('load-long-state')?.addEventListener('change', (e) => {
-      state.longStateCol = parseInt((e.target as HTMLSelectElement).value);
+    document.getElementById('load-long-order')?.addEventListener('change', (e) => {
+      state.longOrderCol = parseInt((e.target as HTMLSelectElement).value);
     });
     document.getElementById('load-long-group')?.addEventListener('change', (e) => {
       state.longGroupCol = parseInt((e.target as HTMLSelectElement).value);
@@ -699,6 +719,7 @@ function renderFormatOptions(container: HTMLElement) {
         state.longSessionGap = parseInt(gapInput.value) || 900;
       }
     });
+    document.getElementById('load-long-help')?.addEventListener('click', () => showLongFormatHelp());
   }, 0);
 
   // ─── One-Hot options (shared by onehot and group_onehot) ───
@@ -923,7 +944,7 @@ function runAnalyze() {
       const timeCol = state.longTimeCol;
       const stateCol = state.longStateCol;
       const groupCol = state.longGroupCol;
-      const result = longToSequences(state.rawData, idCol, timeCol, stateCol, groupCol, state.longSessionGap);
+      const result = longToSequences(state.rawData, idCol, timeCol, stateCol, groupCol, state.longSessionGap, state.longOrderCol);
       state.sequenceData = result.sequences;
       state.groupLabels = result.groups;
       state.sequenceActorIds = result.actorIds;
@@ -1123,7 +1144,7 @@ function tryBuildSequences(destination: 'step3' | 'editStates' = 'step3') {
       }
     } else {
       // long format
-      const result = longToSequences(state.rawData, state.longIdCol, state.longTimeCol, state.longStateCol, state.longGroupCol, state.longSessionGap);
+      const result = longToSequences(state.rawData, state.longIdCol, state.longTimeCol, state.longStateCol, state.longGroupCol, state.longSessionGap, state.longOrderCol);
       wizardSequenceData = result.sequences;
       wizardGroupLabels = result.groups;
       wizardActorIds = result.actorIds;
@@ -1581,4 +1602,112 @@ function showGenerateDataModal(format: 'long' | 'onehot') {
       alert('Error generating data: ' + (err as Error).message);
     }
   });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Long format help modal
+// ═══════════════════════════════════════════════════════════
+
+function showLongFormatHelp() {
+  if (document.getElementById('long-help-modal')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'long-help-modal';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-box long-help-box">
+      <div class="modal-header">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:36px;height:36px;border-radius:8px;background:#eff6ff;color:#2563eb;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700">?</div>
+          <div>
+            <div style="font-weight:700;font-size:15px">Long Format — Field Reference</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Based on <em>prepare_data()</em> from the tna R package</div>
+          </div>
+        </div>
+        <button class="modal-close-btn" id="long-help-close">&#10005;</button>
+      </div>
+      <div class="long-help-body">
+
+        <div class="long-help-field required">
+          <div class="long-help-field-header">
+            <span class="long-help-field-name">Action</span>
+            <span class="long-required-badge">required</span>
+          </div>
+          <p>The column containing what happened — behavioral states, events, or codes. Each unique value becomes a node in the transition network. This is the only required field.</p>
+          <div class="long-help-example">e.g. <code>Action</code>, <code>Behavior</code>, <code>Code</code>, <code>Event</code></div>
+        </div>
+
+        <div class="long-help-field">
+          <div class="long-help-field-header">
+            <span class="long-help-field-name">Actor / ID</span>
+            <span class="long-optional-badge">optional</span>
+          </div>
+          <p>Column with participant identifiers. One sequence is built per actor. <strong>Without this, the entire dataset becomes a single sequence</strong> — you lose the ability to do permutation testing, bootstrapping, and group comparisons. Always include actor unless your data genuinely has a single observation stream.</p>
+          <div class="long-help-example">e.g. <code>Actor</code>, <code>Student</code>, <code>UserID</code>, <code>Participant</code></div>
+        </div>
+
+        <div class="long-help-field">
+          <div class="long-help-field-header">
+            <span class="long-help-field-name">Time</span>
+            <span class="long-optional-badge">optional</span>
+          </div>
+          <p>Column with timestamps for each event. Used for two purposes: <strong>sorting events</strong> within each actor into the correct order, and <strong>session splitting</strong> (when the gap between two consecutive events exceeds the session-gap threshold, a new sequence starts). Without this, events are read in row order — make sure your data is already sorted.</p>
+          <p>52 timestamp formats are auto-detected, including ISO 8601, European, US, Unix timestamps (seconds/milliseconds), and more.</p>
+          <div class="long-help-example">e.g. <code>2024-01-09 18:44:00</code>, <code>09/01/2024 18:44</code>, Unix seconds</div>
+        </div>
+
+        <div class="long-help-field">
+          <div class="long-help-field-header">
+            <span class="long-help-field-name">Order</span>
+            <span class="long-optional-badge">optional</span>
+          </div>
+          <p>A tiebreaker column for events that share the exact same timestamp. When both Time and Order are provided, events are sorted by time first, and ties are broken by this column (ascending). Use a numeric column such as a step number or line number. You can also use Order without Time to sort by a single numeric column — but this is rarely needed since data is usually already in the correct row order.</p>
+          <div class="long-help-example">e.g. <code>StepNumber</code>, <code>LineNumber</code>, <code>Order</code>, <code>Sequence</code></div>
+        </div>
+
+        <div class="long-help-field">
+          <div class="long-help-field-header">
+            <span class="long-help-field-name">Group</span>
+            <span class="long-optional-badge">optional</span>
+          </div>
+          <p>A column to use for group comparisons (e.g. high vs. low achievers). Any column not assigned to action/actor/time/order is preserved automatically as metadata. Selecting it here makes it immediately available for group TNA without any extra steps.</p>
+          <div class="long-help-example">e.g. <code>Achiever</code>, <code>Group</code>, <code>Condition</code>, <code>Cohort</code></div>
+        </div>
+
+        <div class="long-help-field">
+          <div class="long-help-field-header">
+            <span class="long-help-field-name">Session gap</span>
+            <span class="long-optional-badge">optional</span>
+          </div>
+          <p>When Time is provided, a new session starts whenever two consecutive events for the same actor are more than this many seconds apart. The default is 900 s (15 minutes).</p>
+          <table class="long-help-table">
+            <thead><tr><th>Data type</th><th>Suggested threshold</th></tr></thead>
+            <tbody>
+              <tr><td>Chat / messaging</td><td>120–300 s (2–5 min)</td></tr>
+              <tr><td>LMS logs</td><td>600–1800 s (10–30 min) — <em>default works well</em></td></tr>
+              <tr><td>Collaborative coding</td><td>900–3600 s (15–60 min)</td></tr>
+              <tr><td>Diary / surveys</td><td>hours or days</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="long-help-troubleshoot">
+          <div class="long-help-trouble-title">&#9888; Common problems</div>
+          <ul>
+            <li><strong>One giant sequence</strong> — Actor column not set. The whole dataset becomes one sequence.</li>
+            <li><strong>Too many / too few sessions</strong> — Adjust the session gap. Check the sequence count after loading.</li>
+            <li><strong>Wrong event order</strong> — Without Time, events are read in row order. Provide Time or sort your data first.</li>
+            <li><strong>Same-timestamp ties</strong> — Use Order to break ties when your logging system records multiple events at the same timestamp.</li>
+          </ul>
+        </div>
+
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" id="long-help-ok">Got it</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#long-help-close')!.addEventListener('click', close);
+  overlay.querySelector('#long-help-ok')!.addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
 }

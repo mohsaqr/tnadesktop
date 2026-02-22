@@ -155,9 +155,10 @@ export interface AppState {
   sequenceActorIds: string[] | null;  // one per sequence (long-format only), null otherwise
   stateMapping: Record<string, string | null>;  // rename/merge/remove states before analysis
   format: 'wide' | 'long' | 'onehot' | 'group_onehot' | 'edgelist';
-  longIdCol: number;
-  longTimeCol: number;
+  longIdCol: number;             // -1 = no actor (whole dataset = one sequence)
+  longTimeCol: number;           // -1 = no time (use row order)
   longStateCol: number;
+  longOrderCol: number;          // -1 = no tiebreaker; >= 0 = column for same-timestamp ordering
   longGroupCol: number;          // -1 = no grouping
   longSessionGap: number;        // -1 = no session splitting; >= 0 = gap threshold (same units as time col)
   onehotCols: string[];          // selected binary column names for one-hot import
@@ -206,6 +207,7 @@ export const state: AppState = {
   longIdCol: 0,
   longTimeCol: 1,
   longStateCol: 2,
+  longOrderCol: -1,
   longGroupCol: -1,
   longSessionGap: -1,
   onehotCols: [],
@@ -409,6 +411,7 @@ function loadState() {
     state.longIdCol = saved.longIdCol ?? 0;
     state.longTimeCol = saved.longTimeCol ?? 1;
     state.longStateCol = saved.longStateCol ?? 2;
+    state.longOrderCol = (saved as any).longOrderCol ?? -1;
     state.longGroupCol = saved.longGroupCol ?? -1;
     state.longSessionGap = (saved as any).longSessionGap ?? -1;
     state.snaFromCol = (saved as any).snaFromCol ?? 0;

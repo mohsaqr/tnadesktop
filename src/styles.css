@@ -325,6 +325,208 @@ body {
   min-width: 0;
 }
 
+/* ── Long format field badges & warnings ── */
+.long-required-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 4px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.long-optional-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  background: #f0fdf4;
+  color: #16a34a;
+  border: 1px solid #bbf7d0;
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 4px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.long-field-warn {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #92400e;
+  line-height: 1.5;
+  margin-top: -4px;
+}
+
+.long-field-warn .warn-icon {
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.long-field-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.long-field-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+}
+
+.long-help-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #2563eb;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+  flex-shrink: 0;
+  padding: 0;
+}
+.long-help-btn:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+/* ── Long format help modal ── */
+.long-help-box {
+  width: min(90vw, 620px);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.long-help-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.long-help-field {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: #fafafa;
+}
+
+.long-help-field.required {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.long-help-field-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.long-help-field-name {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.long-help-field p {
+  font-size: 13px;
+  color: #374151;
+  margin: 0 0 8px;
+  line-height: 1.6;
+}
+
+.long-help-field p:last-child { margin-bottom: 0; }
+
+.long-help-example {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
+.long-help-example code {
+  background: #e5e7eb;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.long-help-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 10px;
+}
+
+.long-help-table th, .long-help-table td {
+  padding: 5px 10px;
+  border: 1px solid #e5e7eb;
+  text-align: left;
+}
+
+.long-help-table thead th {
+  background: #f3f4f6;
+  font-weight: 600;
+}
+
+.long-help-troubleshoot {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.long-help-trouble-title {
+  font-weight: 700;
+  font-size: 13px;
+  color: #92400e;
+  margin-bottom: 10px;
+}
+
+.long-help-troubleshoot ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.long-help-troubleshoot li {
+  font-size: 12px;
+  color: #78350f;
+  line-height: 1.5;
+}
+
 /* One-hot options */
 .load-onehot-options {
   padding: 14px 16px;
