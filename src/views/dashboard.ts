@@ -1058,6 +1058,27 @@ function populateNodeColors() {
 //  Top Navigation Bar
 // ═══════════════════════════════════════════════════════════
 
+/** Returns a short human-readable label for the current analysis configuration. */
+function getAnalysisLabel(): string {
+  if (!state.sequenceData) return '';
+  if (state.format === 'edgelist') return 'Social Network';
+  if (state.format === 'onehot' || state.format === 'group_onehot') return 'Co-occurrence (One-Hot)';
+  const typeNames: Record<string, string> = {
+    tna:  'Relative TNA',
+    ftna: 'Frequency TNA',
+    ctna: 'Co-occurrence TNA',
+    atna: 'Attention TNA',
+  };
+  const scalingNames: Record<string, string> = {
+    minmax: 'MinMax',
+    max:    'Max',
+    rank:   'Rank',
+  };
+  const base = typeNames[state.modelType] ?? state.modelType.toUpperCase();
+  const scaling = state.scaling ? ` · ${scalingNames[state.scaling] ?? state.scaling}` : '';
+  return base + scaling;
+}
+
 function buildTopNav(nav: HTMLElement) {
   const hasData = !!state.sequenceData;
   const hasGroups = !!state.groupLabels;
@@ -1117,18 +1138,13 @@ function buildTopNav(nav: HTMLElement) {
 
   const right = document.createElement('div');
   right.className = 'top-nav-right';
-  if (state.filename) {
-    const fn = document.createElement('span');
-    fn.className = 'top-nav-filename';
-    fn.textContent = state.filename;
-    right.appendChild(fn);
+  if (hasData) {
+    const label = document.createElement('span');
+    label.className = 'top-nav-filename';
+    label.id = 'nav-analysis-label';
+    label.textContent = getAnalysisLabel();
+    right.appendChild(label);
   }
-  const exportBtn = document.createElement('button');
-  exportBtn.className = 'top-nav-action';
-  exportBtn.id = 'export-btn';
-  exportBtn.textContent = 'Export';
-  if (!hasData) exportBtn.disabled = true;
-  right.appendChild(exportBtn);
   nav.appendChild(right);
 }
 
@@ -1164,6 +1180,14 @@ function buildFileDropdown(hasData: boolean): HTMLElement {
   estimationItem.dataset.action = 'estimation-settings';
   estimationItem.disabled = !hasData;
   menu.appendChild(estimationItem);
+
+  const exportItem = document.createElement('button');
+  exportItem.className = 'nav-menu-item';
+  exportItem.textContent = 'Export\u2026';
+  exportItem.dataset.action = 'export';
+  exportItem.id = 'file-export-btn';
+  exportItem.disabled = !hasData;
+  menu.appendChild(exportItem);
 
   const clearItem = document.createElement('button');
   clearItem.className = 'nav-menu-item';
@@ -1253,6 +1277,12 @@ function wireNavEvents() {
         } else if (action === 'estimation-settings') {
           if ((item as HTMLButtonElement).disabled) return;
           showEstimationWizard();
+        } else if (action === 'export') {
+          if ((item as HTMLButtonElement).disabled) return;
+          if (!state.sequenceData) return;
+          const model = buildModel();
+          const cent = computeCentralities(model);
+          showExportDialog(model, cent);
         } else if (action === 'clear') {
           if ((item as HTMLButtonElement).disabled) return;
           clearGroupAnalysisData();
@@ -1356,13 +1386,6 @@ function wireNavEvents() {
   // Close dropdowns on outside click
   document.addEventListener('click', closeAllDropdowns);
 
-  // Export
-  document.getElementById('export-btn')?.addEventListener('click', () => {
-    if (!state.sequenceData) return;
-    const model = buildModel();
-    const cent = computeCentralities(model);
-    showExportDialog(model, cent);
-  });
 }
 
 function closeAllDropdowns() {
@@ -1446,8 +1469,10 @@ function updateNavActive() {
   });
   const fileClearBtn = document.getElementById('file-clear-btn') as HTMLButtonElement;
   if (fileClearBtn) fileClearBtn.disabled = !hasData && state.rawData.length === 0;
-  const exportBtn = document.getElementById('export-btn') as HTMLButtonElement;
-  if (exportBtn) exportBtn.disabled = !hasData;
+  const fileExportBtn = document.getElementById('file-export-btn') as HTMLButtonElement;
+  if (fileExportBtn) fileExportBtn.disabled = !hasData;
+  const analysisLabel = document.getElementById('nav-analysis-label');
+  if (analysisLabel) analysisLabel.textContent = getAnalysisLabel();
 }
 
 function showDataModal(type: 'raw' | 'sequences' | 'metadata') {
